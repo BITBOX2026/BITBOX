@@ -50,10 +50,10 @@ async def process_audio(file: UploadFile = File(...)):
 
             # fallback (디버깅용)
             result = {
-                "message": "임시 응답입니다",
-                "destination": "강남역",
-                "bus": "테스트",
-                "arrival_time": "정보 없음",
+                "message": "pipeline 처리 실패",
+                "destination": None,
+                "bus": None,
+                "arrival_time": None,
                 "confidence": 0.0
             }
 
