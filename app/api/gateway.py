@@ -1,67 +1,89 @@
-# 요청 처리 + pipeline 호출 + timeout + fallback
-
-from fastapi import APIRouter, UploadFile, File, HTTPException
-from app.api.response import success_response, error_response
-from app.core.logger import logger
-from services.pipeline import run_pipeline
+# 라즈베리파이에서 전송한 음성 파일을 받고 파이프라인을 호출하는 API 라우터입니다.
 
 import asyncio
-import time
+
+from fastapi import APIRouter, File, HTTPException, UploadFile
+
+from app.core.config import settings
+from app.core.logger import get_logger
+from app.services.pipeline import run_pipeline
 
 router = APIRouter()
+logger = get_logger(__name__)
+
+# 서버에서 허용할 오디오 MIME 타입입니다.
+ALLOWED_CONTENT_TYPES = {
+    "audio/wav",
+    "audio/x-wav",
+    "audio/mpeg",
+    "audio/mp3",
+    "audio/webm",
+    "audio/mp4",
+}
 
 
 @router.post("/process")
-async def process_audio(file: UploadFile = File(...)):
+async def process_audio(file: UploadFile = File(...)) -> dict:
+    """
+    음성 파일을 받아 전체 백엔드 파이프라인을 실행하는 API입니다.
+
+    기능:
+        - 라즈베리파이에서 업로드한 음성 파일을 받습니다.
+        - 파일 형식과 크기를 검증합니다.
+        - run_pipeline()을 호출합니다.
+        - 파이프라인 결과 JSON을 그대로 반환합니다.
+
+    요청 형식:
+        multipart/form-data
+        file: audio file
+
+    반환:
+        dict:
+            - status, message, data 구조의 JSON 응답입니다.
+    """
+
+    if file.content_type not in ALLOWED_CONTENT_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"지원하지 않는 오디오 형식입니다: {file.content_type}",
+        )
+
+    audio_bytes = await file.read()
+
+    max_size = settings.MAX_AUDIO_SIZE_MB * 1024 * 1024
+    if len(audio_bytes) > max_size:
+        raise HTTPException(
+            status_code=413,
+            detail=f"오디오 파일 크기는 {settings.MAX_AUDIO_SIZE_MB}MB 이하여야 합니다.",
+        )
+
     try:
-        # 1. 파일 타입 검증
-        if not file.content_type or not file.content_type.startswith("audio"):
-            raise HTTPException(status_code=400, detail="audio 파일만 업로드 가능합니다")
+        result = await asyncio.wait_for(
+            run_pipeline(
+                audio_bytes=audio_bytes,
+                filename=file.filename or "audio.wav",
+            ),
+            timeout=settings.PIPELINE_TIMEOUT_SECONDS,
+        )
 
-        # 2. 파일 → bytes 변환
-        audio_bytes = await file.read()
-        await file.close()
+        return result
 
-        # 3. pipeline 실행
-        try:
-            start = time.time()
+    except asyncio.TimeoutError:
+        logger.exception("Pipeline timeout")
 
-            result = await asyncio.wait_for(
-                run_pipeline(audio_bytes),
-                timeout=10.0
-            )
-
-            elapsed = time.time() - start
-            logger.info(f"pipeline 성공 | {elapsed:.2f}s")
-
-        except asyncio.TimeoutError:
-            logger.error("pipeline 타임아웃")
-
-            result = {
-                "message": "응답 시간이 초과되었습니다",
-                "destination": "",
-                "bus": "",
-                "arrival_time": "",
-                "confidence": 0.0
-            }
-
-        except Exception as e:
-            logger.error(f"pipeline 실패: {e}")
-
-            # fallback (디버깅용)
-            result = {
-                "message": "pipeline 처리 실패",
+        return {
+            "status": "error",
+            "message": "처리 시간이 초과되었습니다. 다시 시도해 주세요.",
+            "data": {
+                "transcript": None,
+                "intent": None,
                 "destination": None,
-                "bus": None,
+                "bus_number": None,
                 "arrival_time": None,
-                "confidence": 0.0
-            }
-
-        return success_response(result)
-
-    except HTTPException as e:
-        return error_response(e.detail, e.status_code)
-
-    except Exception as e:
-        logger.error(str(e))
-        return error_response("서버 내부 오류", 500)
+                "total_time_min": None,
+                "transfer_count": None,
+                "confidence": 0.0,
+                "source": "none",
+                "needs_confirmation": True,
+            },
+        }
