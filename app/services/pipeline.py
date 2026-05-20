@@ -1,5 +1,3 @@
-# STT, LLM 분석, 검증, 교통 API 조회, 응답 생성을 순서대로 실행하는 핵심 파이프라인 파일입니다.
-
 from app.core.logger import get_logger
 from app.services.exceptions import (
     CoordinateResolveError,
@@ -23,41 +21,10 @@ async def run_pipeline(
     filename: str = "audio.wav",
 ) -> dict:
     """
-    백엔드 전체 파이프라인을 실행하는 함수입니다.
-
-    기능:
-        - 라즈베리파이에서 받은 음성 파일을 텍스트로 변환합니다.
-        - 변환된 텍스트를 LLM으로 구조화합니다.
-        - 구조화된 결과를 검증합니다.
-        - 교통 API를 조회합니다.
-        - 라즈베리파이에 반환할 최종 JSON 응답을 생성합니다.
+    음성 파일을 최종 안내 응답으로 변환하는 전체 백엔드 파이프라인입니다.
 
     처리 순서:
-        1. STT:
-            음성 bytes -> 텍스트
-
-        2. LLM Parsing:
-            텍스트 -> intent, destination_text, bus_number, confidence
-
-        3. Validation:
-            LLM 결과가 실제 처리 가능한지 검증
-
-        4. Transport Search:
-            ODsay 또는 공공데이터 API 조회
-
-        5. Response Build:
-            검증된 데이터 기반 정형 응답 생성
-
-    입력:
-        audio_bytes:
-            - 업로드된 음성 파일의 bytes입니다.
-
-        filename:
-            - 업로드된 파일명입니다.
-
-    반환:
-        dict:
-            - FastAPI에서 그대로 JSON으로 반환 가능한 응답입니다.
+    STT -> LLM JSON 분석 -> 검증 -> 교통 API 조회 -> 정형 응답 생성
     """
 
     transcript: str | None = None
@@ -77,7 +44,9 @@ async def run_pipeline(
                 message=validation.message,
                 transcript=transcript,
                 intent=parsed.intent,
+                origin=parsed.origin_text,
                 destination=parsed.destination_text,
+                transport_mode=parsed.transport_mode,
                 bus_number=parsed.bus_number,
                 confidence=parsed.confidence,
                 needs_confirmation=True,
@@ -94,11 +63,17 @@ async def run_pipeline(
             message=message,
             transcript=transcript,
             intent=parsed.intent,
+            origin=transport_result.origin,
             destination=transport_result.destination,
+            transport_mode=transport_result.transport_mode,
             bus_number=transport_result.bus_number,
             arrival_time=transport_result.arrival_time,
             total_time_min=transport_result.total_time_min,
+            payment=transport_result.payment,
+            bus_transit_count=transport_result.bus_transit_count,
+            subway_transit_count=transport_result.subway_transit_count,
             transfer_count=transport_result.transfer_count,
+            path_type=transport_result.path_type,
             confidence=parsed.confidence,
             source=transport_result.source,
             needs_confirmation=False,
@@ -108,10 +83,12 @@ async def run_pipeline(
         logger.warning("User-correctable location error: %s", exc)
 
         return _error_response(
-            message=exc.user_message,
+            message=str(exc) or exc.user_message,
             transcript=transcript,
             intent=_get_intent(parsed),
+            origin=_get_origin(parsed),
             destination=_get_destination(parsed),
+            transport_mode=_get_transport_mode(parsed),
             bus_number=_get_bus_number(parsed),
             confidence=_get_confidence(parsed),
             needs_confirmation=True,
@@ -121,10 +98,12 @@ async def run_pipeline(
         logger.exception("External service or processing error: %s", exc)
 
         return _error_response(
-            message=exc.user_message,
+            message=str(exc) or exc.user_message,
             transcript=transcript,
             intent=_get_intent(parsed),
+            origin=_get_origin(parsed),
             destination=_get_destination(parsed),
+            transport_mode=_get_transport_mode(parsed),
             bus_number=_get_bus_number(parsed),
             confidence=_get_confidence(parsed),
             needs_confirmation=True,
@@ -137,7 +116,9 @@ async def run_pipeline(
             message=exc.user_message,
             transcript=transcript,
             intent=_get_intent(parsed),
+            origin=_get_origin(parsed),
             destination=_get_destination(parsed),
+            transport_mode=_get_transport_mode(parsed),
             bus_number=_get_bus_number(parsed),
             confidence=_get_confidence(parsed),
             needs_confirmation=True,
@@ -150,7 +131,9 @@ async def run_pipeline(
             message="요청을 처리하지 못했습니다. 다시 말씀해 주세요.",
             transcript=transcript,
             intent=_get_intent(parsed),
+            origin=_get_origin(parsed),
             destination=_get_destination(parsed),
+            transport_mode=_get_transport_mode(parsed),
             bus_number=_get_bus_number(parsed),
             confidence=_get_confidence(parsed),
             needs_confirmation=True,
@@ -161,45 +144,44 @@ def _success_response(
     message: str,
     transcript: str | None,
     intent: str | None,
+    origin: str | None,
     destination: str | None,
+    transport_mode: str | None,
     bus_number: str | None,
     arrival_time: str | None,
     total_time_min: int | None,
+    payment: int | None,
+    bus_transit_count: int | None,
+    subway_transit_count: int | None,
     transfer_count: int | None,
+    path_type: int | None,
     confidence: float,
     source: str,
     needs_confirmation: bool,
 ) -> dict:
-    """
-    성공 응답 JSON을 생성하는 함수입니다.
-
-    기능:
-        - 파이프라인 성공 결과를 API 응답 형식으로 통일합니다.
-        - 라즈베리파이는 이 응답에서 message와 data만 사용하면 됩니다.
-
-    반환 구조:
-        {
-            "status": "success",
-            "message": "...",
-            "data": {...}
-        }
-    """
+    """성공 응답 JSON을 라즈베리파이가 쓰기 쉬운 고정 구조로 만듭니다."""
 
     return {
         "status": "success",
         "message": message,
-        "data": {
-            "transcript": transcript,
-            "intent": intent,
-            "destination": destination,
-            "bus_number": bus_number,
-            "arrival_time": arrival_time,
-            "total_time_min": total_time_min,
-            "transfer_count": transfer_count,
-            "confidence": confidence,
-            "source": source,
-            "needs_confirmation": needs_confirmation,
-        },
+        "data": _build_response_data(
+            transcript=transcript,
+            intent=intent,
+            origin=origin,
+            destination=destination,
+            transport_mode=transport_mode,
+            bus_number=bus_number,
+            arrival_time=arrival_time,
+            total_time_min=total_time_min,
+            payment=payment,
+            bus_transit_count=bus_transit_count,
+            subway_transit_count=subway_transit_count,
+            transfer_count=transfer_count,
+            path_type=path_type,
+            confidence=confidence,
+            source=source,
+            needs_confirmation=needs_confirmation,
+        ),
     }
 
 
@@ -207,81 +189,108 @@ def _error_response(
     message: str,
     transcript: str | None,
     intent: str | None,
+    origin: str | None,
     destination: str | None,
+    transport_mode: str | None,
     bus_number: str | None,
     confidence: float,
     needs_confirmation: bool,
 ) -> dict:
-    """
-    실패 응답 JSON을 생성하는 함수입니다.
-
-    기능:
-        - 실패 상황에서도 응답 구조를 일정하게 유지합니다.
-        - 가짜 목적지, 가짜 버스 번호, 가짜 도착 시간을 넣지 않습니다.
-        - 알 수 없는 값은 None으로 반환합니다.
-
-    반환 구조:
-        {
-            "status": "error",
-            "message": "...",
-            "data": {...}
-        }
-    """
+    """실패 응답도 성공 응답과 같은 data schema를 유지합니다."""
 
     return {
         "status": "error",
         "message": message,
-        "data": {
-            "transcript": transcript,
-            "intent": intent,
-            "destination": destination,
-            "bus_number": bus_number,
-            "arrival_time": None,
-            "total_time_min": None,
-            "transfer_count": None,
-            "confidence": confidence,
-            "source": "none",
-            "needs_confirmation": needs_confirmation,
-        },
+        "data": _build_response_data(
+            transcript=transcript,
+            intent=intent,
+            origin=origin,
+            destination=destination,
+            transport_mode=transport_mode,
+            bus_number=bus_number,
+            arrival_time=None,
+            total_time_min=None,
+            payment=None,
+            bus_transit_count=None,
+            subway_transit_count=None,
+            transfer_count=None,
+            path_type=None,
+            confidence=confidence,
+            source="none",
+            needs_confirmation=needs_confirmation,
+        ),
+    }
+
+
+def _build_response_data(
+    transcript: str | None,
+    intent: str | None,
+    origin: str | None,
+    destination: str | None,
+    transport_mode: str | None,
+    bus_number: str | None,
+    arrival_time: str | None,
+    total_time_min: int | None,
+    payment: int | None,
+    bus_transit_count: int | None,
+    subway_transit_count: int | None,
+    transfer_count: int | None,
+    path_type: int | None,
+    confidence: float,
+    source: str,
+    needs_confirmation: bool,
+) -> dict:
+    """모든 응답에서 유지할 공통 data schema입니다."""
+
+    return {
+        "transcript": transcript,
+        "intent": intent,
+        "origin": origin,
+        "destination": destination,
+        "transport_mode": transport_mode,
+        "bus_number": bus_number,
+        "arrival_time": arrival_time,
+        "total_time_min": total_time_min,
+        "payment": payment,
+        "bus_transit_count": bus_transit_count,
+        "subway_transit_count": subway_transit_count,
+        "transfer_count": transfer_count,
+        "path_type": path_type,
+        "confidence": confidence,
+        "source": source,
+        "needs_confirmation": needs_confirmation,
     }
 
 
 def _get_intent(parsed: ParsedIntent | None) -> str | None:
-    """
-    ParsedIntent에서 intent 값을 안전하게 꺼내는 함수입니다.
-
-    기능:
-        - parsed가 None이어도 서버가 죽지 않도록 None을 반환합니다.
-    """
-
     if parsed is None:
         return None
 
     return parsed.intent
 
 
+def _get_origin(parsed: ParsedIntent | None) -> str | None:
+    if parsed is None:
+        return None
+
+    return parsed.origin_text
+
+
 def _get_destination(parsed: ParsedIntent | None) -> str | None:
-    """
-    ParsedIntent에서 destination_text 값을 안전하게 꺼내는 함수입니다.
-
-    기능:
-        - parsed가 None이어도 서버가 죽지 않도록 None을 반환합니다.
-    """
-
     if parsed is None:
         return None
 
     return parsed.destination_text
 
 
+def _get_transport_mode(parsed: ParsedIntent | None) -> str | None:
+    if parsed is None:
+        return None
+
+    return parsed.transport_mode
+
+
 def _get_bus_number(parsed: ParsedIntent | None) -> str | None:
-    """
-    ParsedIntent에서 bus_number 값을 안전하게 꺼내는 함수입니다.
-
-    기능:
-        - parsed가 None이어도 서버가 죽지 않도록 None을 반환합니다.
-    """
-
     if parsed is None:
         return None
 
@@ -289,13 +298,6 @@ def _get_bus_number(parsed: ParsedIntent | None) -> str | None:
 
 
 def _get_confidence(parsed: ParsedIntent | None) -> float:
-    """
-    ParsedIntent에서 confidence 값을 안전하게 꺼내는 함수입니다.
-
-    기능:
-        - parsed가 None이면 0.0을 반환합니다.
-    """
-
     if parsed is None:
         return 0.0
 

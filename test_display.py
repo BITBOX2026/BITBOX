@@ -12,6 +12,7 @@ def main():
         "status": "success",
         "message": "",
         "data": {
+            "origin": "서울역",
             "destination": "강남역",
             "bus_number": None,
             "arrival_time": None,

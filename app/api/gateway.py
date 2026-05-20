@@ -63,7 +63,7 @@ async def process_audio(file: UploadFile = File(...)) -> dict:
                 audio_bytes=audio_bytes,
                 filename=file.filename or "audio.wav",
             ),
-            timeout=settings.PIPELINE_TIMEOUT_SECONDS,
+            timeout=settings.REQUEST_TIMEOUT_SECONDS,
         )
 
         return result
@@ -77,11 +77,17 @@ async def process_audio(file: UploadFile = File(...)) -> dict:
             "data": {
                 "transcript": None,
                 "intent": None,
+                "origin": None,
                 "destination": None,
+                "transport_mode": None,
                 "bus_number": None,
                 "arrival_time": None,
                 "total_time_min": None,
+                "payment": None,
+                "bus_transit_count": None,
+                "subway_transit_count": None,
                 "transfer_count": None,
+                "path_type": None,
                 "confidence": 0.0,
                 "source": "none",
                 "needs_confirmation": True,

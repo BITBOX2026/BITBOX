@@ -33,14 +33,14 @@ async def transcribe_audio(
             - STT 결과 텍스트입니다.
 
     예:
-        "강남역 가는 버스 알려줘"
+        "서울역에서 강남역 가는 버스 알려줘"
     """
 
     if not audio_bytes:
         raise STTProcessingError("음성 파일이 비어 있습니다.")
 
     if is_mock_mode():
-        return "강남역 가는 버스 알려줘"
+        return "서울역에서 강남역 가는 버스 알려줘"
 
     api_key = get_setting("OPENAI_API_KEY")
     if not api_key:

@@ -1,46 +1,44 @@
-# 환경 변수 및 민감 정보
+# Environment variables
 .env
 .env.*
+*.env
 !.env.example
 
-# 파이썬 캐시
+# Python cache
 __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
+.pycache_tmp/
 
-# 가상환경
+# Virtual environments
 venv/
 .venv/
 
-# 패키지/빌드 산출물
+# Build outputs
 build/
 dist/
 *.egg-info/
 
-# 테스트/캐시
+# Test/tool cache
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
 
-# 로그
+# Logs
 *.log
 logs/
 
-# VSCode 설정
+# Editor and OS files
 .vscode/
-
-# 운영체제 파일
 .DS_Store
 Thumbs.db
 
-# 라즈베리파이/음성 테스트 파일
-*.wav
-*.mp3
-*.webm
-*.m4a
-*.aac
+# Local audio test files
+recorded_audio.wav
+test_audio.mp3
+test_audio.wav
 
-# 임시 파일
+# Temporary files
 tmp/
 temp/
