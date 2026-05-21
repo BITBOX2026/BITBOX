@@ -181,6 +181,9 @@ def test_openai():
                             "destination_text": {
                                 "type": ["string", "null"],
                             },
+                            "stop_text": {
+                                "type": ["string", "null"],
+                            },
                             "transport_mode": {
                                 "type": "string",
                                 "enum": ["bus", "subway", "transit", "unknown"],
@@ -198,6 +201,7 @@ def test_openai():
                             "intent",
                             "origin_text",
                             "destination_text",
+                            "stop_text",
                             "transport_mode",
                             "bus_number",
                             "confidence",
@@ -233,6 +237,7 @@ def test_openai():
             "intent": "route",
             "origin_text": "서울역",
             "destination_text": "강남역",
+            "stop_text": None,
             "transport_mode": "bus",
         }
 

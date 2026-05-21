@@ -8,6 +8,10 @@ DEFAULT_LLM_MODEL = "gpt-4o-mini"
 # 외부 교통/지도 API 엔드포인트입니다.
 ODSAY_ROUTE_URL = "https://api.odsay.com/v1/api/searchPubTransPathT"
 KAKAO_KEYWORD_SEARCH_URL = "https://dapi.kakao.com/v2/local/search/keyword.json"
+SEOUL_BUS_ROUTE_SEARCH_URL = "http://ws.bus.go.kr/api/rest/busRouteInfo/getBusRouteList"
+SEOUL_STATION_SEARCH_URL = "http://ws.bus.go.kr/api/rest/stationinfo/getStationByName"
+SEOUL_ROUTE_STATION_URL = "http://ws.bus.go.kr/api/rest/busRouteInfo/getStaionByRoute"
+SEOUL_BUS_ARRIVAL_URL = "http://ws.bus.go.kr/api/rest/arrive/getArrInfoByRoute"
 
 # 대한민국 서비스 범위 기준 좌표 검증값입니다.
 # ODsay 기준 X는 경도, Y는 위도입니다.
@@ -33,6 +37,7 @@ TRANSIT_INTENT_SYSTEM_PROMPT = """
 - 반드시 정해진 JSON 구조로만 분석 결과를 반환한다.
 - 사용자가 출발지를 말하면 origin_text에 넣는다.
 - 사용자가 목적지를 말하면 destination_text에 넣는다.
+- 사용자가 특정 버스 도착 정보를 묻고 정류장명이나 기준 위치를 말하면 stop_text에 넣는다.
 - 사용자가 요청한 이동 수단을 transport_mode에 넣는다.
   가능한 값은 "bus", "subway", "transit", "unknown"뿐이다.
 - "버스"를 요청하면 transport_mode는 "bus"다.
@@ -45,6 +50,9 @@ TRANSIT_INTENT_SYSTEM_PROMPT = """
 - route 요청에서 목적지가 없으면 destination_text는 null로 둔다.
 - 목적지까지 가는 방법을 묻는 요청이면 intent는 "route"다.
 - 특정 버스가 언제 오는지 묻는 요청이면 intent는 "arrival"이다.
+- "402번 언제 와?"처럼 정류장명이 없으면 stop_text는 null이다.
+- "서울역에서 402번 언제 와?"이면 stop_text는 "서울역", bus_number는 "402"다.
+- "강남역 정류장에 146번 언제 도착해?"이면 stop_text는 "강남역", bus_number는 "146"이다.
 - 의미를 알 수 없으면 intent는 "unknown"이다.
 - confidence는 0.0 이상 1.0 이하 숫자다.
 - 실제 버스 번호, 운행 시간, 도착 시간, 소요 시간, 요금, 경로 상세는 절대 생성하지 않는다.

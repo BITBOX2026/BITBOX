@@ -17,6 +17,7 @@ async def parse_transit_intent(transcript: str) -> ParsedIntent:
             intent="unknown",
             origin_text=None,
             destination_text=None,
+            stop_text=None,
             transport_mode="unknown",
             bus_number=None,
             confidence=0.0,
@@ -59,6 +60,9 @@ async def parse_transit_intent(transcript: str) -> ParsedIntent:
                             "destination_text": {
                                 "type": ["string", "null"],
                             },
+                            "stop_text": {
+                                "type": ["string", "null"],
+                            },
                             "transport_mode": {
                                 "type": "string",
                                 "enum": ["bus", "subway", "transit", "unknown"],
@@ -76,6 +80,7 @@ async def parse_transit_intent(transcript: str) -> ParsedIntent:
                             "intent",
                             "origin_text",
                             "destination_text",
+                            "stop_text",
                             "transport_mode",
                             "bus_number",
                             "confidence",
@@ -93,6 +98,7 @@ async def parse_transit_intent(transcript: str) -> ParsedIntent:
                 intent="unknown",
                 origin_text=None,
                 destination_text=None,
+                stop_text=None,
                 transport_mode="unknown",
                 bus_number=None,
                 confidence=0.0,
@@ -108,6 +114,7 @@ async def parse_transit_intent(transcript: str) -> ParsedIntent:
             intent=parsed_json.get("intent", "unknown"),
             origin_text=parsed_json.get("origin_text"),
             destination_text=parsed_json.get("destination_text"),
+            stop_text=parsed_json.get("stop_text"),
             transport_mode=_normalize_transport_mode(
                 parsed_json.get("transport_mode")
             ),
@@ -134,20 +141,33 @@ def _mock_parse_transit_intent(transcript: str) -> ParsedIntent:
             intent="arrival",
             origin_text=None,
             destination_text=None,
+            stop_text=_extract_stop_text(text, bus_number),
             transport_mode="bus",
             bus_number=bus_number,
             confidence=0.85,
         )
 
     origin, destination = _extract_route_places(text)
-    if destination is None:
+    if origin is None and destination is None:
         destination = _extract_destination(text)
+
+    if origin and destination is None:
+        return ParsedIntent(
+            intent="route",
+            origin_text=origin,
+            destination_text=None,
+            stop_text=None,
+            transport_mode=transport_mode,
+            bus_number=bus_number,
+            confidence=0.85,
+        )
 
     if destination:
         return ParsedIntent(
             intent="route",
             origin_text=origin,
             destination_text=destination,
+            stop_text=None,
             transport_mode=transport_mode,
             bus_number=bus_number,
             confidence=0.85,
@@ -158,6 +178,7 @@ def _mock_parse_transit_intent(transcript: str) -> ParsedIntent:
             intent="arrival",
             origin_text=None,
             destination_text=None,
+            stop_text=None,
             transport_mode="bus",
             bus_number=bus_number,
             confidence=0.75,
@@ -167,10 +188,31 @@ def _mock_parse_transit_intent(transcript: str) -> ParsedIntent:
         intent="unknown",
         origin_text=None,
         destination_text=None,
+        stop_text=None,
         transport_mode="unknown",
         bus_number=None,
         confidence=0.0,
     )
+
+
+def _extract_stop_text(text: str, bus_number: str) -> str | None:
+    """도착 정보 발화에서 정류장명 또는 기준 위치를 추출합니다."""
+
+    escaped_bus = re.escape(bus_number)
+    patterns = [
+        rf"(.+?)\s*에서\s*{escaped_bus}\s*번",
+        rf"(.+?)\s*정류장에\s*{escaped_bus}\s*번",
+        rf"(.+?)\s*정류장에서\s*{escaped_bus}\s*번",
+        rf"(.+?)\s*에\s*{escaped_bus}\s*번",
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, text)
+
+        if match:
+            return _clean_place_text(match.group(1))
+
+    return None
 
 
 def _extract_transport_mode(text: str, bus_number: str | None) -> str:
@@ -201,6 +243,17 @@ def _extract_bus_number(text: str) -> str | None:
 
 def _extract_route_places(text: str) -> tuple[str | None, str | None]:
     """출발지와 목적지가 함께 있는 route 문장에서 장소 두 개를 추출합니다."""
+
+    missing_destination_patterns = [
+        r"(.+?)\s*에서\s*(?:까지|가는|가고|으로|로)",
+        r"(.+?)\s*부터\s*(?:까지|가는|가고|으로|로)",
+    ]
+
+    for pattern in missing_destination_patterns:
+        match = re.search(pattern, text)
+
+        if match:
+            return _clean_place_text(match.group(1)), None
 
     patterns = [
         r"(.+?)\s*에서\s*(.+?)\s*(?:까지|가는|가고|으로|로)",

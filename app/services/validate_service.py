@@ -34,7 +34,13 @@ def validate_parsed_intent(parsed: ParsedIntent) -> ValidationResult:
     if parsed.intent == "arrival" and not parsed.bus_number:
         return ValidationResult(
             is_valid=False,
-            message="버스 번호를 찾지 못했습니다. 버스 번호를 다시 말씀해 주세요.",
+            message="버스 번호를 말씀해 주세요.",
+        )
+
+    if parsed.intent == "arrival" and not parsed.stop_text:
+        return ValidationResult(
+            is_valid=False,
+            message="어느 정류장 기준인지 말씀해 주세요.",
         )
 
     return ValidationResult(

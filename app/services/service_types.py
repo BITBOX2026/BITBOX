@@ -13,6 +13,7 @@ class ParsedIntent:
     intent: IntentType = "unknown"
     origin_text: str | None = None
     destination_text: str | None = None
+    stop_text: str | None = None
     transport_mode: TransportMode = "unknown"
     bus_number: str | None = None
     confidence: float = 0.0
@@ -32,6 +33,7 @@ class TransportResult:
 
     origin: str | None = None
     destination: str | None = None
+    stop_name: str | None = None
     transport_mode: TransportMode = "unknown"
     bus_number: str | None = None
     arrival_time: str | None = None

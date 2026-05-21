@@ -79,6 +79,8 @@ async def process_audio(file: UploadFile = File(...)) -> dict:
                 "intent": None,
                 "origin": None,
                 "destination": None,
+                "stop_text": None,
+                "stop_name": None,
                 "transport_mode": None,
                 "bus_number": None,
                 "arrival_time": None,

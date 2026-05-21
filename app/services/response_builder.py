@@ -54,10 +54,28 @@ def _build_route_message(result: TransportResult) -> str:
 def _build_arrival_message(result: TransportResult) -> str:
     """특정 버스 도착 안내 문장을 생성합니다."""
 
+    if not result.stop_name:
+        return "해당 정류장의 버스 도착 정보를 찾지 못했습니다."
+
     if not result.bus_number:
         return "버스 번호를 확인하지 못했습니다. 다시 말씀해 주세요."
 
     if not result.arrival_time:
-        return f"{result.bus_number}번 버스의 실시간 도착 정보를 찾지 못했습니다."
+        return "해당 정류장의 버스 도착 정보를 찾지 못했습니다."
 
-    return f"{result.bus_number}번 버스는 약 {result.arrival_time}에 도착할 예정입니다."
+    return (
+        f"{result.stop_name} 정류장 기준 {result.bus_number}번 버스는 "
+        f"{_format_arrival_time(result.arrival_time)} 도착 예정입니다."
+    )
+
+
+def _format_arrival_time(arrival_time: str) -> str:
+    """공공데이터 API가 준 도착 문구를 안내 문장에 맞게 정리합니다."""
+
+    if arrival_time.startswith("약 "):
+        return arrival_time
+
+    if arrival_time[:1].isdigit():
+        return f"약 {arrival_time} 후" if arrival_time.endswith("분") else f"약 {arrival_time}"
+
+    return arrival_time

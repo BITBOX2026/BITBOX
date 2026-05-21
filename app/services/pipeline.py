@@ -46,6 +46,8 @@ async def run_pipeline(
                 intent=parsed.intent,
                 origin=parsed.origin_text,
                 destination=parsed.destination_text,
+                stop_text=parsed.stop_text,
+                stop_name=None,
                 transport_mode=parsed.transport_mode,
                 bus_number=parsed.bus_number,
                 confidence=parsed.confidence,
@@ -65,6 +67,8 @@ async def run_pipeline(
             intent=parsed.intent,
             origin=transport_result.origin,
             destination=transport_result.destination,
+            stop_text=parsed.stop_text,
+            stop_name=transport_result.stop_name,
             transport_mode=transport_result.transport_mode,
             bus_number=transport_result.bus_number,
             arrival_time=transport_result.arrival_time,
@@ -88,6 +92,8 @@ async def run_pipeline(
             intent=_get_intent(parsed),
             origin=_get_origin(parsed),
             destination=_get_destination(parsed),
+            stop_text=_get_stop_text(parsed),
+            stop_name=None,
             transport_mode=_get_transport_mode(parsed),
             bus_number=_get_bus_number(parsed),
             confidence=_get_confidence(parsed),
@@ -103,6 +109,8 @@ async def run_pipeline(
             intent=_get_intent(parsed),
             origin=_get_origin(parsed),
             destination=_get_destination(parsed),
+            stop_text=_get_stop_text(parsed),
+            stop_name=None,
             transport_mode=_get_transport_mode(parsed),
             bus_number=_get_bus_number(parsed),
             confidence=_get_confidence(parsed),
@@ -118,6 +126,8 @@ async def run_pipeline(
             intent=_get_intent(parsed),
             origin=_get_origin(parsed),
             destination=_get_destination(parsed),
+            stop_text=_get_stop_text(parsed),
+            stop_name=None,
             transport_mode=_get_transport_mode(parsed),
             bus_number=_get_bus_number(parsed),
             confidence=_get_confidence(parsed),
@@ -133,6 +143,8 @@ async def run_pipeline(
             intent=_get_intent(parsed),
             origin=_get_origin(parsed),
             destination=_get_destination(parsed),
+            stop_text=_get_stop_text(parsed),
+            stop_name=None,
             transport_mode=_get_transport_mode(parsed),
             bus_number=_get_bus_number(parsed),
             confidence=_get_confidence(parsed),
@@ -146,6 +158,8 @@ def _success_response(
     intent: str | None,
     origin: str | None,
     destination: str | None,
+    stop_text: str | None,
+    stop_name: str | None,
     transport_mode: str | None,
     bus_number: str | None,
     arrival_time: str | None,
@@ -169,6 +183,8 @@ def _success_response(
             intent=intent,
             origin=origin,
             destination=destination,
+            stop_text=stop_text,
+            stop_name=stop_name,
             transport_mode=transport_mode,
             bus_number=bus_number,
             arrival_time=arrival_time,
@@ -191,6 +207,8 @@ def _error_response(
     intent: str | None,
     origin: str | None,
     destination: str | None,
+    stop_text: str | None,
+    stop_name: str | None,
     transport_mode: str | None,
     bus_number: str | None,
     confidence: float,
@@ -206,6 +224,8 @@ def _error_response(
             intent=intent,
             origin=origin,
             destination=destination,
+            stop_text=stop_text,
+            stop_name=stop_name,
             transport_mode=transport_mode,
             bus_number=bus_number,
             arrival_time=None,
@@ -227,6 +247,8 @@ def _build_response_data(
     intent: str | None,
     origin: str | None,
     destination: str | None,
+    stop_text: str | None,
+    stop_name: str | None,
     transport_mode: str | None,
     bus_number: str | None,
     arrival_time: str | None,
@@ -247,6 +269,8 @@ def _build_response_data(
         "intent": intent,
         "origin": origin,
         "destination": destination,
+        "stop_text": stop_text,
+        "stop_name": stop_name,
         "transport_mode": transport_mode,
         "bus_number": bus_number,
         "arrival_time": arrival_time,
@@ -281,6 +305,13 @@ def _get_destination(parsed: ParsedIntent | None) -> str | None:
         return None
 
     return parsed.destination_text
+
+
+def _get_stop_text(parsed: ParsedIntent | None) -> str | None:
+    if parsed is None:
+        return None
+
+    return parsed.stop_text
 
 
 def _get_transport_mode(parsed: ParsedIntent | None) -> str | None:

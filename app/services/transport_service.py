@@ -12,6 +12,7 @@ from app.services.constants import (
     ODSAY_ROUTE_URL,
 )
 from app.services.exceptions import CoordinateResolveError, TransportAPIError
+from app.services.public_bus_service import search_bus_arrival
 from app.services.service_types import ParsedIntent, TransportResult
 from app.services.settings_helper import get_setting, is_mock_mode
 
@@ -26,9 +27,7 @@ async def search_transport_info(parsed: ParsedIntent) -> TransportResult:
         return await _search_route_with_odsay(parsed)
 
     if parsed.intent == "arrival":
-        raise TransportAPIError(
-            "실시간 버스 도착 정보는 공공데이터 API 연동 후 구현해야 합니다."
-        )
+        return await search_bus_arrival(parsed)
 
     raise TransportAPIError("지원하지 않는 교통 요청입니다.")
 
@@ -504,6 +503,7 @@ def _mock_transport_result(parsed: ParsedIntent) -> TransportResult:
         return TransportResult(
             origin=parsed.origin_text,
             destination=parsed.destination_text,
+            stop_name=None,
             transport_mode=parsed.transport_mode,
             bus_number="146" if uses_bus else None,
             arrival_time=None,
@@ -524,6 +524,7 @@ def _mock_transport_result(parsed: ParsedIntent) -> TransportResult:
         return TransportResult(
             origin=None,
             destination=None,
+            stop_name=parsed.stop_text,
             transport_mode="bus",
             bus_number=parsed.bus_number,
             arrival_time="3분 후",
@@ -540,6 +541,7 @@ def _mock_transport_result(parsed: ParsedIntent) -> TransportResult:
     return TransportResult(
         origin=None,
         destination=None,
+        stop_name=None,
         transport_mode="unknown",
         bus_number=None,
         arrival_time=None,
