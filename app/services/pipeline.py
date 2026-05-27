@@ -1,3 +1,6 @@
+import time
+from dataclasses import asdict
+
 from app.core.logger import get_logger
 from app.services.exceptions import (
     CoordinateResolveError,
@@ -8,7 +11,7 @@ from app.services.exceptions import (
 )
 from app.services.llm_service import parse_transit_intent
 from app.services.response_builder import build_user_message
-from app.services.service_types import ParsedIntent
+from app.services.service_types import ParsedIntent, RouteSegment
 from app.services.stt_service import transcribe_audio
 from app.services.transport_service import search_transport_info
 from app.services.tts_service import generate_tts_audio
@@ -20,6 +23,7 @@ logger = get_logger(__name__)
 async def run_pipeline(
     audio_bytes: bytes,
     filename: str = "audio.wav",
+    request_id: str = "",
 ) -> dict:
     """
     음성 파일을 최종 안내 응답으로 변환하는 전체 백엔드 파이프라인입니다.
@@ -28,25 +32,31 @@ async def run_pipeline(
     STT -> LLM JSON 분석 -> 검증 -> 교통 API 조회 -> 정형 응답 생성 -> TTS 음성 생성
     """
 
-    result = await _run_pipeline_core(audio_bytes, filename)
+    result = await _run_pipeline_core(audio_bytes, filename, request_id)
     result["audio_base64"] = await generate_tts_audio(result.get("message", ""))
+    result["request_id"] = request_id
     return result
 
 
 async def _run_pipeline_core(
     audio_bytes: bytes,
     filename: str,
+    request_id: str,
 ) -> dict:
     transcript: str | None = None
     parsed: ParsedIntent | None = None
 
     try:
+        t0 = time.monotonic()
         transcript = await transcribe_audio(
             audio_bytes=audio_bytes,
             filename=filename,
         )
+        logger.debug("[%s] STT %.2fs", request_id, time.monotonic() - t0)
 
+        t1 = time.monotonic()
         parsed = await parse_transit_intent(transcript)
+        logger.debug("[%s] LLM %.2fs — intent=%s confidence=%.2f", request_id, time.monotonic() - t1, parsed.intent, parsed.confidence)
 
         validation = validate_parsed_intent(parsed)
         if not validation.is_valid:
@@ -64,7 +74,9 @@ async def _run_pipeline_core(
                 needs_confirmation=True,
             )
 
+        t2 = time.monotonic()
         transport_result = await search_transport_info(parsed)
+        logger.debug("[%s] Transport %.2fs — source=%s", request_id, time.monotonic() - t2, transport_result.source)
 
         message = build_user_message(
             parsed=parsed,
@@ -88,6 +100,7 @@ async def _run_pipeline_core(
             subway_transit_count=transport_result.subway_transit_count,
             transfer_count=transport_result.transfer_count,
             path_type=transport_result.path_type,
+            route_segments=transport_result.route_segments,
             confidence=parsed.confidence,
             source=transport_result.source,
             needs_confirmation=False,
@@ -95,70 +108,42 @@ async def _run_pipeline_core(
 
     except CoordinateResolveError as exc:
         logger.warning("User-correctable location error: %s", exc)
-
         return _error_response(
             message=str(exc) or exc.user_message,
             transcript=transcript,
-            intent=_get_intent(parsed),
-            origin=_get_origin(parsed),
-            destination=_get_destination(parsed),
-            stop_text=_get_stop_text(parsed),
             stop_name=None,
-            transport_mode=_get_transport_mode(parsed),
-            bus_number=_get_bus_number(parsed),
-            confidence=_get_confidence(parsed),
             needs_confirmation=True,
+            **_parsed_fields(parsed),
         )
 
     except (STTProcessingError, LLMParsingError, TransportAPIError) as exc:
         logger.exception("External service or processing error: %s", exc)
-
         return _error_response(
             message=str(exc) or exc.user_message,
             transcript=transcript,
-            intent=_get_intent(parsed),
-            origin=_get_origin(parsed),
-            destination=_get_destination(parsed),
-            stop_text=_get_stop_text(parsed),
             stop_name=None,
-            transport_mode=_get_transport_mode(parsed),
-            bus_number=_get_bus_number(parsed),
-            confidence=_get_confidence(parsed),
             needs_confirmation=True,
+            **_parsed_fields(parsed),
         )
 
     except PipelineError as exc:
         logger.warning("Pipeline logic error: %s", exc)
-
         return _error_response(
             message=exc.user_message,
             transcript=transcript,
-            intent=_get_intent(parsed),
-            origin=_get_origin(parsed),
-            destination=_get_destination(parsed),
-            stop_text=_get_stop_text(parsed),
             stop_name=None,
-            transport_mode=_get_transport_mode(parsed),
-            bus_number=_get_bus_number(parsed),
-            confidence=_get_confidence(parsed),
             needs_confirmation=True,
+            **_parsed_fields(parsed),
         )
 
     except Exception as exc:
         logger.exception("Unexpected system-level pipeline error: %s", exc)
-
         return _error_response(
             message="요청을 처리하지 못했습니다. 다시 말씀해 주세요.",
             transcript=transcript,
-            intent=_get_intent(parsed),
-            origin=_get_origin(parsed),
-            destination=_get_destination(parsed),
-            stop_text=_get_stop_text(parsed),
             stop_name=None,
-            transport_mode=_get_transport_mode(parsed),
-            bus_number=_get_bus_number(parsed),
-            confidence=_get_confidence(parsed),
             needs_confirmation=True,
+            **_parsed_fields(parsed),
         )
 
 
@@ -199,6 +184,7 @@ def _success_response(
     subway_transit_count: int | None,
     transfer_count: int | None,
     path_type: int | None,
+    route_segments: list[RouteSegment] | None,
     confidence: float,
     source: str,
     needs_confirmation: bool,
@@ -224,6 +210,7 @@ def _success_response(
             subway_transit_count=subway_transit_count,
             transfer_count=transfer_count,
             path_type=path_type,
+            route_segments=route_segments,
             confidence=confidence,
             source=source,
             needs_confirmation=needs_confirmation,
@@ -265,6 +252,7 @@ def _error_response(
             subway_transit_count=None,
             transfer_count=None,
             path_type=None,
+            route_segments=None,
             confidence=confidence,
             source="none",
             needs_confirmation=needs_confirmation,
@@ -288,6 +276,7 @@ def _build_response_data(
     subway_transit_count: int | None,
     transfer_count: int | None,
     path_type: int | None,
+    route_segments: list[RouteSegment] | None,
     confidence: float,
     source: str,
     needs_confirmation: bool,
@@ -310,56 +299,32 @@ def _build_response_data(
         "subway_transit_count": subway_transit_count,
         "transfer_count": transfer_count,
         "path_type": path_type,
+        "route_segments": [asdict(seg) for seg in route_segments] if route_segments else None,
         "confidence": confidence,
         "source": source,
         "needs_confirmation": needs_confirmation,
     }
 
 
-def _get_intent(parsed: ParsedIntent | None) -> str | None:
+def _parsed_fields(parsed: ParsedIntent | None) -> dict:
+    """에러 응답 공통 필드를 ParsedIntent에서 안전하게 추출합니다."""
+
     if parsed is None:
-        return None
-
-    return parsed.intent
-
-
-def _get_origin(parsed: ParsedIntent | None) -> str | None:
-    if parsed is None:
-        return None
-
-    return parsed.origin_text
-
-
-def _get_destination(parsed: ParsedIntent | None) -> str | None:
-    if parsed is None:
-        return None
-
-    return parsed.destination_text
-
-
-def _get_stop_text(parsed: ParsedIntent | None) -> str | None:
-    if parsed is None:
-        return None
-
-    return parsed.stop_text
-
-
-def _get_transport_mode(parsed: ParsedIntent | None) -> str | None:
-    if parsed is None:
-        return None
-
-    return parsed.transport_mode
-
-
-def _get_bus_number(parsed: ParsedIntent | None) -> str | None:
-    if parsed is None:
-        return None
-
-    return parsed.bus_number
-
-
-def _get_confidence(parsed: ParsedIntent | None) -> float:
-    if parsed is None:
-        return 0.0
-
-    return parsed.confidence
+        return {
+            "intent": None,
+            "origin": None,
+            "destination": None,
+            "stop_text": None,
+            "transport_mode": None,
+            "bus_number": None,
+            "confidence": 0.0,
+        }
+    return {
+        "intent": parsed.intent,
+        "origin": parsed.origin_text,
+        "destination": parsed.destination_text,
+        "stop_text": parsed.stop_text,
+        "transport_mode": parsed.transport_mode,
+        "bus_number": parsed.bus_number,
+        "confidence": parsed.confidence,
+    }

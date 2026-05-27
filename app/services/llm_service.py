@@ -2,11 +2,26 @@ import json
 import re
 
 from openai import AsyncOpenAI
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_fixed
 
 from app.services.constants import DEFAULT_LLM_MODEL, TRANSIT_INTENT_SYSTEM_PROMPT
 from app.services.exceptions import LLMParsingError
 from app.services.service_types import ParsedIntent
 from app.services.settings_helper import get_setting, is_mock_mode
+
+
+def _load_system_prompt() -> str:
+    """LLM_SYSTEM_PROMPT_FILE이 설정되어 있으면 파일에서, 없으면 상수에서 프롬프트를 로드합니다."""
+    prompt_file = get_setting("LLM_SYSTEM_PROMPT_FILE")
+    if prompt_file:
+        try:
+            with open(prompt_file, encoding="utf-8") as f:
+                content = f.read().strip()
+                if content:
+                    return content
+        except OSError:
+            pass
+    return TRANSIT_INTENT_SYSTEM_PROMPT
 
 _openai_client: AsyncOpenAI | None = None
 
@@ -16,6 +31,85 @@ def _get_openai_client() -> AsyncOpenAI:
     if _openai_client is None:
         _openai_client = AsyncOpenAI(api_key=get_setting("OPENAI_API_KEY"))
     return _openai_client
+
+
+@retry(
+    retry=retry_if_exception_type(LLMParsingError),
+    stop=stop_after_attempt(2),
+    wait=wait_fixed(0.5),
+    reraise=True,
+)
+async def _call_llm(client: AsyncOpenAI, llm_model: str, transcript: str) -> ParsedIntent:
+    """LLM을 호출해 ParsedIntent를 반환합니다. JSON 파싱 실패 시 1회 재시도합니다."""
+
+    completion = await client.chat.completions.create(
+        model=llm_model,
+        temperature=0,
+        messages=[
+            {"role": "system", "content": _load_system_prompt()},
+            {"role": "user", "content": transcript},
+        ],
+        response_format={
+            "type": "json_schema",
+            "json_schema": {
+                "name": "transit_intent_schema",
+                "strict": True,
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "intent": {
+                            "type": "string",
+                            "enum": ["route", "arrival", "unknown"],
+                        },
+                        "origin_text": {"type": ["string", "null"]},
+                        "destination_text": {"type": ["string", "null"]},
+                        "stop_text": {"type": ["string", "null"]},
+                        "transport_mode": {
+                            "type": "string",
+                            "enum": ["bus", "subway", "transit", "unknown"],
+                        },
+                        "bus_number": {"type": ["string", "null"]},
+                        "confidence": {
+                            "type": "number",
+                            "minimum": 0.0,
+                            "maximum": 1.0,
+                        },
+                    },
+                    "required": [
+                        "intent",
+                        "origin_text",
+                        "destination_text",
+                        "stop_text",
+                        "transport_mode",
+                        "bus_number",
+                        "confidence",
+                    ],
+                    "additionalProperties": False,
+                },
+            },
+        },
+    )
+
+    message = completion.choices[0].message
+
+    if getattr(message, "refusal", None):
+        return ParsedIntent()
+
+    content = message.content
+    if not content:
+        raise LLMParsingError("LLM 응답이 비어 있습니다.")
+
+    parsed_json = _safe_json_loads(content)
+
+    return ParsedIntent(
+        intent=parsed_json.get("intent", "unknown"),
+        origin_text=parsed_json.get("origin_text"),
+        destination_text=parsed_json.get("destination_text"),
+        stop_text=parsed_json.get("stop_text"),
+        transport_mode=_normalize_transport_mode(parsed_json.get("transport_mode")),
+        bus_number=parsed_json.get("bus_number"),
+        confidence=_safe_confidence(parsed_json.get("confidence")),
+    )
 
 
 async def parse_transit_intent(transcript: str) -> ParsedIntent:
@@ -33,86 +127,7 @@ async def parse_transit_intent(transcript: str) -> ParsedIntent:
     llm_model = get_setting("LLM_MODEL", DEFAULT_LLM_MODEL)
 
     try:
-        client = _get_openai_client()
-
-        completion = await client.chat.completions.create(
-            model=llm_model,
-            temperature=0,
-            messages=[
-                {"role": "system", "content": TRANSIT_INTENT_SYSTEM_PROMPT},
-                {"role": "user", "content": transcript},
-            ],
-            response_format={
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "transit_intent_schema",
-                    "strict": True,
-                    "schema": {
-                        "type": "object",
-                        "properties": {
-                            "intent": {
-                                "type": "string",
-                                "enum": ["route", "arrival", "unknown"],
-                            },
-                            "origin_text": {
-                                "type": ["string", "null"],
-                            },
-                            "destination_text": {
-                                "type": ["string", "null"],
-                            },
-                            "stop_text": {
-                                "type": ["string", "null"],
-                            },
-                            "transport_mode": {
-                                "type": "string",
-                                "enum": ["bus", "subway", "transit", "unknown"],
-                            },
-                            "bus_number": {
-                                "type": ["string", "null"],
-                            },
-                            "confidence": {
-                                "type": "number",
-                                "minimum": 0.0,
-                                "maximum": 1.0,
-                            },
-                        },
-                        "required": [
-                            "intent",
-                            "origin_text",
-                            "destination_text",
-                            "stop_text",
-                            "transport_mode",
-                            "bus_number",
-                            "confidence",
-                        ],
-                        "additionalProperties": False,
-                    },
-                },
-            },
-        )
-
-        message = completion.choices[0].message
-
-        if getattr(message, "refusal", None):
-            return ParsedIntent()
-
-        content = message.content
-        if not content:
-            raise LLMParsingError("LLM 응답이 비어 있습니다.")
-
-        parsed_json = _safe_json_loads(content)
-
-        return ParsedIntent(
-            intent=parsed_json.get("intent", "unknown"),
-            origin_text=parsed_json.get("origin_text"),
-            destination_text=parsed_json.get("destination_text"),
-            stop_text=parsed_json.get("stop_text"),
-            transport_mode=_normalize_transport_mode(
-                parsed_json.get("transport_mode")
-            ),
-            bus_number=parsed_json.get("bus_number"),
-            confidence=_safe_confidence(parsed_json.get("confidence")),
-        )
+        return await _call_llm(_get_openai_client(), llm_model, transcript)
 
     except LLMParsingError:
         raise

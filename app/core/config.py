@@ -27,8 +27,12 @@ class Settings(BaseSettings):
     STT_MODEL: str = "gpt-4o-mini-transcribe"
     LLM_MODEL: str = "gpt-4o-mini"
 
+    LLM_SYSTEM_PROMPT_FILE: str | None = None
+
     MAX_AUDIO_SIZE_MB: int = 10
     REQUEST_TIMEOUT_SECONDS: int = 30
+
+    CORS_ALLOWED_ORIGINS: str = "*"
 
     API_URL: str = "http://127.0.0.1:8000/api/process"
     AUDIO_OUTPUT_PATH: str = "recorded_audio.wav"
