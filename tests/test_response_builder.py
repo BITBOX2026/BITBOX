@@ -7,7 +7,7 @@ from app.services.response_builder import (
     _josa_ro,
     build_user_message,
 )
-from app.services.service_types import ParsedIntent, RouteSegment, TransportResult
+from app.services.core.service_types import ParsedIntent, RouteSegment, TransportResult
 
 
 def _route_parsed(**kwargs) -> ParsedIntent:

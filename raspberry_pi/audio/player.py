@@ -1,3 +1,10 @@
+"""
+오디오 재생 모듈
+
+라즈베리파이의 aplay 명령어로 WAV 파일을 재생합니다.
+서버에서 받은 base64 인코딩 TTS 음성을 임시 파일로 변환 후 재생합니다.
+"""
+
 import base64
 import subprocess
 import tempfile
@@ -6,7 +13,6 @@ from pathlib import Path
 
 def play_audio_file(audio_path: str) -> None:
     """로컬 WAV 파일을 aplay로 재생합니다."""
-
     path = Path(audio_path)
 
     if not path.exists():
@@ -26,8 +32,11 @@ def play_audio_file(audio_path: str) -> None:
 
 
 def play_tts_audio(audio_base64: str) -> None:
-    """서버에서 받은 base64 TTS 음성을 임시 파일로 디코딩해 재생합니다."""
+    """
+    서버에서 받은 base64 TTS 음성을 임시 파일로 저장하고 재생합니다.
 
+    재생 후 임시 파일은 항상 삭제됩니다 (finally 블록).
+    """
     if not audio_base64 or not audio_base64.strip():
         return
 
@@ -52,5 +61,6 @@ def play_tts_audio(audio_base64: str) -> None:
         raise RuntimeError(f"TTS 오디오 재생 중 오류가 발생했습니다: {exc}") from exc
 
     finally:
+        # 재생 성공 여부와 관계없이 임시 파일 삭제
         if tmp_path and tmp_path.exists():
             tmp_path.unlink(missing_ok=True)

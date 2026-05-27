@@ -1,3 +1,17 @@
+"""
+라즈베리파이 클라이언트 진입점
+
+실행 모드:
+- BITBOX_RUN_MODE=once   : 1회 녹음 → 전송 → 결과 표시 후 종료 (기본값, 개발/테스트용)
+- BITBOX_RUN_MODE=button : 버튼을 누를 때마다 반복 실행 (실제 설치 환경)
+
+처리 흐름:
+1. 버튼 입력 대기 (button 모드)
+2. 마이크 녹음
+3. 서버 /api/process 전송
+4. 결과 화면 표시 + TTS 음성 재생
+"""
+
 import os
 import threading
 
@@ -7,14 +21,12 @@ from raspberry_pi.display.screen import show_text
 from raspberry_pi.services.server_client import send_audio_to_server
 from raspberry_pi.utils.response_formatter import build_display_text
 
-
 RUN_MODE_ONCE = "once"
 RUN_MODE_BUTTON = "button"
 
 
 def _spinner(stop_event: threading.Event, base_message: str) -> None:
-    """서버 처리 중 점이 늘어나는 텍스트로 대기 중임을 알립니다."""
-
+    """서버 처리 중 점이 늘어나는 애니메이션으로 대기 상태를 표시합니다."""
     dots = ""
     while not stop_event.is_set():
         show_text(f"{base_message}{dots}")
@@ -23,10 +35,12 @@ def _spinner(stop_event: threading.Event, base_message: str) -> None:
 
 
 def run_once() -> None:
+    """1회 녹음 → 서버 전송 → 결과 표시 흐름을 실행합니다."""
     try:
         show_text("녹음 중...")
         audio_path = record_audio()
 
+        # 서버 처리 중 스피너 표시 (별도 스레드)
         stop_event = threading.Event()
         spinner_thread = threading.Thread(
             target=_spinner,
@@ -41,22 +55,23 @@ def run_once() -> None:
             stop_event.set()
             spinner_thread.join()
 
-        display_text = build_display_text(response)
-        show_text(display_text)
+        # 화면에 안내 문구 표시
+        show_text(build_display_text(response))
 
+        # TTS 음성 재생 (audio_base64가 있을 때만)
         audio_base64 = response.get("audio_base64")
         if audio_base64:
             play_tts_audio(audio_base64)
 
     except Exception as exc:
-        error_msg = str(exc) if str(exc) else "처리 중 오류가 발생했습니다."
-        print(f"[ERROR] {error_msg}")
-        # 터미널 벨: 오류 발생 시 청각 피드백
-        print("\a", end="", flush=True)
-        show_text(error_msg)
+        # 사용자에게 기술적 메시지 대신 범용 안내를 표시
+        # 상세 오류는 콘솔 로그로만 출력
+        print(f"[ERROR] {exc}")
+        show_text("오류가 발생했습니다. 다시 시도해 주세요.")
 
 
 def run_button_loop() -> None:
+    """버튼을 누를 때마다 run_once()를 반복 실행합니다."""
     from raspberry_pi.input.button import wait_for_button
 
     while True:

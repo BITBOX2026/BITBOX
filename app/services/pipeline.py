@@ -1,21 +1,38 @@
+"""
+메인 파이프라인 오케스트레이터
+
+음성 bytes를 최종 JSON 응답으로 변환하는 전체 흐름을 조율합니다.
+
+처리 순서:
+1. STT  — 음성 → 텍스트 (OpenAI Whisper)
+2. LLM  — 텍스트 → 구조화된 intent JSON (OpenAI GPT)
+3. 검증  — intent가 실제 조회 가능한 요청인지 확인
+4. 교통 API — ODsay 경로 또는 서울버스 실시간 도착 정보 조회
+5. 응답  — 사용자 안내 문장 생성
+6. TTS  — 안내 문장 → 음성 base64 (OpenAI TTS)
+
+예외는 각 단계에서 발생하는 PipelineError 하위 클래스로 구분하며,
+pipeline.py 에서 모두 잡아 사용자 친화적 메시지로 변환합니다.
+"""
+
 import time
 from dataclasses import asdict
 
 from app.core.logger import get_logger
-from app.services.exceptions import (
+from app.services.ai.llm_service import parse_transit_intent
+from app.services.ai.stt_service import transcribe_audio
+from app.services.ai.tts_service import generate_tts_audio
+from app.services.core.exceptions import (
     CoordinateResolveError,
     LLMParsingError,
     PipelineError,
     STTProcessingError,
     TransportAPIError,
 )
-from app.services.llm_service import parse_transit_intent
+from app.services.core.service_types import ParsedIntent, RouteSegment
 from app.services.response_builder import build_user_message
-from app.services.service_types import ParsedIntent, RouteSegment
-from app.services.stt_service import transcribe_audio
-from app.services.transport_service import search_transport_info
-from app.services.tts_service import generate_tts_audio
-from app.services.validate_service import validate_parsed_intent
+from app.services.transit.transport_service import search_transport_info
+from app.services.transit.validate_service import validate_parsed_intent
 
 logger = get_logger(__name__)
 
@@ -26,13 +43,12 @@ async def run_pipeline(
     request_id: str = "",
 ) -> dict:
     """
-    음성 파일을 최종 안내 응답으로 변환하는 전체 백엔드 파이프라인입니다.
-
-    처리 순서:
-    STT -> LLM JSON 분석 -> 검증 -> 교통 API 조회 -> 정형 응답 생성 -> TTS 음성 생성
+    음성 파일을 최종 안내 응답으로 변환하는 전체 파이프라인입니다.
+    내부 처리 후 TTS 오디오와 request_id를 결과에 추가해 반환합니다.
     """
-
     result = await _run_pipeline_core(audio_bytes, filename, request_id)
+
+    # TTS는 파이프라인 핵심 로직과 분리 — 실패해도 텍스트 응답은 반환
     result["audio_base64"] = await generate_tts_audio(result.get("message", ""))
     result["request_id"] = request_id
     return result
@@ -43,21 +59,26 @@ async def _run_pipeline_core(
     filename: str,
     request_id: str,
 ) -> dict:
+    """STT → LLM → 검증 → 교통 API → 응답 생성 핵심 흐름입니다."""
+
     transcript: str | None = None
     parsed: ParsedIntent | None = None
 
     try:
+        # 1단계: STT — 음성 파일을 한국어 텍스트로 변환
         t0 = time.monotonic()
-        transcript = await transcribe_audio(
-            audio_bytes=audio_bytes,
-            filename=filename,
-        )
+        transcript = await transcribe_audio(audio_bytes=audio_bytes, filename=filename)
         logger.debug("[%s] STT %.2fs", request_id, time.monotonic() - t0)
 
+        # 2단계: LLM — 텍스트를 intent/출발지/목적지/버스번호 등으로 구조화
         t1 = time.monotonic()
         parsed = await parse_transit_intent(transcript)
-        logger.debug("[%s] LLM %.2fs — intent=%s confidence=%.2f", request_id, time.monotonic() - t1, parsed.intent, parsed.confidence)
+        logger.debug(
+            "[%s] LLM %.2fs — intent=%s confidence=%.2f",
+            request_id, time.monotonic() - t1, parsed.intent, parsed.confidence,
+        )
 
+        # 3단계: 검증 — intent가 조회 가능한 요청인지 확인
         validation = validate_parsed_intent(parsed)
         if not validation.is_valid:
             return _error_response(
@@ -74,14 +95,16 @@ async def _run_pipeline_core(
                 needs_confirmation=True,
             )
 
+        # 4단계: 교통 API — ODsay 경로 또는 서울버스 도착 정보 조회
         t2 = time.monotonic()
         transport_result = await search_transport_info(parsed)
-        logger.debug("[%s] Transport %.2fs — source=%s", request_id, time.monotonic() - t2, transport_result.source)
-
-        message = build_user_message(
-            parsed=parsed,
-            transport_result=transport_result,
+        logger.debug(
+            "[%s] Transport %.2fs — source=%s",
+            request_id, time.monotonic() - t2, transport_result.source,
         )
+
+        # 5단계: 응답 생성 — 교통 데이터를 자연어 안내 문장으로 변환
+        message = build_user_message(parsed=parsed, transport_result=transport_result)
 
         return _success_response(
             message=message,
@@ -107,9 +130,10 @@ async def _run_pipeline_core(
         )
 
     except CoordinateResolveError as exc:
-        logger.warning("User-correctable location error: %s", exc)
+        # 장소명 → 좌표 변환 실패 — 사용자가 더 정확한 이름을 말해야 함
+        logger.warning("장소 좌표 변환 오류: %s", exc)
         return _error_response(
-            message=str(exc) or exc.user_message,
+            message=exc.user_message,
             transcript=transcript,
             stop_name=None,
             needs_confirmation=True,
@@ -117,9 +141,10 @@ async def _run_pipeline_core(
         )
 
     except (STTProcessingError, LLMParsingError, TransportAPIError) as exc:
-        logger.exception("External service or processing error: %s", exc)
+        # 외부 API 오류 — 기술적 메시지 대신 user_message 반환
+        logger.exception("외부 서비스 오류: %s", exc)
         return _error_response(
-            message=str(exc) or exc.user_message,
+            message=exc.user_message,
             transcript=transcript,
             stop_name=None,
             needs_confirmation=True,
@@ -127,7 +152,7 @@ async def _run_pipeline_core(
         )
 
     except PipelineError as exc:
-        logger.warning("Pipeline logic error: %s", exc)
+        logger.warning("파이프라인 로직 오류: %s", exc)
         return _error_response(
             message=exc.user_message,
             transcript=transcript,
@@ -137,7 +162,8 @@ async def _run_pipeline_core(
         )
 
     except Exception as exc:
-        logger.exception("Unexpected system-level pipeline error: %s", exc)
+        # 예상치 못한 시스템 오류 — 상세 메시지를 로그에만 남기고 범용 안내 반환
+        logger.exception("예상치 못한 오류: %s", exc)
         return _error_response(
             message="요청을 처리하지 못했습니다. 다시 말씀해 주세요.",
             transcript=transcript,
@@ -149,7 +175,6 @@ async def _run_pipeline_core(
 
 def build_timeout_error_response() -> dict:
     """asyncio.TimeoutError 발생 시 gateway에서 반환할 일관된 오류 응답입니다."""
-
     result = _error_response(
         message="처리 시간이 초과되었습니다. 다시 시도해 주세요.",
         transcript=None,
@@ -166,6 +191,10 @@ def build_timeout_error_response() -> dict:
     result["audio_base64"] = None
     return result
 
+
+# ---------------------------------------------------------------------------
+# 응답 조립 헬퍼
+# ---------------------------------------------------------------------------
 
 def _success_response(
     message: str,
@@ -189,31 +218,19 @@ def _success_response(
     source: str,
     needs_confirmation: bool,
 ) -> dict:
-    """성공 응답 JSON을 라즈베리파이가 쓰기 쉬운 고정 구조로 만듭니다."""
-
     return {
         "status": "success",
         "message": message,
         "data": _build_response_data(
-            transcript=transcript,
-            intent=intent,
-            origin=origin,
-            destination=destination,
-            stop_text=stop_text,
-            stop_name=stop_name,
-            transport_mode=transport_mode,
-            bus_number=bus_number,
-            arrival_time=arrival_time,
-            total_time_min=total_time_min,
-            payment=payment,
-            bus_transit_count=bus_transit_count,
-            subway_transit_count=subway_transit_count,
-            transfer_count=transfer_count,
-            path_type=path_type,
-            route_segments=route_segments,
-            confidence=confidence,
-            source=source,
-            needs_confirmation=needs_confirmation,
+            transcript=transcript, intent=intent,
+            origin=origin, destination=destination,
+            stop_text=stop_text, stop_name=stop_name,
+            transport_mode=transport_mode, bus_number=bus_number,
+            arrival_time=arrival_time, total_time_min=total_time_min,
+            payment=payment, bus_transit_count=bus_transit_count,
+            subway_transit_count=subway_transit_count, transfer_count=transfer_count,
+            path_type=path_type, route_segments=route_segments,
+            confidence=confidence, source=source, needs_confirmation=needs_confirmation,
         ),
     }
 
@@ -231,31 +248,20 @@ def _error_response(
     confidence: float,
     needs_confirmation: bool,
 ) -> dict:
-    """실패 응답도 성공 응답과 같은 data schema를 유지합니다."""
-
+    # 오류 응답도 성공 응답과 동일한 data 스키마를 유지합니다.
+    # 라즈베리파이 클라이언트가 status만 보고 분기하면 되도록 구조를 일관되게 유지합니다.
     return {
         "status": "error",
         "message": message,
         "data": _build_response_data(
-            transcript=transcript,
-            intent=intent,
-            origin=origin,
-            destination=destination,
-            stop_text=stop_text,
-            stop_name=stop_name,
-            transport_mode=transport_mode,
-            bus_number=bus_number,
-            arrival_time=None,
-            total_time_min=None,
-            payment=None,
-            bus_transit_count=None,
-            subway_transit_count=None,
-            transfer_count=None,
-            path_type=None,
-            route_segments=None,
-            confidence=confidence,
-            source="none",
-            needs_confirmation=needs_confirmation,
+            transcript=transcript, intent=intent,
+            origin=origin, destination=destination,
+            stop_text=stop_text, stop_name=stop_name,
+            transport_mode=transport_mode, bus_number=bus_number,
+            arrival_time=None, total_time_min=None, payment=None,
+            bus_transit_count=None, subway_transit_count=None,
+            transfer_count=None, path_type=None, route_segments=None,
+            confidence=confidence, source="none", needs_confirmation=needs_confirmation,
         ),
     }
 
@@ -281,8 +287,7 @@ def _build_response_data(
     source: str,
     needs_confirmation: bool,
 ) -> dict:
-    """모든 응답에서 유지할 공통 data schema입니다."""
-
+    """성공/오류 응답 모두 사용하는 공통 data 스키마를 반환합니다."""
     return {
         "transcript": transcript,
         "intent": intent,
@@ -299,6 +304,7 @@ def _build_response_data(
         "subway_transit_count": subway_transit_count,
         "transfer_count": transfer_count,
         "path_type": path_type,
+        # RouteSegment dataclass를 dict로 변환 — JSON 직렬화 가능하도록
         "route_segments": [asdict(seg) for seg in route_segments] if route_segments else None,
         "confidence": confidence,
         "source": source,
@@ -307,17 +313,12 @@ def _build_response_data(
 
 
 def _parsed_fields(parsed: ParsedIntent | None) -> dict:
-    """에러 응답 공통 필드를 ParsedIntent에서 안전하게 추출합니다."""
-
+    """예외 핸들러에서 ParsedIntent로부터 공통 오류 필드를 안전하게 추출합니다."""
     if parsed is None:
         return {
-            "intent": None,
-            "origin": None,
-            "destination": None,
-            "stop_text": None,
-            "transport_mode": None,
-            "bus_number": None,
-            "confidence": 0.0,
+            "intent": None, "origin": None, "destination": None,
+            "stop_text": None, "transport_mode": None,
+            "bus_number": None, "confidence": 0.0,
         }
     return {
         "intent": parsed.intent,

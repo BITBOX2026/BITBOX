@@ -1,12 +1,22 @@
-from app.services.constants import (
+"""
+서울시 버스 공공데이터 API 클라이언트 — 실시간 도착 정보 조회
+
+서울시 Open API(ws.bus.go.kr)를 사용하며 다음 순서로 정보를 조회합니다:
+
+1. 버스 번호로 노선 ID 조회 (getBusRouteList)
+2. 노선 경유 정류소 목록에서 사용자가 말한 정류장 검색 (getStaionByRoute)
+3. 해당 정류장의 실시간 버스 도착 정보 조회 (getArrInfoByRoute)
+"""
+
+from app.services.core.constants import (
     SEOUL_BUS_ARRIVAL_URL,
     SEOUL_BUS_ROUTE_SEARCH_URL,
     SEOUL_ROUTE_STATION_URL,
-    SEOUL_STATION_SEARCH_URL,
 )
-from app.services.exceptions import TransportAPIError
-from app.services.seoul_bus_client import request_seoul_bus_payload
-from app.services.seoul_bus_parser import (
+from app.services.core.exceptions import TransportAPIError
+from app.services.core.service_types import ParsedIntent, TransportResult
+from app.services.transit.seoul_bus_client import request_seoul_bus_payload
+from app.services.transit.seoul_bus_parser import (
     build_route_station,
     contains_normalized,
     extract_arrival_station_name,
@@ -16,39 +26,40 @@ from app.services.seoul_bus_parser import (
     first_item_value,
     is_matching_bus_route,
 )
-from app.services.service_types import ParsedIntent, TransportResult
 
 
 async def search_bus_arrival(parsed: ParsedIntent) -> TransportResult:
-    """서울시 버스 공공데이터 API로 실시간 버스 도착 정보를 조회합니다."""
+    """
+    버스 번호와 정류장명으로 실시간 도착 정보를 조회합니다.
 
+    조회 실패 시 TransportAPIError를 발생시킵니다.
+    """
     if not parsed.bus_number:
         raise TransportAPIError("버스 번호를 말씀해 주세요.")
 
     if not parsed.stop_text:
         raise TransportAPIError("어느 정류장 기준인지 말씀해 주세요.")
 
+    # 1단계: 버스 번호 → 노선 ID
     bus_route = await search_bus_route(parsed.bus_number)
     if not bus_route:
-        raise TransportAPIError(
-            "공공데이터 노선 ID 조회 실패: 해당 버스 노선을 찾지 못했습니다."
-        )
+        raise TransportAPIError("해당 버스 노선을 찾지 못했습니다.")
 
     bus_route_id = first_item_value(bus_route, ["busRouteId"])
     if not bus_route_id:
-        raise TransportAPIError(
-            "공공데이터 노선 ID 조회 실패: 해당 버스 노선을 찾지 못했습니다."
-        )
+        raise TransportAPIError("해당 버스 노선을 찾지 못했습니다.")
 
+    # 2단계: 노선 경유 정류소에서 사용자가 말한 정류장 검색
     route_station = await _find_route_station_by_stop_text(
         bus_route_id=bus_route_id,
         stop_text=parsed.stop_text,
     )
     if not route_station:
         raise TransportAPIError(
-            "공공데이터 노선 경유 정류소 조회 실패: 해당 노선에서 정류장을 찾지 못했습니다."
+            "해당 노선에서 정류장을 찾지 못했습니다."
         )
 
+    # 3단계: 실시간 도착 시간 조회
     arrival = await get_bus_arrival_time(
         bus_route_id=bus_route_id,
         station_id=route_station["station_id"],
@@ -59,30 +70,20 @@ async def search_bus_arrival(parsed: ParsedIntent) -> TransportResult:
     arrival_time = arrival.get("arrival_time")
     if not arrival_time:
         raise TransportAPIError(
-            "공공데이터 도착정보 조회 실패: 해당 정류장의 버스 도착 정보를 찾지 못했습니다."
+            "해당 정류장의 버스 도착 정보를 찾지 못했습니다."
         )
 
     return TransportResult(
-        origin=None,
-        destination=None,
         stop_name=arrival.get("station_name") or route_station["station_name"],
         transport_mode="bus",
         bus_number=parsed.bus_number,
         arrival_time=arrival_time,
-        total_time_min=None,
-        payment=None,
-        bus_transit_count=None,
-        subway_transit_count=None,
-        transfer_count=None,
-        path_type=None,
-        route_summary=None,
         source="public_data",
     )
 
 
 async def search_bus_route(bus_number: str) -> dict[str, str] | None:
-    """버스 번호로 서울시 노선 후보를 조회하고 가장 적절한 노선을 선택합니다."""
-
+    """버스 번호로 서울시 노선 정보를 조회합니다. 정확히 일치하는 노선을 우선 선택합니다."""
     payload = await request_seoul_bus_payload(
         SEOUL_BUS_ROUTE_SEARCH_URL,
         {"strSrch": bus_number},
@@ -93,39 +94,11 @@ async def search_bus_route(bus_number: str) -> dict[str, str] | None:
     if not items:
         return None
 
-    exact_match = find_first(
-        items,
-        lambda item: is_matching_bus_route(item, bus_number),
-    )
+    # 정확히 일치하는 노선을 우선하고, 없으면 첫 번째 결과를 사용
+    exact_match = find_first(items, lambda item: is_matching_bus_route(item, bus_number))
     selected = exact_match or items[0]
 
     return selected if first_item_value(selected, ["busRouteId"]) else None
-
-
-async def search_station(stop_text: str) -> dict[str, str] | None:
-    """정류장명으로 첫 번째 서울시 정류장 후보를 조회합니다."""
-
-    payload = await request_seoul_bus_payload(
-        SEOUL_STATION_SEARCH_URL,
-        {"stSrch": stop_text},
-        stage="정류소정보 조회",
-    )
-
-    items = extract_items(payload)
-    if not items:
-        return None
-
-    selected = items[0]
-    station_id = first_item_value(selected, ["stId", "station", "stationId"])
-    station_name = first_item_value(selected, ["stNm", "stationNm"]) or stop_text
-
-    if not station_id:
-        return None
-
-    return {
-        "station_id": station_id,
-        "station_name": station_name,
-    }
 
 
 async def get_bus_arrival_time(
@@ -134,24 +107,21 @@ async def get_bus_arrival_time(
     order: str | None = None,
     station_name: str | None = None,
 ) -> dict[str, str | None]:
-    """노선 ID와 정류장 ID로 도착 예정 정보를 조회합니다."""
+    """노선 ID와 정류장 ID로 실시간 도착 예정 정보를 조회합니다."""
 
     route_station = {
         "order": order or "",
         "station_name": station_name or "",
     }
 
+    # 순번(ord)이 없으면 노선 경유 정류소 목록에서 조회
     if not route_station["order"]:
         found_station = await _find_route_station(
             bus_route_id=bus_route_id,
             station_id=station_id,
         )
         if not found_station:
-            return {
-                "arrival_time": None,
-                "station_name": None,
-            }
-
+            return {"arrival_time": None, "station_name": None}
         route_station = found_station
 
     payload = await request_seoul_bus_payload(
@@ -167,16 +137,14 @@ async def get_bus_arrival_time(
 
     items = extract_items(payload)
     if not items:
-        return {
-            "arrival_time": None,
-            "station_name": route_station["station_name"],
-        }
+        return {"arrival_time": None, "station_name": route_station["station_name"]}
 
     first_arrival = items[0]
     return {
         "arrival_time": extract_arrival_time(first_arrival),
-        "station_name": extract_arrival_station_name(first_arrival)
-        or route_station["station_name"],
+        "station_name": (
+            extract_arrival_station_name(first_arrival) or route_station["station_name"]
+        ),
     }
 
 
@@ -184,8 +152,7 @@ async def _find_route_station_by_stop_text(
     bus_route_id: str,
     stop_text: str,
 ) -> dict[str, str] | None:
-    """노선 경유 정류소 목록에서 정류장명으로 도착정보 조회에 필요한 값을 찾습니다."""
-
+    """노선 경유 정류소 목록에서 사용자가 말한 정류장명으로 정류소 정보를 찾습니다."""
     payload = await request_seoul_bus_payload(
         SEOUL_ROUTE_STATION_URL,
         {"busRouteId": bus_route_id},
@@ -208,8 +175,7 @@ async def _find_route_station(
     bus_route_id: str,
     station_id: str,
 ) -> dict[str, str] | None:
-    """노선의 정류장 목록에서 정류장 순번(ord)을 찾습니다."""
-
+    """노선 경유 정류소 목록에서 정류장 ID로 순번(ord)을 찾습니다."""
     payload = await request_seoul_bus_payload(
         SEOUL_ROUTE_STATION_URL,
         {"busRouteId": bus_route_id},
@@ -220,7 +186,6 @@ async def _find_route_station(
         item_station_id = first_item_value(item, ["station", "stId", "stationId"])
         if item_station_id != station_id:
             continue
-
         return build_route_station(item)
 
     return None

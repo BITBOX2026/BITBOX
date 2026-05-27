@@ -4,24 +4,51 @@ import re
 from openai import AsyncOpenAI
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_fixed
 
-from app.services.constants import DEFAULT_LLM_MODEL, TRANSIT_INTENT_SYSTEM_PROMPT
-from app.services.exceptions import LLMParsingError
-from app.services.service_types import ParsedIntent
-from app.services.settings_helper import get_setting, is_mock_mode
+from app.services.core.constants import DEFAULT_LLM_MODEL, TRANSIT_INTENT_SYSTEM_PROMPT
+from app.services.core.exceptions import LLMParsingError
+from app.services.core.service_types import ParsedIntent
+from app.services.core.settings_helper import get_setting, is_mock_mode
+
+
+_system_prompt_cache: str | None = None
+_system_prompt_file_mtime: float | None = None  # 마지막으로 읽은 파일의 수정 시각
 
 
 def _load_system_prompt() -> str:
-    """LLM_SYSTEM_PROMPT_FILE이 설정되어 있으면 파일에서, 없으면 상수에서 프롬프트를 로드합니다."""
+    """
+    시스템 프롬프트를 반환합니다.
+
+    LLM_SYSTEM_PROMPT_FILE이 설정된 경우 파일을 읽습니다.
+    파일이 변경되면(mtime 감지) 자동으로 다시 로드합니다.
+    파일이 없거나 비어 있으면 내장 TRANSIT_INTENT_SYSTEM_PROMPT를 사용합니다.
+    """
+    import os
+    global _system_prompt_cache, _system_prompt_file_mtime
+
     prompt_file = get_setting("LLM_SYSTEM_PROMPT_FILE")
+
     if prompt_file:
         try:
+            current_mtime = os.path.getmtime(prompt_file)
+            # 캐시가 있고 파일이 변경되지 않았으면 캐시 반환
+            if _system_prompt_cache is not None and current_mtime == _system_prompt_file_mtime:
+                return _system_prompt_cache
+
+            # 파일 변경 감지 또는 최초 로드
             with open(prompt_file, encoding="utf-8") as f:
                 content = f.read().strip()
-                if content:
-                    return content
+            if content:
+                _system_prompt_cache = content
+                _system_prompt_file_mtime = current_mtime
+                return _system_prompt_cache
+
         except OSError:
             pass
-    return TRANSIT_INTENT_SYSTEM_PROMPT
+
+    # 파일 미설정 또는 읽기 실패 시 내장 프롬프트 사용 (한 번만 캐싱)
+    if _system_prompt_cache is None:
+        _system_prompt_cache = TRANSIT_INTENT_SYSTEM_PROMPT
+    return _system_prompt_cache
 
 _openai_client: AsyncOpenAI | None = None
 
@@ -240,29 +267,30 @@ def _extract_bus_number(text: str) -> str | None:
 def _extract_route_places(text: str) -> tuple[str | None, str | None]:
     """출발지와 목적지가 함께 있는 route 문장에서 장소 두 개를 추출합니다."""
 
-    missing_destination_patterns = [
-        r"(.+?)\s*에서\s*(?:까지|가는|가고|으로|로)",
-        r"(.+?)\s*부터\s*(?:까지|가는|가고|으로|로)",
-    ]
-
-    for pattern in missing_destination_patterns:
-        match = re.search(pattern, text)
-
-        if match:
-            return _clean_place_text(match.group(1)), None
-
-    patterns = [
+    # 두 장소 패턴을 먼저 시도 — 목적지가 있으면 우선 캡처
+    two_place_patterns = [
         r"(.+?)\s*에서\s*(.+?)\s*(?:까지|가는|가고|으로|로)",
         r"(.+?)\s*부터\s*(.+?)\s*(?:까지|가는|가고|으로|로)",
     ]
 
-    for pattern in patterns:
+    for pattern in two_place_patterns:
         match = re.search(pattern, text)
-
         if match:
             origin = _clean_place_text(match.group(1))
             destination = _clean_place_text(match.group(2))
-            return origin, destination
+            if origin and destination:
+                return origin, destination
+
+    # 두 장소 패턴 실패 시 출발지만 있는 패턴 시도
+    origin_only_patterns = [
+        r"(.+?)\s*에서\s*(?:까지|가는|가고|으로|로)",
+        r"(.+?)\s*부터\s*(?:까지|가는|가고|으로|로)",
+    ]
+
+    for pattern in origin_only_patterns:
+        match = re.search(pattern, text)
+        if match:
+            return _clean_place_text(match.group(1)), None
 
     return None, None
 
@@ -292,18 +320,11 @@ def _clean_place_text(place_text: str) -> str:
 
     cleaned = place_text.strip()
 
-    remove_words = [
-        "저",
-        "나",
-        "제가",
-        "저는",
-        "혹시",
-        "좀",
-        "버스",
-    ]
-
-    for word in remove_words:
-        cleaned = cleaned.replace(word, "").strip()
+    # 단독 출현 단어만 제거 (공백/문자열 경계 기준) — 장소명 부분문자열 보호
+    # 예: "버스 서울역"의 "버스"는 제거, "버스터미널"의 "버스"는 유지
+    standalone_words = ["저는", "제가", "혹시", "저", "나", "좀", "버스"]
+    for word in standalone_words:
+        cleaned = re.sub(rf"(?<!\S){re.escape(word)}(?!\S)", "", cleaned).strip()
 
     return cleaned or place_text
 

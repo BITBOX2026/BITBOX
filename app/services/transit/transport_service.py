@@ -1,26 +1,37 @@
+"""
+교통 정보 조회 오케스트레이터
+
+ParsedIntent를 받아 적절한 교통 API를 선택하고 TransportResult를 반환합니다.
+
+intent별 처리:
+- route   → ODsay 경로 검색 (Kakao 좌표 변환 → ODsay 경로 조회)
+- arrival → 서울버스 공공데이터 실시간 도착 조회
+
+성능 최적화:
+- 경로 결과를 5분 TTL, 최대 100개 메모리 캐시에 저장합니다.
+- 캐시 키 확인은 Kakao API 호출보다 먼저 수행합니다.
+"""
+
 import asyncio
 import time
 
 from app.core.logger import get_logger
-from app.services.exceptions import CoordinateResolveError, TransportAPIError
-from app.services.kakao_service import resolve_origin, resolve_place_coordinates
-from app.services.odsay_service import (
-    _calculate_transfer_count,
-    _extract_route_segments,
-    _is_night_bus_number,
-    _safe_int,
-    _select_best_path,
-    search_odsay_route,
-)
-from app.services.public_bus_service import search_bus_arrival
-from app.services.service_types import ParsedIntent, RouteSegment, TransportResult
-from app.services.settings_helper import is_mock_mode
+from app.services.core.exceptions import CoordinateResolveError, TransportAPIError
+from app.services.core.service_types import ParsedIntent, RouteSegment, TransportResult
+from app.services.core.settings_helper import is_mock_mode
+from app.services.transit.kakao_service import resolve_origin, resolve_place_coordinates
+from app.services.transit.odsay_service import search_odsay_route
+from app.services.transit.public_bus_service import search_bus_arrival
 
 logger = get_logger(__name__)
 
+# ---------------------------------------------------------------------------
+# 경로 캐시 설정
+# 동일한 출발지→목적지 경로를 반복 조회할 때 외부 API 호출을 줄입니다.
+# ---------------------------------------------------------------------------
 _route_cache: dict[str, tuple[TransportResult, float]] = {}
-_ROUTE_CACHE_TTL = 300      # 5분
-_ROUTE_CACHE_MAX_SIZE = 100
+_ROUTE_CACHE_TTL = 300       # 캐시 유효 시간: 5분 (초)
+_ROUTE_CACHE_MAX_SIZE = 100  # 최대 캐시 항목 수 — 초과 시 가장 오래된 항목 제거
 
 
 async def search_transport_info(parsed: ParsedIntent) -> TransportResult:
@@ -38,11 +49,16 @@ async def search_transport_info(parsed: ParsedIntent) -> TransportResult:
     raise TransportAPIError("지원하지 않는 교통 요청입니다.")
 
 
+# ---------------------------------------------------------------------------
+# 캐시 내부 함수
+# ---------------------------------------------------------------------------
+
 def _get_cached_route(key: str) -> TransportResult | None:
     entry = _route_cache.get(key)
     if entry is None:
         return None
     result, ts = entry
+    # TTL 만료 시 캐시에서 제거
     if time.monotonic() - ts > _ROUTE_CACHE_TTL:
         del _route_cache[key]
         return None
@@ -50,11 +66,16 @@ def _get_cached_route(key: str) -> TransportResult | None:
 
 
 def _set_cached_route(key: str, result: TransportResult) -> None:
+    # 최대 크기 초과 시 가장 오래된(타임스탬프가 가장 작은) 항목을 제거
     if len(_route_cache) >= _ROUTE_CACHE_MAX_SIZE:
         oldest_key = min(_route_cache, key=lambda k: _route_cache[k][1])
         del _route_cache[oldest_key]
     _route_cache[key] = (result, time.monotonic())
 
+
+# ---------------------------------------------------------------------------
+# 경로 검색 (ODsay)
+# ---------------------------------------------------------------------------
 
 async def _search_route_with_odsay(parsed: ParsedIntent) -> TransportResult:
     """출발지·목적지 좌표를 확보한 뒤 ODsay 경로를 조회합니다."""
@@ -63,31 +84,35 @@ async def _search_route_with_odsay(parsed: ParsedIntent) -> TransportResult:
         raise CoordinateResolveError("목적지가 비어 있습니다.")
 
     if parsed.origin_text:
-        # 출발지·목적지 모두 사용자 입력 → Kakao 호출 병렬화
+        origin_name = parsed.origin_text.strip()
+
+        # 캐시 확인을 Kakao API 호출보다 먼저 수행 — 반복 요청 시 API 비용 절감
+        cache_key = f"{origin_name}|{parsed.destination_text.strip()}|{parsed.transport_mode}"
+        cached = _get_cached_route(cache_key)
+        if cached is not None:
+            logger.debug("경로 캐시 히트: %s → %s", origin_name, parsed.destination_text)
+            return cached
+
+        # 캐시 미스 — 출발지·목적지 좌표를 동시에 조회 (병렬화)
         (origin_x, origin_y), (destination_x, destination_y) = await asyncio.gather(
-            resolve_place_coordinates(parsed.origin_text, "출발지"),
+            resolve_place_coordinates(origin_name, "출발지"),
             resolve_place_coordinates(parsed.destination_text, "목적지"),
         )
-        origin_name = parsed.origin_text.strip()
+
     else:
-        # 기본 출발지 사용 → 캐시 확인 후 목적지만 조회
+        # 기기 기본 출발지 사용 (DEFAULT_ORIGIN_NAME 또는 DEFAULT_ORIGIN_X/Y)
         origin_name, origin_x, origin_y = await resolve_origin(None)
 
         cache_key = f"{origin_name}|{parsed.destination_text.strip()}|{parsed.transport_mode}"
         cached = _get_cached_route(cache_key)
         if cached is not None:
-            logger.debug("Route cache hit: %s → %s", origin_name, parsed.destination_text)
+            logger.debug("경로 캐시 히트: %s → %s", origin_name, parsed.destination_text)
             return cached
 
+        # 기본 출발지 좌표는 캐시됨 — 목적지만 Kakao API로 조회
         destination_x, destination_y = await resolve_place_coordinates(
             parsed.destination_text, "목적지"
         )
-
-    cache_key = f"{origin_name}|{parsed.destination_text.strip()}|{parsed.transport_mode}"
-    cached = _get_cached_route(cache_key)
-    if cached is not None:
-        logger.debug("Route cache hit: %s → %s", origin_name, parsed.destination_text)
-        return cached
 
     result = await search_odsay_route(
         origin_name=origin_name,
@@ -102,15 +127,18 @@ async def _search_route_with_odsay(parsed: ParsedIntent) -> TransportResult:
     return result
 
 
-def _mock_transport_result(parsed: ParsedIntent) -> TransportResult:
-    """외부 API 없이 전체 파이프라인을 테스트할 mock 교통 결과입니다."""
+# ---------------------------------------------------------------------------
+# Mock 데이터 (외부 API 없이 전체 파이프라인 테스트용)
+# ---------------------------------------------------------------------------
 
+def _mock_transport_result(parsed: ParsedIntent) -> TransportResult:
     if parsed.intent == "route":
-        uses_bus = parsed.transport_mode == "bus"
-        uses_subway = parsed.transport_mode == "subway"
         origin = parsed.origin_text or "출발지"
         dest = parsed.destination_text or "목적지"
+        uses_bus = parsed.transport_mode == "bus"
+        uses_subway = parsed.transport_mode == "subway"
 
+        # 교통수단에 따라 mock 경로 구간 생성
         if uses_bus:
             mock_segments: list[RouteSegment] | None = [
                 RouteSegment(vehicle_type="버스", line="146번", start_name=origin, end_name=dest)
@@ -126,54 +154,25 @@ def _mock_transport_result(parsed: ParsedIntent) -> TransportResult:
             ]
 
         return TransportResult(
-            origin=parsed.origin_text,
-            destination=parsed.destination_text,
-            stop_name=None,
-            transport_mode=parsed.transport_mode,
+            origin=origin, destination=dest,
+            stop_name=None, transport_mode=parsed.transport_mode,
             bus_number="146" if uses_bus else None,
-            arrival_time=None,
-            total_time_min=24,
-            payment=1500,
+            arrival_time=None, total_time_min=24, payment=1500,
             bus_transit_count=1 if uses_bus else 0,
             subway_transit_count=1 if uses_subway else 0,
             transfer_count=0,
             path_type=2 if uses_bus else 1 if uses_subway else 3,
-            route_summary=f"{parsed.origin_text}에서 {parsed.destination_text}까지 가는 mock 경로입니다.",
+            route_summary=f"{origin}에서 {dest}까지 가는 mock 경로입니다.",
             route_segments=mock_segments,
             source="mock",
         )
 
     if parsed.intent == "arrival":
         return TransportResult(
-            origin=None,
-            destination=None,
-            stop_name=parsed.stop_text,
-            transport_mode="bus",
-            bus_number=parsed.bus_number,
-            arrival_time="3분 후",
-            total_time_min=None,
-            payment=None,
-            bus_transit_count=None,
-            subway_transit_count=None,
-            transfer_count=None,
-            path_type=None,
+            stop_name=parsed.stop_text, transport_mode="bus",
+            bus_number=parsed.bus_number, arrival_time="3분 후",
             route_summary=f"{parsed.bus_number}번 버스가 약 3분 후 도착 예정입니다.",
             source="mock",
         )
 
-    return TransportResult(
-        origin=None,
-        destination=None,
-        stop_name=None,
-        transport_mode="unknown",
-        bus_number=None,
-        arrival_time=None,
-        total_time_min=None,
-        payment=None,
-        bus_transit_count=None,
-        subway_transit_count=None,
-        transfer_count=None,
-        path_type=None,
-        route_summary=None,
-        source="mock",
-    )
+    return TransportResult(source="mock")

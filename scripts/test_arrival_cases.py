@@ -11,7 +11,7 @@ sys.path.insert(0, str(ROOT_DIR))
 
 from app.services import pipeline as pipeline_module  # noqa: E402
 from app.services.pipeline import run_pipeline  # noqa: E402
-from app.services.settings_helper import clear_settings_cache  # noqa: E402
+from app.services.core.settings_helper import clear_settings_cache  # noqa: E402
 
 
 ARRIVAL_CASES = [

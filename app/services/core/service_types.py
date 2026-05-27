@@ -1,0 +1,68 @@
+"""
+파이프라인 전 구간에서 사용하는 공유 데이터 타입
+
+STT → LLM → 검증 → 교통 API → 응답 빌더 순서로 전달되며,
+각 단계는 이 타입들을 통해 데이터를 주고받습니다.
+"""
+
+from dataclasses import dataclass
+from typing import Literal
+
+
+# 허용된 intent 값 — LLM이 분류하는 사용자 요청 유형
+IntentType = Literal["route", "arrival", "unknown"]
+
+# 허용된 교통수단 값
+TransportMode = Literal["bus", "subway", "transit", "unknown"]
+
+
+@dataclass
+class ParsedIntent:
+    """LLM(또는 mock 파서)이 STT 결과를 구조화한 사용자 요청 정보입니다."""
+
+    intent: IntentType = "unknown"
+    origin_text: str | None = None        # 사용자가 말한 출발지 (없으면 기기 기본 출발지 사용)
+    destination_text: str | None = None   # 사용자가 말한 목적지
+    stop_text: str | None = None          # 버스 도착 조회 시 기준 정류장
+    transport_mode: TransportMode = "unknown"
+    bus_number: str | None = None         # 사용자가 말한 버스 번호
+    confidence: float = 0.0               # LLM 분석 신뢰도 (0.0 ~ 1.0)
+
+
+@dataclass
+class ValidationResult:
+    """파이프라인을 계속 진행할 수 있는지 판단한 결과입니다."""
+
+    is_valid: bool
+    message: str  # 실패 시 사용자에게 보여줄 안내 문구
+
+
+@dataclass
+class RouteSegment:
+    """경로의 한 구간(버스 1회 탑승 또는 지하철 1개 노선)을 나타냅니다."""
+
+    vehicle_type: str   # "버스" | "지하철"
+    line: str           # 예: "740번" | "2호선" | "공항철도"
+    start_name: str     # 탑승 정류장/역 이름
+    end_name: str       # 하차 정류장/역 이름
+
+
+@dataclass
+class TransportResult:
+    """교통 API 또는 mock 조회 결과를 파이프라인 공통 구조로 정규화한 값입니다."""
+
+    origin: str | None = None
+    destination: str | None = None
+    stop_name: str | None = None          # 버스 도착 조회 시 확인된 정류장명
+    transport_mode: TransportMode = "unknown"
+    bus_number: str | None = None
+    arrival_time: str | None = None       # 실시간 도착 예정 시간 (예: "3분 후")
+    total_time_min: int | None = None     # 예상 소요 시간 (분)
+    payment: int | None = None            # 예상 요금 (원)
+    bus_transit_count: int | None = None
+    subway_transit_count: int | None = None
+    transfer_count: int | None = None     # 환승 횟수
+    path_type: int | None = None          # ODsay pathType (1=지하철, 2=버스, 3=복합)
+    route_summary: str | None = None      # 요약 안내 문구 (내부용)
+    route_segments: list[RouteSegment] | None = None  # 구간별 탑승 정보
+    source: str = "none"                  # 데이터 출처 ("odsay"|"public_data"|"mock"|"none")

@@ -3,9 +3,9 @@ from unittest.mock import patch
 
 import pytest
 
-from app.services.service_types import ParsedIntent
-from app.services.settings_helper import clear_settings_cache
-from app.services.validate_service import validate_parsed_intent
+from app.services.core.service_types import ParsedIntent
+from app.services.core.settings_helper import clear_settings_cache
+from app.services.transit.validate_service import validate_parsed_intent
 
 
 def _parsed(**kwargs) -> ParsedIntent:

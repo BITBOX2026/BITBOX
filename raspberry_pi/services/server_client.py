@@ -1,3 +1,14 @@
+"""
+서버 통신 클라이언트
+
+녹음된 WAV 파일을 백엔드 서버(/api/process)로 전송하고
+JSON 응답을 반환합니다.
+
+API_URL 환경변수로 서버 주소를 변경할 수 있습니다.
+- 로컬 테스트: http://127.0.0.1:8000/api/process
+- AWS 배포 후: http://<EC2_PUBLIC_IP>:8000/api/process
+"""
+
 import os
 from pathlib import Path
 
@@ -10,7 +21,7 @@ API_URL = os.getenv("API_URL", "http://127.0.0.1:8000/api/process")
 
 
 def send_audio_to_server(audio_path: str) -> dict:
-    """녹음된 WAV 파일을 서버 /api/process로 전송하고 JSON 응답을 반환합니다."""
+    """녹음된 WAV 파일을 서버로 전송하고 JSON 응답을 반환합니다."""
 
     path = Path(audio_path)
 
@@ -22,16 +33,11 @@ def send_audio_to_server(audio_path: str) -> dict:
 
     try:
         with path.open("rb") as audio_file:
-            files = {
-                "file": (path.name, audio_file, "audio/wav"),
-            }
-
             response = requests.post(
                 API_URL,
-                files=files,
+                files={"file": (path.name, audio_file, "audio/wav")},
                 timeout=30,
             )
-
         response.raise_for_status()
 
     except requests.ConnectionError as exc:
@@ -43,6 +49,5 @@ def send_audio_to_server(audio_path: str) -> dict:
 
     try:
         return response.json()
-
     except ValueError as exc:
         raise RuntimeError("서버 응답을 JSON으로 해석하지 못했습니다.") from exc

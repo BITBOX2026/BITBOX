@@ -1,11 +1,19 @@
+"""
+STT (Speech-to-Text) 서비스
+
+음성 파일 bytes를 한국어 텍스트로 변환합니다.
+OpenAI Whisper API를 사용하며, mock 모드에서는 API 호출 없이 고정 문장을 반환합니다.
+"""
+
 import io
 
 from openai import AsyncOpenAI
 
-from app.services.constants import DEFAULT_STT_MODEL
-from app.services.exceptions import STTProcessingError
-from app.services.settings_helper import get_setting, is_mock_mode
+from app.services.core.constants import DEFAULT_STT_MODEL
+from app.services.core.exceptions import STTProcessingError
+from app.services.core.settings_helper import get_setting, is_mock_mode
 
+# 모듈 수준 클라이언트 — 요청마다 새로 생성하지 않고 재사용
 _openai_client: AsyncOpenAI | None = None
 
 
@@ -20,7 +28,12 @@ async def transcribe_audio(
     audio_bytes: bytes,
     filename: str = "audio.wav",
 ) -> str:
-    """음성 bytes를 OpenAI STT API로 텍스트로 변환합니다."""
+    """
+    음성 bytes를 한국어 텍스트로 변환합니다.
+
+    mock 모드: "서울역에서 강남역 가는 버스 알려줘" 고정 반환
+    real 모드: OpenAI Whisper API 호출
+    """
 
     if not audio_bytes:
         raise STTProcessingError("음성 파일이 비어 있습니다.")
@@ -36,8 +49,9 @@ async def transcribe_audio(
     try:
         client = _get_openai_client()
 
+        # BytesIO로 래핑하고 파일명을 설정해야 OpenAI가 확장자로 형식을 인식함
         audio_file = io.BytesIO(audio_bytes)
-        audio_file.name = filename or "audio.wav"
+        audio_file.name = filename
 
         transcription = await client.audio.transcriptions.create(
             model=stt_model,
@@ -47,7 +61,6 @@ async def transcribe_audio(
         )
 
         text = transcription.text
-
         if not text or not text.strip():
             raise STTProcessingError("STT 결과가 비어 있습니다.")
 

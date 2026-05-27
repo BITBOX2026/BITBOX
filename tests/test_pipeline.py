@@ -1,3 +1,10 @@
+"""
+파이프라인 단위 테스트
+
+USE_MOCK_EXTERNALS=true 환경에서 외부 API 없이 전체 파이프라인을 검증합니다.
+pytest.ini의 asyncio_mode=auto 설정으로 @pytest.mark.asyncio 없이 동작합니다.
+"""
+
 import os
 from unittest.mock import AsyncMock, patch
 
@@ -8,21 +15,16 @@ os.environ.setdefault("USE_MOCK_EXTERNALS", "true")
 from app.services.pipeline import build_timeout_error_response, run_pipeline
 
 
-# ---------------------------------------------------------------------------
-# helpers
-# ---------------------------------------------------------------------------
-
 def _make_audio() -> bytes:
     """최소한의 WAV 헤더 바이트 (실제 오디오 불필요, mock 모드)."""
     return b"RIFF\x00\x00\x00\x00WAVEfmt "
 
 
 # ---------------------------------------------------------------------------
-# run_pipeline (mock 모드)
+# run_pipeline — mock 모드 정상 동작 테스트
 # ---------------------------------------------------------------------------
 
 class TestRunPipelineMockMode:
-    @pytest.mark.asyncio
     async def test_route_intent_returns_success(self):
         result = await run_pipeline(_make_audio(), request_id="test01")
 
@@ -31,7 +33,6 @@ class TestRunPipelineMockMode:
         assert "message" in result
         assert result["data"]["intent"] == "route"
 
-    @pytest.mark.asyncio
     async def test_response_schema_complete(self):
         result = await run_pipeline(_make_audio(), request_id="test02")
         data = result["data"]
@@ -46,7 +47,6 @@ class TestRunPipelineMockMode:
         }
         assert required_keys.issubset(data.keys())
 
-    @pytest.mark.asyncio
     async def test_audio_base64_present(self):
         with patch(
             "app.services.pipeline.generate_tts_audio",
@@ -56,7 +56,6 @@ class TestRunPipelineMockMode:
 
         assert result["audio_base64"] == "base64encodedaudio"
 
-    @pytest.mark.asyncio
     async def test_tts_failure_does_not_crash_pipeline(self):
         with patch(
             "app.services.pipeline.generate_tts_audio",
@@ -67,7 +66,6 @@ class TestRunPipelineMockMode:
         assert result["status"] == "success"
         assert result["audio_base64"] is None
 
-    @pytest.mark.asyncio
     async def test_route_segments_serialized_as_dicts(self):
         result = await run_pipeline(_make_audio(), request_id="test05")
         segments = result["data"].get("route_segments")
@@ -83,13 +81,12 @@ class TestRunPipelineMockMode:
 
 
 # ---------------------------------------------------------------------------
-# 에러 케이스
+# run_pipeline — 각 단계별 오류 처리 테스트
 # ---------------------------------------------------------------------------
 
 class TestRunPipelineErrors:
-    @pytest.mark.asyncio
     async def test_stt_error_returns_error_response(self):
-        from app.services.exceptions import STTProcessingError
+        from app.services.core.exceptions import STTProcessingError
 
         with patch(
             "app.services.pipeline.transcribe_audio",
@@ -98,11 +95,11 @@ class TestRunPipelineErrors:
             result = await run_pipeline(_make_audio(), request_id="err01")
 
         assert result["status"] == "error"
-        assert "STT 실패" in result["message"]
+        # 기술적 오류 메시지가 아닌 user_message가 반환되는지 확인
+        assert "음성을 인식하지 못했습니다" in result["message"]
 
-    @pytest.mark.asyncio
     async def test_llm_error_returns_error_response(self):
-        from app.services.exceptions import LLMParsingError
+        from app.services.core.exceptions import LLMParsingError
 
         with patch(
             "app.services.pipeline.parse_transit_intent",
@@ -111,11 +108,10 @@ class TestRunPipelineErrors:
             result = await run_pipeline(_make_audio(), request_id="err02")
 
         assert result["status"] == "error"
-        assert "LLM 실패" in result["message"]
+        assert "요청 내용을 분석하지 못했습니다" in result["message"]
 
-    @pytest.mark.asyncio
     async def test_transport_error_returns_error_response(self):
-        from app.services.exceptions import TransportAPIError
+        from app.services.core.exceptions import TransportAPIError
 
         with patch(
             "app.services.pipeline.search_transport_info",
@@ -124,9 +120,8 @@ class TestRunPipelineErrors:
             result = await run_pipeline(_make_audio(), request_id="err03")
 
         assert result["status"] == "error"
-        assert "경로 없음" in result["message"]
+        assert "교통 정보를 조회하지 못했습니다" in result["message"]
 
-    @pytest.mark.asyncio
     async def test_unexpected_exception_returns_generic_error(self):
         with patch(
             "app.services.pipeline.transcribe_audio",
@@ -137,9 +132,8 @@ class TestRunPipelineErrors:
         assert result["status"] == "error"
         assert "다시 말씀해 주세요" in result["message"]
 
-    @pytest.mark.asyncio
     async def test_coordinate_error_returns_needs_confirmation(self):
-        from app.services.exceptions import CoordinateResolveError
+        from app.services.core.exceptions import CoordinateResolveError
 
         with patch(
             "app.services.pipeline.search_transport_info",
@@ -152,7 +146,7 @@ class TestRunPipelineErrors:
 
 
 # ---------------------------------------------------------------------------
-# build_timeout_error_response
+# build_timeout_error_response — 타임아웃 응답 구조 테스트
 # ---------------------------------------------------------------------------
 
 class TestBuildTimeoutErrorResponse:

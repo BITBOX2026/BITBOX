@@ -3,7 +3,12 @@
     "allow": [
       "Bash(pip install *)",
       "Bash(pip show *)",
-      "Bash(python -m pytest tests/ -x -q)"
+      "Bash(python -m pytest tests/ -x -q)",
+      "Bash(python -c \"import pydantic_settings; import inspect; import pydantic_settings.env_settings as e; print\\(inspect.getfile\\(e\\)\\)\")",
+      "Bash(python -c \"import pydantic_settings; import inspect; src = inspect.getsource\\(pydantic_settings\\); print\\(src[:3000]\\)\")",
+      "Bash(python -c \"import starlette.config; print\\(starlette.config.Config._read_file\\)\")",
+      "Bash(python -c \"import starlette.config; import inspect; print\\(inspect.getsource\\(starlette.config.Config._read_file\\)\\)\")",
+      "Bash(python -c ' *)"
     ]
   }
 }

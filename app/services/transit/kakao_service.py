@@ -1,7 +1,16 @@
-import httpx
-from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
+"""
+Kakao Local API 클라이언트 — 장소명 → 좌표 변환
 
-from app.services.constants import (
+사용자가 말한 장소명("강남역", "서울역 앞" 등)을 ODsay에 전달할 수 있는
+경도/위도 좌표로 변환합니다.
+
+기기 기본 출발지는 프로세스 동안 캐싱되어 반복 API 호출을 방지합니다.
+Kakao API 실패 시 KNOWN_PLACE_COORDS(내장 좌표 목록)를 보조로 사용합니다.
+"""
+
+import httpx
+
+from app.services.core.constants import (
     KAKAO_KEYWORD_SEARCH_URL,
     KNOWN_PLACE_COORDS,
     KOREA_LATITUDE_MAX,
@@ -9,30 +18,17 @@ from app.services.constants import (
     KOREA_LONGITUDE_MAX,
     KOREA_LONGITUDE_MIN,
 )
-from app.services.exceptions import CoordinateResolveError, TransportAPIError
-from app.services.settings_helper import get_setting
+from app.services.core.exceptions import CoordinateResolveError, TransportAPIError
+from app.services.core.http_utils import http_retry as _http_retry
+from app.services.core.settings_helper import get_setting
 
-
-def _is_retryable(exc: BaseException) -> bool:
-    if isinstance(exc, httpx.TransportError):
-        return True
-    if isinstance(exc, httpx.HTTPStatusError):
-        return exc.response.status_code >= 500
-    return False
-
-
-_http_retry = retry(
-    retry=retry_if_exception(_is_retryable),
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=0.5, min=0.5, max=4),
-    reraise=True,
-)
-
+# 기기 기본 출발지 캐시 — 서버 재시작 전까지 유지
 _default_origin_cache: tuple[str, float, float] | None = None
 
 
 @_http_retry
 async def _kakao_fetch(kakao_key: str, place_text: str) -> dict:
+    """Kakao Local 키워드 검색 API를 호출합니다. 실패 시 자동 재시도합니다."""
     async with httpx.AsyncClient(timeout=10.0) as client:
         response = await client.get(
             KAKAO_KEYWORD_SEARCH_URL,
@@ -47,8 +43,12 @@ async def resolve_place_coordinates(
     place_text: str,
     label: str,
 ) -> tuple[float, float]:
-    """장소명을 Kakao Local API로 좌표 변환합니다. 없으면 알려진 좌표를 보조로 사용합니다."""
+    """
+    장소명을 (경도, 위도) 좌표로 변환합니다.
 
+    Kakao API 실패 시 KNOWN_PLACE_COORDS에서 보조 탐색을 시도합니다.
+    두 방법 모두 실패하면 CoordinateResolveError를 발생시킵니다.
+    """
     normalized = place_text.strip()
     if not normalized:
         raise CoordinateResolveError(f"{label}가 비어 있습니다.")
@@ -57,6 +57,7 @@ async def resolve_place_coordinates(
         return await _resolve_via_kakao(normalized, label)
 
     except CoordinateResolveError:
+        # Kakao 실패 시 내장 좌표 목록에서 보조 탐색
         if normalized not in KNOWN_PLACE_COORDS:
             raise
 
@@ -75,7 +76,7 @@ async def _resolve_via_kakao(place_text: str, label: str) -> tuple[float, float]
 
     except httpx.HTTPStatusError as exc:
         raise TransportAPIError(
-            f"Kakao Local API HTTP 오류가 발생했습니다: {exc.response.status_code}"
+            f"Kakao Local API HTTP 오류: {exc.response.status_code}"
         ) from exc
 
     except httpx.RequestError as exc:
@@ -100,8 +101,10 @@ async def _resolve_via_kakao(place_text: str, label: str) -> tuple[float, float]
 
 
 async def resolve_origin(origin_text: str | None) -> tuple[str, float, float]:
-    """출발지를 (이름, x, y) 튜플로 반환합니다. None이면 기기 기본 위치를 사용합니다."""
-
+    """
+    출발지를 (이름, 경도, 위도)로 반환합니다.
+    origin_text가 None이면 기기 기본 출발지를 사용합니다.
+    """
     if origin_text:
         x, y = await resolve_place_coordinates(origin_text, "출발지")
         return origin_text.strip(), x, y
@@ -110,8 +113,10 @@ async def resolve_origin(origin_text: str | None) -> tuple[str, float, float]:
 
 
 async def _resolve_default_origin() -> tuple[str, float, float]:
-    """기기 설치 위치 좌표를 반환합니다. 프로세스 동안 캐싱됩니다."""
-
+    """
+    기기 설치 위치 좌표를 반환합니다.
+    서버 재시작 전까지 결과를 메모리에 캐싱합니다.
+    """
     global _default_origin_cache
 
     if _default_origin_cache is not None:
@@ -119,16 +124,19 @@ async def _resolve_default_origin() -> tuple[str, float, float]:
 
     default_name = get_setting("DEFAULT_ORIGIN_NAME")
     if default_name:
+        # 장소명이 설정된 경우 Kakao API로 좌표 변환
         x, y = await resolve_place_coordinates(default_name, "기본 출발지")
         _default_origin_cache = (default_name, x, y)
         return _default_origin_cache
 
+    # 좌표가 직접 설정된 경우
     x, y = _get_origin_coordinates_fallback()
     _default_origin_cache = ("현재 위치", x, y)
     return _default_origin_cache
 
 
 def _get_origin_coordinates_fallback() -> tuple[float, float]:
+    """DEFAULT_ORIGIN_X/Y 또는 ORIGIN_X/Y 환경변수에서 좌표를 읽습니다."""
     origin_x = get_setting("DEFAULT_ORIGIN_X") or get_setting("ORIGIN_X")
     origin_y = get_setting("DEFAULT_ORIGIN_Y") or get_setting("ORIGIN_Y")
 
@@ -148,8 +156,7 @@ def _get_origin_coordinates_fallback() -> tuple[float, float]:
 
 
 def _validate_korea_coordinates(longitude: float, latitude: float, label: str) -> None:
-    """ODsay에 전달할 좌표가 대한민국 서비스 범위 안에 있는지 확인합니다."""
-
+    """ODsay 서비스 범위(대한민국) 내의 좌표인지 확인합니다."""
     valid = (
         KOREA_LONGITUDE_MIN <= longitude <= KOREA_LONGITUDE_MAX
         and KOREA_LATITUDE_MIN <= latitude <= KOREA_LATITUDE_MAX
@@ -157,5 +164,5 @@ def _validate_korea_coordinates(longitude: float, latitude: float, label: str) -
     if not valid:
         raise CoordinateResolveError(
             f"{label} 좌표가 대한민국 서비스 범위를 벗어났습니다. "
-            f"longitude={longitude}, latitude={latitude}"
+            f"경도={longitude}, 위도={latitude}"
         )

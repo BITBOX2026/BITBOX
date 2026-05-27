@@ -10,7 +10,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT_DIR))
 
 from app.services.pipeline import run_pipeline  # noqa: E402
-from app.services.settings_helper import clear_settings_cache  # noqa: E402
+from app.services.core.settings_helper import clear_settings_cache  # noqa: E402
 
 
 ROUTE_CASES = [

@@ -1,10 +1,17 @@
+"""
+서울시 버스 API 응답 파서
+
+공공데이터 API가 반환하는 JSON/XML 응답에서 필요한 항목을 추출합니다.
+API 버전이나 응답 형식에 따라 필드명이 다를 수 있어 여러 후보 이름을 순서대로 시도합니다.
+"""
+
+from collections.abc import Callable
 from typing import Any
 from xml.etree import ElementTree
 
 
 def extract_items(payload: Any) -> list[dict[str, str]]:
-    """서울시 API의 itemList/StationList를 dict 목록으로 정규화합니다."""
-
+    """서울시 API 응답에서 itemList / StationList 항목을 dict 목록으로 정규화합니다."""
     if isinstance(payload, ElementTree.Element):
         return _extract_xml_items(payload)
 
@@ -16,18 +23,16 @@ def extract_items(payload: Any) -> list[dict[str, str]]:
 
 def _extract_xml_items(root: ElementTree.Element) -> list[dict[str, str]]:
     items: list[dict[str, str]] = []
-
     for item in list(root.iter("itemList")) + list(root.iter("StationList")):
         values: dict[str, str] = {}
         for child in list(item):
             values[child.tag] = child.text or ""
-
         items.append(values)
-
     return items
 
 
 def _extract_json_items(payload: dict[str, Any]) -> list[dict[str, str]]:
+    """JSON 구조를 재귀 탐색해 itemList / stationList 배열을 찾습니다."""
     items: list[dict[str, str]] = []
     item_keys = {"itemlist", "stationlist"}
 
@@ -38,7 +43,6 @@ def _extract_json_items(payload: dict[str, Any]) -> list[dict[str, str]]:
                     items.extend(_normalize_item_container(nested_value))
                 elif isinstance(nested_value, (dict, list)):
                     collect(nested_value)
-
         elif isinstance(value, list):
             for nested_value in value:
                 if isinstance(nested_value, (dict, list)):
@@ -50,19 +54,14 @@ def _extract_json_items(payload: dict[str, Any]) -> list[dict[str, str]]:
 
 def _normalize_item_container(value: Any) -> list[dict[str, str]]:
     if isinstance(value, list):
-        return [
-            _stringify_item(item)
-            for item in value
-            if isinstance(item, dict)
-        ]
-
+        return [_stringify_item(item) for item in value if isinstance(item, dict)]
     if isinstance(value, dict):
         return [_stringify_item(value)]
-
     return []
 
 
 def _stringify_item(item: dict[str, Any]) -> dict[str, str]:
+    """dict/list 중첩값을 제외하고 모든 값을 문자열로 변환합니다."""
     return {
         str(key): "" if value is None else str(value)
         for key, value in item.items()
@@ -71,11 +70,13 @@ def _stringify_item(item: dict[str, Any]) -> dict[str, str]:
 
 
 def first_item_value(item: dict[str, str], names: list[str]) -> str | None:
+    """항목에서 후보 키 이름 목록 중 첫 번째로 값이 있는 것을 반환합니다. 대소문자 무시."""
     for name in names:
         value = item.get(name)
         if value:
             return value
 
+    # 대소문자 무시 재시도
     lower_item = {key.lower(): value for key, value in item.items()}
     for name in names:
         value = lower_item.get(name.lower())
@@ -86,36 +87,36 @@ def first_item_value(item: dict[str, str], names: list[str]) -> str | None:
 
 
 def extract_arrival_time(item: dict[str, str]) -> str | None:
-    """서울시 도착 응답에서 사용자에게 보여줄 도착 시간을 추출합니다."""
+    """
+    서울시 도착 응답에서 사용자에게 보여줄 도착 시간 문자열을 추출합니다.
 
-    first_message = first_item_value(item, ["arrmsg1"])
-
-    for message_key, time_key in [
-        ("arrmsg1", "traTime1"),
-        ("arrmsg2", "traTime2"),
-    ]:
+    arrmsg(도착 메시지)를 우선하되 "출발대기"는 유효하지 않은 값으로 처리합니다.
+    메시지가 없으면 traTime(초 단위 소요 시간)을 분 단위로 변환합니다.
+    """
+    for message_key, time_key in [("arrmsg1", "traTime1"), ("arrmsg2", "traTime2")]:
         arrival_message = first_item_value(item, [message_key])
         if arrival_message and arrival_message != "출발대기":
             return arrival_message
 
+        # 초 단위 소요 시간을 분으로 올림 변환 (0초는 제외)
         travel_time = safe_int(first_item_value(item, [time_key]))
         if travel_time is not None and travel_time > 0:
             minutes = max((travel_time + 59) // 60, 1)
             return f"{minutes}분 후"
 
-    return first_message
+    return None
 
 
 def extract_arrival_station_name(item: dict[str, str]) -> str | None:
     """도착정보 응답에서 정류장명 후보를 추출합니다."""
-
-    return first_item_value(
-        item,
-        ["stNm", "stationNm", "stationNm1", "stationNm2"],
-    )
+    return first_item_value(item, ["stNm", "stationNm", "stationNm1", "stationNm2"])
 
 
 def build_route_station(item: dict[str, str]) -> dict[str, str] | None:
+    """
+    경유 정류소 항목에서 도착정보 조회에 필요한 필드를 추출합니다.
+    station_id 또는 order가 없으면 None을 반환합니다.
+    """
     station_id = first_item_value(item, ["station", "stId", "stationId"])
     order = first_item_value(item, ["seq", "staOrd", "ord"])
     station_name = first_item_value(item, ["stationNm", "stNm"]) or ""
@@ -133,40 +134,41 @@ def build_route_station(item: dict[str, str]) -> dict[str, str] | None:
 
 
 def is_matching_bus_route(item: dict[str, str], bus_number: str) -> bool:
+    """노선 항목이 요청한 버스 번호와 정확히 일치하는지 확인합니다."""
     target = normalize_token(bus_number)
     route_names = [
         first_item_value(item, ["busRouteNm"]),
         first_item_value(item, ["busRouteAbrv"]),
     ]
-
-    return any(normalize_token(route_name) == target for route_name in route_names)
+    return any(normalize_token(name) == target for name in route_names)
 
 
 def contains_normalized(text: str, keyword: str) -> bool:
+    """공백/대소문자를 무시하고 keyword가 text에 포함되는지 확인합니다."""
     normalized_text = normalize_token(text)
     normalized_keyword = normalize_token(keyword)
     return bool(normalized_keyword and normalized_keyword in normalized_text)
 
 
 def normalize_token(value: object) -> str:
+    """공백 제거 + 대문자 변환으로 정규화합니다."""
     return "".join(str(value or "").split()).upper()
 
 
 def find_first(
     items: list[dict[str, str]],
-    predicate: Any,
+    predicate: Callable[[dict[str, str]], bool],
 ) -> dict[str, str] | None:
+    """조건 함수(predicate)를 만족하는 첫 번째 항목을 반환합니다."""
     for item in items:
         if predicate(item):
             return item
-
     return None
 
 
 def safe_int(value: object) -> int | None:
     if value is None:
         return None
-
     try:
         return int(value)
     except (TypeError, ValueError):
