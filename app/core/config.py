@@ -12,7 +12,11 @@ class Settings(BaseSettings):
     ODSAY_API_KEY: str | None = None
     PUBLIC_DATA_SERVICE_KEY: str | None = None
 
-    # 새 변수명입니다. 현재 route 요청은 음성 출발지를 우선 사용합니다.
+    # 기기 설치 위치 정류장 이름입니다. 설정하면 Kakao API로 좌표를 자동 변환합니다.
+    # 설정 시 사용자가 출발지를 말하지 않아도 됩니다.
+    DEFAULT_ORIGIN_NAME: str | None = None
+
+    # 장소명 대신 좌표를 직접 입력할 경우 사용합니다.
     DEFAULT_ORIGIN_X: str | None = None
     DEFAULT_ORIGIN_Y: str | None = None
 
@@ -25,9 +29,6 @@ class Settings(BaseSettings):
 
     MAX_AUDIO_SIZE_MB: int = 10
     REQUEST_TIMEOUT_SECONDS: int = 30
-
-    # 기존 코드/환경변수 호환용입니다. 새 코드는 REQUEST_TIMEOUT_SECONDS를 사용합니다.
-    PIPELINE_TIMEOUT_SECONDS: int | None = None
 
     API_URL: str = "http://127.0.0.1:8000/api/process"
     AUDIO_OUTPUT_PATH: str = "recorded_audio.wav"
@@ -66,6 +67,11 @@ def validate_required_settings() -> None:
 
     if not settings.ODSAY_API_KEY:
         missing_messages.append("ODSAY_API_KEY is required when USE_MOCK_EXTERNALS=false")
+
+    if not settings.PUBLIC_DATA_SERVICE_KEY:
+        missing_messages.append(
+            "PUBLIC_DATA_SERVICE_KEY is required when USE_MOCK_EXTERNALS=false"
+        )
 
     if missing_messages:
         raise RuntimeError("; ".join(missing_messages))

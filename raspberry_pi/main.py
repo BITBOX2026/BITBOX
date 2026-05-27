@@ -1,5 +1,6 @@
 import os
 
+from raspberry_pi.audio.player import play_tts_audio
 from raspberry_pi.audio.record import record_audio
 from raspberry_pi.display.screen import show_text
 from raspberry_pi.services.server_client import send_audio_to_server
@@ -21,9 +22,14 @@ def run_once() -> None:
         display_text = build_display_text(response)
         show_text(display_text)
 
+        audio_base64 = response.get("audio_base64")
+        if audio_base64:
+            play_tts_audio(audio_base64)
+
     except Exception as exc:
-        print(f"[ERROR] {exc}")
-        show_text("처리 중 오류가 발생했습니다.")
+        error_msg = str(exc) if str(exc) else "처리 중 오류가 발생했습니다."
+        print(f"[ERROR] {error_msg}")
+        show_text(error_msg)
 
 
 def run_button_loop() -> None:

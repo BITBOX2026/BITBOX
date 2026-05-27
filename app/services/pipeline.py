@@ -11,6 +11,7 @@ from app.services.response_builder import build_user_message
 from app.services.service_types import ParsedIntent
 from app.services.stt_service import transcribe_audio
 from app.services.transport_service import search_transport_info
+from app.services.tts_service import generate_tts_audio
 from app.services.validate_service import validate_parsed_intent
 
 logger = get_logger(__name__)
@@ -24,9 +25,18 @@ async def run_pipeline(
     음성 파일을 최종 안내 응답으로 변환하는 전체 백엔드 파이프라인입니다.
 
     처리 순서:
-    STT -> LLM JSON 분석 -> 검증 -> 교통 API 조회 -> 정형 응답 생성
+    STT -> LLM JSON 분석 -> 검증 -> 교통 API 조회 -> 정형 응답 생성 -> TTS 음성 생성
     """
 
+    result = await _run_pipeline_core(audio_bytes, filename)
+    result["audio_base64"] = await generate_tts_audio(result.get("message", ""))
+    return result
+
+
+async def _run_pipeline_core(
+    audio_bytes: bytes,
+    filename: str,
+) -> dict:
     transcript: str | None = None
     parsed: ParsedIntent | None = None
 
@@ -150,6 +160,26 @@ async def run_pipeline(
             confidence=_get_confidence(parsed),
             needs_confirmation=True,
         )
+
+
+def build_timeout_error_response() -> dict:
+    """asyncio.TimeoutError 발생 시 gateway에서 반환할 일관된 오류 응답입니다."""
+
+    result = _error_response(
+        message="처리 시간이 초과되었습니다. 다시 시도해 주세요.",
+        transcript=None,
+        intent=None,
+        origin=None,
+        destination=None,
+        stop_text=None,
+        stop_name=None,
+        transport_mode=None,
+        bus_number=None,
+        confidence=0.0,
+        needs_confirmation=True,
+    )
+    result["audio_base64"] = None
+    return result
 
 
 def _success_response(

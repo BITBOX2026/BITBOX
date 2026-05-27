@@ -8,10 +8,13 @@ pydantic-settings==2.1.0
 python-dotenv==1.0.1
 
 httpx==0.26.0
-openai==1.12.0
+openai>=1.50.0
+
+# Dev / Test
+pytest>=8.0.0
 
 # Raspberry Pi Client
 requests==2.31.0
 sounddevice==0.4.6
 scipy==1.12.0
-# RPi.GPIO==0.7.0
+# RPi.GPIO: 라즈베리파이에서 직접 설치 → pip install RPi.GPIO

@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\amg85\\\\OneDrive\\\\문서\\\\GitHub\\\\BITBOX\" -Force)",
+      "Bash(Select-Object Name, PSIsContainer)",
+      "Bash(Format-Table -AutoSize)",
+      "PowerShell(Get-ChildItem -Path \"c:\\\\Users\\\\amg85\\\\OneDrive\\\\문서\\\\GitHub\\\\BITBOX\\\\app\" -Recurse -Force | Where-Object { $_.PSIsContainer -eq $false } | Select-Object FullName | ForEach-Object { $_.FullName -replace [regex]::Escape\\(\"c:\\\\Users\\\\amg85\\\\OneDrive\\\\문서\\\\GitHub\\\\BITBOX\"\\), \"\" } | Sort-Object)",
+      "PowerShell(Get-ChildItem -Path \"c:\\\\Users\\\\amg85\\\\OneDrive\\\\문서\\\\GitHub\\\\BITBOX\" -Recurse -Force | Where-Object { $_.PSIsContainer -eq $true } | Select-Object FullName | ForEach-Object { $_.FullName -replace [regex]::Escape\\(\"c:\\\\Users\\\\amg85\\\\OneDrive\\\\문서\\\\GitHub\\\\BITBOX\"\\), \"\" } | Sort-Object | Where-Object { $_ -ne \"\" })",
+      "Bash(Test-Path \"c:\\\\Users\\\\amg85\\\\OneDrive\\\\문서\\\\GitHub\\\\BITBOX\\\\.env\")",
+      "Bash(python scripts/test_external_apis.py)",
+      "Bash(python scripts/test_public_data_key.py)",
+      "Bash(python scripts/make_test_audio.py --help)",
+      "Bash(python scripts/make_test_audio.py --text \"강남역 가고 싶어요\" --output test.wav)",
+      "Bash(python scripts/test_process_real.py --help)",
+      "Bash(Start-Process -NoNewWindow -FilePath \"python\" -ArgumentList \"-m uvicorn app.main:app --host 127.0.0.1 --port 8000\" -RedirectStandardOutput \"server_out.log\" -RedirectStandardError \"server_err.log\")",
+      "Bash(Start-Sleep -Seconds 4)",
+      "Bash(Get-Content server_err.log)",
+      "Bash(python -m uvicorn app.main:app --host 127.0.0.1 --port 8000)",
+      "Bash(curl -s http://127.0.0.1:8000/)",
+      "Bash(python scripts/test_process_real.py --file test.wav)",
+      "Bash(pkill -f \"uvicorn app.main:app\")"
+    ]
+  }
+}

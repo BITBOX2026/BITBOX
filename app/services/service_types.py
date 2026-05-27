@@ -28,6 +28,16 @@ class ValidationResult:
 
 
 @dataclass
+class RouteSegment:
+    """경로 안내에 사용할 한 구간(버스 또는 지하철) 정보입니다."""
+
+    vehicle_type: str   # "버스" | "지하철"
+    line: str           # "740번" | "2호선" | "공항철도"
+    start_name: str     # 탑승 정류장/역 이름
+    end_name: str       # 하차 정류장/역 이름
+
+
+@dataclass
 class TransportResult:
     """교통 API 또는 mock 조회 결과를 백엔드 공통 구조로 맞춘 값입니다."""
 
@@ -44,4 +54,5 @@ class TransportResult:
     transfer_count: int | None = None
     path_type: int | None = None
     route_summary: str | None = None
+    route_segments: list[RouteSegment] | None = None
     source: str = "none"

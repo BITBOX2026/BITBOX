@@ -1,5 +1,3 @@
-# 라즈베리파이에서 FastAPI 서버로 음성 파일을 전송하는 클라이언트 파일입니다.
-
 import os
 from pathlib import Path
 
@@ -12,30 +10,7 @@ API_URL = os.getenv("API_URL", "http://127.0.0.1:8000/api/process")
 
 
 def send_audio_to_server(audio_path: str) -> dict:
-    """
-    녹음된 음성 파일을 FastAPI 서버의 /api/process API로 전송하는 함수입니다.
-
-    기능:
-        - 라즈베리파이에 저장된 음성 파일을 multipart/form-data 형식으로 전송합니다.
-        - 서버 응답을 JSON으로 변환하여 반환합니다.
-        - 파일 없음, 서버 연결 실패, JSON 파싱 실패를 구분해서 예외를 발생시킵니다.
-
-    입력:
-        audio_path:
-            - 전송할 음성 파일 경로입니다.
-            - 예: "recorded_audio.wav"
-
-    반환:
-        dict:
-            - 서버가 반환한 JSON 응답입니다.
-
-    예:
-        {
-            "status": "success",
-            "message": "강남역까지 가는 경로를 찾았습니다.",
-            "data": {...}
-        }
-    """
+    """녹음된 WAV 파일을 서버 /api/process로 전송하고 JSON 응답을 반환합니다."""
 
     path = Path(audio_path)
 
@@ -59,6 +34,10 @@ def send_audio_to_server(audio_path: str) -> dict:
 
         response.raise_for_status()
 
+    except requests.ConnectionError as exc:
+        raise RuntimeError("서버에 연결할 수 없습니다. 잠시 후 다시 시도해 주세요.") from exc
+    except requests.Timeout as exc:
+        raise RuntimeError("서버 응답 시간이 초과되었습니다. 잠시 후 다시 시도해 주세요.") from exc
     except requests.RequestException as exc:
         raise RuntimeError(f"서버 요청 중 오류가 발생했습니다: {exc}") from exc
 

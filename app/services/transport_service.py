@@ -1,7 +1,9 @@
+import time
 from typing import Any
 
 import httpx
 
+from app.core.logger import get_logger
 from app.services.constants import (
     KAKAO_KEYWORD_SEARCH_URL,
     KNOWN_PLACE_COORDS,
@@ -10,11 +12,17 @@ from app.services.constants import (
     KOREA_LONGITUDE_MAX,
     KOREA_LONGITUDE_MIN,
     ODSAY_ROUTE_URL,
+    SUBWAY_LINE_NAMES,
 )
 from app.services.exceptions import CoordinateResolveError, TransportAPIError
 from app.services.public_bus_service import search_bus_arrival
-from app.services.service_types import ParsedIntent, TransportResult
+from app.services.service_types import ParsedIntent, RouteSegment, TransportResult
 from app.services.settings_helper import get_setting, is_mock_mode
+
+logger = get_logger(__name__)
+
+_route_cache: dict[str, tuple[TransportResult, float]] = {}
+_ROUTE_CACHE_TTL = 300  # 5분
 
 
 async def search_transport_info(parsed: ParsedIntent) -> TransportResult:
@@ -32,6 +40,21 @@ async def search_transport_info(parsed: ParsedIntent) -> TransportResult:
     raise TransportAPIError("지원하지 않는 교통 요청입니다.")
 
 
+def _get_cached_route(key: str) -> TransportResult | None:
+    entry = _route_cache.get(key)
+    if entry is None:
+        return None
+    result, ts = entry
+    if time.monotonic() - ts > _ROUTE_CACHE_TTL:
+        del _route_cache[key]
+        return None
+    return result
+
+
+def _set_cached_route(key: str, result: TransportResult) -> None:
+    _route_cache[key] = (result, time.monotonic())
+
+
 async def _search_route_with_odsay(parsed: ParsedIntent) -> TransportResult:
     """출발지와 목적지를 좌표로 바꾼 뒤 ODsay 경로를 조회합니다."""
 
@@ -43,6 +66,13 @@ async def _search_route_with_odsay(parsed: ParsedIntent) -> TransportResult:
         raise CoordinateResolveError("목적지가 비어 있습니다.")
 
     origin_name, origin_x, origin_y = await _resolve_origin(parsed.origin_text)
+
+    cache_key = f"{origin_name}|{parsed.destination_text.strip()}|{parsed.transport_mode}"
+    cached = _get_cached_route(cache_key)
+    if cached is not None:
+        logger.debug("Route cache hit: %s → %s", origin_name, parsed.destination_text)
+        return cached
+
     destination_x, destination_y = await _resolve_place_coordinates(
         place_text=parsed.destination_text,
         label="목적지",
@@ -92,20 +122,26 @@ async def _search_route_with_odsay(parsed: ParsedIntent) -> TransportResult:
 
         raise TransportAPIError("조회 가능한 대중교통 경로를 찾지 못했습니다.")
 
-    return _convert_odsay_path_to_transport_result(
+    result = _convert_odsay_path_to_transport_result(
         origin=origin_name,
         destination=parsed.destination_text,
         path=best_path,
         transport_mode=parsed.transport_mode,
     )
+    _set_cached_route(cache_key, result)
+    return result
+
+
+_default_origin_cache: tuple[str, float, float] | None = None
 
 
 async def _resolve_origin(origin_text: str | None) -> tuple[str, float, float]:
     """
     출발지를 좌표로 변환합니다.
 
-    현재 검증 단계에서는 origin_text가 필수입니다.
-    다만 나중에 고정 좌표 fallback을 쓸 수 있도록 DEFAULT_ORIGIN_X/Y 경로를 남겨둡니다.
+    origin_text가 있으면 Kakao로 변환합니다.
+    없으면 기기 설치 위치(DEFAULT_ORIGIN_NAME 또는 DEFAULT_ORIGIN_X/Y)를 사용합니다.
+    DEFAULT_ORIGIN_NAME은 첫 요청 때 Kakao로 변환한 뒤 캐싱합니다.
     """
 
     if origin_text:
@@ -115,8 +151,29 @@ async def _resolve_origin(origin_text: str | None) -> tuple[str, float, float]:
         )
         return origin_text, origin_x, origin_y
 
+    return await _resolve_default_origin()
+
+
+async def _resolve_default_origin() -> tuple[str, float, float]:
+    """기기 설치 위치 좌표를 반환합니다. 결과는 서버 프로세스 동안 캐싱됩니다."""
+
+    global _default_origin_cache
+
+    if _default_origin_cache is not None:
+        return _default_origin_cache
+
+    default_name = get_setting("DEFAULT_ORIGIN_NAME")
+    if default_name:
+        origin_x, origin_y = await _resolve_place_coordinates(
+            place_text=default_name,
+            label="기본 출발지",
+        )
+        _default_origin_cache = (default_name, origin_x, origin_y)
+        return _default_origin_cache
+
     origin_x, origin_y = _get_origin_coordinates_fallback()
-    return "현재 위치", origin_x, origin_y
+    _default_origin_cache = ("현재 위치", origin_x, origin_y)
+    return _default_origin_cache
 
 
 def _get_origin_coordinates_fallback() -> tuple[float, float]:
@@ -365,6 +422,7 @@ def _convert_odsay_path_to_transport_result(
         subway_transit_count=subway_transit_count,
     )
     first_bus_number = _select_display_bus_number(sub_paths)
+    route_segments = _extract_route_segments(sub_paths)
 
     route_summary = _build_route_summary(
         origin=origin,
@@ -389,6 +447,7 @@ def _convert_odsay_path_to_transport_result(
         transfer_count=transfer_count,
         path_type=path_type,
         route_summary=route_summary,
+        route_segments=route_segments,
         source="odsay",
     )
 
@@ -462,6 +521,43 @@ def _is_night_bus_number(bus_number: str) -> bool:
     return bus_number.strip().upper().startswith("N")
 
 
+def _extract_route_segments(sub_paths: list[dict[str, Any]]) -> list[RouteSegment] | None:
+    """ODsay subPath에서 탑승 구간(버스/지하철)만 추출해 RouteSegment 목록으로 반환합니다."""
+
+    segments: list[RouteSegment] = []
+
+    for sub_path in sub_paths:
+        traffic_type = sub_path.get("trafficType")
+        if traffic_type == 3:
+            continue
+
+        start_name = sub_path.get("startName") or ""
+        end_name = sub_path.get("endName") or ""
+        lanes = sub_path.get("lane") or []
+
+        if traffic_type == 2:
+            bus_no = str(lanes[0].get("busNo", "")) if lanes else ""
+            if bus_no:
+                segments.append(RouteSegment(
+                    vehicle_type="버스",
+                    line=f"{bus_no}번",
+                    start_name=start_name,
+                    end_name=end_name,
+                ))
+
+        elif traffic_type == 1:
+            subway_code = int(lanes[0].get("subwayCode", 0)) if lanes else 0
+            line_name = SUBWAY_LINE_NAMES.get(subway_code, f"{subway_code}호선")
+            segments.append(RouteSegment(
+                vehicle_type="지하철",
+                line=line_name,
+                start_name=start_name,
+                end_name=end_name,
+            ))
+
+    return segments if segments else None
+
+
 def _build_route_summary(
     origin: str,
     destination: str,
@@ -499,6 +595,22 @@ def _mock_transport_result(parsed: ParsedIntent) -> TransportResult:
     if parsed.intent == "route":
         uses_bus = parsed.transport_mode == "bus"
         uses_subway = parsed.transport_mode == "subway"
+        origin = parsed.origin_text or "출발지"
+        dest = parsed.destination_text or "목적지"
+
+        if uses_bus:
+            mock_segments: list[RouteSegment] | None = [
+                RouteSegment(vehicle_type="버스", line="146번", start_name=origin, end_name=dest)
+            ]
+        elif uses_subway:
+            mock_segments = [
+                RouteSegment(vehicle_type="지하철", line="2호선", start_name=origin, end_name=dest)
+            ]
+        else:
+            mock_segments = [
+                RouteSegment(vehicle_type="버스", line="146번", start_name=origin, end_name="환승역"),
+                RouteSegment(vehicle_type="지하철", line="2호선", start_name="환승역", end_name=dest),
+            ]
 
         return TransportResult(
             origin=parsed.origin_text,
@@ -517,6 +629,7 @@ def _mock_transport_result(parsed: ParsedIntent) -> TransportResult:
                 f"{parsed.origin_text}에서 {parsed.destination_text}까지 가는 "
                 "mock 경로입니다."
             ),
+            route_segments=mock_segments,
             source="mock",
         )
 

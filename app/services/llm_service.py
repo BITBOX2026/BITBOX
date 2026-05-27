@@ -8,32 +8,32 @@ from app.services.exceptions import LLMParsingError
 from app.services.service_types import ParsedIntent
 from app.services.settings_helper import get_setting, is_mock_mode
 
+_openai_client: AsyncOpenAI | None = None
+
+
+def _get_openai_client() -> AsyncOpenAI:
+    global _openai_client
+    if _openai_client is None:
+        _openai_client = AsyncOpenAI(api_key=get_setting("OPENAI_API_KEY"))
+    return _openai_client
+
 
 async def parse_transit_intent(transcript: str) -> ParsedIntent:
     """STT 문장을 교통 안내용 intent JSON 구조로 변환합니다."""
 
     if not transcript or not transcript.strip():
-        return ParsedIntent(
-            intent="unknown",
-            origin_text=None,
-            destination_text=None,
-            stop_text=None,
-            transport_mode="unknown",
-            bus_number=None,
-            confidence=0.0,
-        )
+        return ParsedIntent()
 
     if is_mock_mode():
         return _mock_parse_transit_intent(transcript)
 
-    api_key = get_setting("OPENAI_API_KEY")
-    if not api_key:
+    if not get_setting("OPENAI_API_KEY"):
         raise LLMParsingError("OPENAI_API_KEY가 설정되지 않았습니다.")
 
     llm_model = get_setting("LLM_MODEL", DEFAULT_LLM_MODEL)
 
     try:
-        client = AsyncOpenAI(api_key=api_key)
+        client = _get_openai_client()
 
         completion = await client.chat.completions.create(
             model=llm_model,
@@ -94,15 +94,7 @@ async def parse_transit_intent(transcript: str) -> ParsedIntent:
         message = completion.choices[0].message
 
         if getattr(message, "refusal", None):
-            return ParsedIntent(
-                intent="unknown",
-                origin_text=None,
-                destination_text=None,
-                stop_text=None,
-                transport_mode="unknown",
-                bus_number=None,
-                confidence=0.0,
-            )
+            return ParsedIntent()
 
         content = message.content
         if not content:
@@ -176,23 +168,12 @@ def _mock_parse_transit_intent(transcript: str) -> ParsedIntent:
     if bus_number:
         return ParsedIntent(
             intent="arrival",
-            origin_text=None,
-            destination_text=None,
-            stop_text=None,
             transport_mode="bus",
             bus_number=bus_number,
             confidence=0.75,
         )
 
-    return ParsedIntent(
-        intent="unknown",
-        origin_text=None,
-        destination_text=None,
-        stop_text=None,
-        transport_mode="unknown",
-        bus_number=None,
-        confidence=0.0,
-    )
+    return ParsedIntent()
 
 
 def _extract_stop_text(text: str, bus_number: str) -> str | None:

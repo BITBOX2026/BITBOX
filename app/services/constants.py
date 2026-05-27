@@ -4,6 +4,8 @@ MIN_CONFIDENCE = 0.5
 # OpenAI 기본 모델명입니다.
 DEFAULT_STT_MODEL = "gpt-4o-mini-transcribe"
 DEFAULT_LLM_MODEL = "gpt-4o-mini"
+DEFAULT_TTS_MODEL = "tts-1-hd"
+DEFAULT_TTS_VOICE = "nova"
 
 # 외부 교통/지도 API 엔드포인트입니다.
 ODSAY_ROUTE_URL = "https://api.odsay.com/v1/api/searchPubTransPathT"
@@ -27,6 +29,17 @@ KNOWN_PLACE_COORDS = {
     "시청역": (126.977088, 37.565703),
     "잠실역": (127.100159, 37.513261),
     "홍대입구역": (126.923708, 37.557192),
+}
+
+# ODsay API가 반환하는 지하철 노선 코드 → 한국어 노선명 매핑입니다.
+SUBWAY_LINE_NAMES: dict[int, str] = {
+    1: "1호선", 2: "2호선", 3: "3호선", 4: "4호선",
+    5: "5호선", 6: "6호선", 7: "7호선", 8: "8호선", 9: "9호선",
+    21: "인천1호선", 22: "인천2호선",
+    31: "대전1호선", 41: "대구1호선", 51: "광주1호선",
+    101: "공항철도", 104: "경의중앙선", 107: "수인분당선",
+    108: "경춘선", 109: "신분당선", 110: "우이신설선",
+    112: "서해선", 113: "경강선",
 }
 
 TRANSIT_INTENT_SYSTEM_PROMPT = """

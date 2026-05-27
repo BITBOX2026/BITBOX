@@ -1,5 +1,6 @@
 from app.services.constants import MIN_CONFIDENCE
 from app.services.service_types import ParsedIntent, ValidationResult
+from app.services.settings_helper import get_setting
 
 
 def validate_parsed_intent(parsed: ParsedIntent) -> ValidationResult:
@@ -23,9 +24,7 @@ def validate_parsed_intent(parsed: ParsedIntent) -> ValidationResult:
             message="목적지를 말씀해 주세요.",
         )
 
-    # 현재는 이동 중 사용을 전제로 음성 출발지를 필수로 받습니다.
-    # DEFAULT_ORIGIN_X/Y fallback은 transport_service.py에 남겨 확장 가능하게 둡니다.
-    if parsed.intent == "route" and not parsed.origin_text:
+    if parsed.intent == "route" and not parsed.origin_text and not _has_default_origin():
         return ValidationResult(
             is_valid=False,
             message="출발지를 말씀해 주세요.",
@@ -47,3 +46,14 @@ def validate_parsed_intent(parsed: ParsedIntent) -> ValidationResult:
         is_valid=True,
         message="검증 성공",
     )
+
+
+def _has_default_origin() -> bool:
+    """기기에 기본 출발지(설치 위치)가 설정되어 있는지 확인합니다."""
+
+    if get_setting("DEFAULT_ORIGIN_NAME"):
+        return True
+
+    has_x = bool(get_setting("DEFAULT_ORIGIN_X") or get_setting("ORIGIN_X"))
+    has_y = bool(get_setting("DEFAULT_ORIGIN_Y") or get_setting("ORIGIN_Y"))
+    return has_x and has_y

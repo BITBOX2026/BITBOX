@@ -1,14 +1,5 @@
-# 서버 응답을 라즈베리파이 화면 출력용 문구로 변환하는 파일입니다.
-
-
 def safe_text(value: object, default: str = "정보 없음") -> str:
-    """
-    화면에 표시할 값이 None이거나 빈 문자열이면 기본 문구로 바꾸는 함수입니다.
-
-    기능:
-        - bus_number, arrival_time 등이 None일 때 "None"이 그대로 표시되는 문제를 방지합니다.
-        - LCD 출력 또는 콘솔 출력에서 사용자에게 보기 좋은 문구를 제공합니다.
-    """
+    """None 또는 빈 문자열이면 default를 반환합니다."""
 
     if value is None:
         return default
@@ -20,14 +11,7 @@ def safe_text(value: object, default: str = "정보 없음") -> str:
 
 
 def build_display_text(response: dict) -> str:
-    """
-    서버 응답에서 LCD 또는 콘솔에 출력할 문구를 만드는 함수입니다.
-
-    기능:
-        - 서버가 생성한 message를 우선 사용합니다.
-        - message가 없을 경우 data 필드를 조합합니다.
-        - data 안의 값이 None이어도 화면에 "None"이 표시되지 않게 합니다.
-    """
+    """서버 응답에서 화면 출력 문구를 만듭니다. message 필드를 우선 사용합니다."""
 
     message = response.get("message")
     if message:

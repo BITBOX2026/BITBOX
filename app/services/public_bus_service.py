@@ -101,26 +101,6 @@ async def search_bus_route(bus_number: str) -> dict[str, str] | None:
     return selected if _first_item_value(selected, ["busRouteId"]) else None
 
 
-async def search_bus_route_id(bus_number: str) -> str | None:
-    """버스 번호로 서울시 busRouteId를 조회합니다."""
-
-    route = await search_bus_route(bus_number)
-    if not route:
-        return None
-
-    return _first_item_value(route, ["busRouteId"])
-
-
-async def search_station_id(stop_text: str) -> str | None:
-    """정류장명으로 서울시 stId를 조회합니다."""
-
-    station = await search_station(stop_text)
-    if not station:
-        return None
-
-    return station["station_id"]
-
-
 async def search_station(stop_text: str) -> dict[str, str] | None:
     """정류장명으로 첫 번째 서울시 정류장 후보를 조회합니다."""
 
