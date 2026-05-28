@@ -6,6 +6,7 @@ pytest.ini의 asyncio_mode=auto 설정으로 @pytest.mark.asyncio 없이 동작�
 """
 
 import os
+import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -66,6 +67,19 @@ class TestRunPipelineMockMode:
         assert result["status"] == "success"
         assert result["audio_base64"] is None
 
+    async def test_tts_timeout_does_not_crash_pipeline(self, monkeypatch):
+        async def slow_tts(_text: str) -> str:
+            await asyncio.sleep(1)
+            return "late-audio"
+
+        monkeypatch.setattr("app.services.pipeline.settings.TTS_TIMEOUT_SECONDS", 0.01)
+
+        with patch("app.services.pipeline.generate_tts_audio", slow_tts):
+            result = await run_pipeline(_make_audio(), request_id="test-timeout")
+
+        assert result["status"] == "success"
+        assert result["audio_base64"] is None
+
     async def test_route_segments_serialized_as_dicts(self):
         result = await run_pipeline(_make_audio(), request_id="test05")
         segments = result["data"].get("route_segments")
@@ -78,6 +92,16 @@ class TestRunPipelineMockMode:
                 assert "line" in seg
                 assert "start_name" in seg
                 assert "end_name" in seg
+
+    async def test_missing_destination_after_origin_returns_error(self):
+        async def fake_transcribe_audio(*args, **kwargs) -> str:
+            return "서울역에서 가는 버스 알려줘"
+
+        with patch("app.services.pipeline.transcribe_audio", fake_transcribe_audio):
+            result = await run_pipeline(_make_audio(), request_id="missing-dest")
+
+        assert result["status"] == "error"
+        assert "목적지" in result["message"]
 
 
 # ---------------------------------------------------------------------------
@@ -115,11 +139,12 @@ class TestRunPipelineErrors:
 
         with patch(
             "app.services.pipeline.search_transport_info",
-            new=AsyncMock(side_effect=TransportAPIError("경로 없음")),
+            new=AsyncMock(side_effect=TransportAPIError("내부 오류 로그용 메시지")),
         ):
             result = await run_pipeline(_make_audio(), request_id="err03")
 
         assert result["status"] == "error"
+        # 기술적 내부 메시지가 아닌 클래스 기본 user_message가 사용자에게 반환되는지 확인
         assert "교통 정보를 조회하지 못했습니다" in result["message"]
 
     async def test_unexpected_exception_returns_generic_error(self):

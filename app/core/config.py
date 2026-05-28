@@ -55,6 +55,10 @@ class Settings(BaseSettings):
     MAX_AUDIO_SIZE_MB: int = 10       # 업로드 허용 최대 오디오 파일 크기 (MB)
     REQUEST_TIMEOUT_SECONDS: int = 30  # 파이프라인 전체 타임아웃 (초)
     CORS_ALLOWED_ORIGINS: str = "*"    # 허용 출처 (* = 전체)
+    RATE_LIMIT_ENABLED: bool = True
+    API_AUTH_TOKEN: str | None = None   # 설정 시 /api/process 호출에 토큰 필요
+    TTS_TIMEOUT_SECONDS: int = 8        # TTS 단독 타임아웃 (초)
+    ALLOW_KNOWN_PLACE_FALLBACK: bool | None = None
 
     # -------------------------------------------------------------------------
     # 라즈베리파이 클라이언트 설정
@@ -66,6 +70,7 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_file=".env",
+        env_file_encoding="utf-8",
         extra="ignore",  # .env에 정의되지 않은 키는 무시
     )
 

@@ -30,6 +30,13 @@ class LLMParsingError(PipelineError):
 class TransportAPIError(PipelineError):
     user_message = "교통 정보를 조회하지 못했습니다. 잠시 후 다시 시도해 주세요."
 
+    def __init__(self, message: str = "", *, user_message: str = "") -> None:
+        super().__init__(message)
+        # user_message 키워드 인자를 통해서만 사용자 표시 문구를 재정의할 수 있음
+        # positional message는 내부 로그 전용 — 사용자에게 노출되지 않음
+        if user_message:
+            self.user_message = user_message
+
 
 class CoordinateResolveError(TransportAPIError):
     # 장소명을 좌표로 변환하지 못한 경우 — 사용자가 더 정확한 이름을 말해야 함

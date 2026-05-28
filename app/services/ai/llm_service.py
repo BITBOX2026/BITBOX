@@ -6,6 +6,7 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_fi
 
 from app.services.core.constants import DEFAULT_LLM_MODEL, TRANSIT_INTENT_SYSTEM_PROMPT
 from app.services.core.exceptions import LLMParsingError
+from app.services.core.openai_client import get_openai_client as _get_openai_client
 from app.services.core.service_types import ParsedIntent
 from app.services.core.settings_helper import get_setting, is_mock_mode
 
@@ -42,23 +43,20 @@ def _load_system_prompt() -> str:
                 _system_prompt_file_mtime = current_mtime
                 return _system_prompt_cache
 
+            # 파일이 비워진 경우: 내장 프롬프트로 폴백, mtime 갱신으로 반복 재읽기 방지
+            _system_prompt_cache = TRANSIT_INTENT_SYSTEM_PROMPT
+            _system_prompt_file_mtime = current_mtime
+            return _system_prompt_cache
+
         except OSError:
-            pass
+            # 파일 삭제·권한 오류 시 캐시 초기화 → 내장 프롬프트 사용
+            _system_prompt_cache = None
+            _system_prompt_file_mtime = None
 
     # 파일 미설정 또는 읽기 실패 시 내장 프롬프트 사용 (한 번만 캐싱)
     if _system_prompt_cache is None:
         _system_prompt_cache = TRANSIT_INTENT_SYSTEM_PROMPT
     return _system_prompt_cache
-
-_openai_client: AsyncOpenAI | None = None
-
-
-def _get_openai_client() -> AsyncOpenAI:
-    global _openai_client
-    if _openai_client is None:
-        _openai_client = AsyncOpenAI(api_key=get_setting("OPENAI_API_KEY"))
-    return _openai_client
-
 
 @retry(
     retry=retry_if_exception_type(LLMParsingError),
@@ -120,7 +118,7 @@ async def _call_llm(client: AsyncOpenAI, llm_model: str, transcript: str) -> Par
     message = completion.choices[0].message
 
     if getattr(message, "refusal", None):
-        return ParsedIntent()
+        raise LLMParsingError("LLM이 요청을 처리할 수 없습니다.")
 
     content = message.content
     if not content:
@@ -326,7 +324,7 @@ def _clean_place_text(place_text: str) -> str:
     for word in standalone_words:
         cleaned = re.sub(rf"(?<!\S){re.escape(word)}(?!\S)", "", cleaned).strip()
 
-    return cleaned or place_text
+    return cleaned
 
 
 def _safe_confidence(value: object) -> float:
@@ -351,19 +349,7 @@ def _normalize_transport_mode(value: object) -> str:
 
 def _safe_json_loads(content: str) -> dict:
     """LLM 응답 문자열을 JSON dict로 변환합니다."""
-
-    cleaned = content.strip()
-
-    if cleaned.startswith("```json"):
-        cleaned = cleaned.removeprefix("```json").strip()
-
-    if cleaned.startswith("```"):
-        cleaned = cleaned.removeprefix("```").strip()
-
-    if cleaned.endswith("```"):
-        cleaned = cleaned.removesuffix("```").strip()
-
     try:
-        return json.loads(cleaned)
+        return json.loads(content.strip())
     except json.JSONDecodeError as exc:
         raise LLMParsingError("LLM 응답을 JSON으로 해석하지 못했습니다.") from exc

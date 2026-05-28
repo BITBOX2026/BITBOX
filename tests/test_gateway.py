@@ -17,10 +17,11 @@ def _wav_bytes() -> bytes:
     return b"RIFF\x00\x00\x00\x00WAVEfmt "
 
 
-def _upload(content: bytes, content_type: str = "audio/wav"):
+def _upload(content: bytes, content_type: str = "audio/wav", headers: dict | None = None):
     return client.post(
         "/api/process",
         files={"file": ("test.wav", io.BytesIO(content), content_type)},
+        headers=headers or {},
     )
 
 
@@ -50,6 +51,10 @@ class TestContentTypeValidation:
 
     def test_video_content_type_rejected(self):
         resp = _upload(_wav_bytes(), "video/mp4")
+        assert resp.status_code == 400
+
+    def test_invalid_wav_payload_rejected(self):
+        resp = _upload(b"not really wav", "audio/wav")
         assert resp.status_code == 400
 
 
@@ -98,6 +103,33 @@ class TestResponseSchema:
             resp = _upload(_wav_bytes())
 
         assert resp.json()["request_id"] == "myid"
+
+
+# ---------------------------------------------------------------------------
+# API 토큰 인증
+# ---------------------------------------------------------------------------
+
+class TestApiTokenAuth:
+    def test_no_token_configured_allows_request(self):
+        with patch.dict(os.environ, {"API_AUTH_TOKEN": ""}):
+            with patch("app.api.gateway.run_pipeline", new=AsyncMock(return_value={
+                "status": "success", "message": "ok", "data": {}, "audio_base64": None, "request_id": "x",
+            })):
+                resp = _upload(_wav_bytes())
+        assert resp.status_code == 200
+
+    def test_configured_token_rejects_missing_header(self):
+        with patch.dict(os.environ, {"API_AUTH_TOKEN": "secret"}):
+            resp = _upload(_wav_bytes())
+        assert resp.status_code == 401
+
+    def test_configured_token_accepts_matching_header(self):
+        with patch.dict(os.environ, {"API_AUTH_TOKEN": "secret"}):
+            with patch("app.api.gateway.run_pipeline", new=AsyncMock(return_value={
+                "status": "success", "message": "ok", "data": {}, "audio_base64": None, "request_id": "x",
+            })):
+                resp = _upload(_wav_bytes(), headers={"x-bitbox-token": "secret"})
+        assert resp.status_code == 200
 
 
 # ---------------------------------------------------------------------------

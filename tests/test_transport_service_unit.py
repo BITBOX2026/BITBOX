@@ -3,10 +3,11 @@ import pytest
 from app.services.transit.odsay_service import (
     _calculate_transfer_count,
     _extract_route_segments,
-    _is_night_bus_number,
-    _safe_int,
     _select_best_path,
+    is_night_bus_number as _is_night_bus_number,
 )
+from app.services.transit.seoul_bus_parser import safe_int as _safe_int
+from app.services.transit.seoul_bus_parser import extract_arrival_time
 
 
 class TestSafeInt:
@@ -24,6 +25,20 @@ class TestSafeInt:
 
     def test_float_truncated(self):
         assert _safe_int(3.9) == 3
+
+
+class TestExtractArrivalTime:
+    def test_uses_second_arrival_when_first_is_waiting(self):
+        item = {"arrmsg1": "출발대기", "arrmsg2": "5분 후"}
+        assert extract_arrival_time(item) == "5분 후"
+
+    def test_returns_waiting_when_no_other_arrival_exists(self):
+        item = {"arrmsg1": "출발대기"}
+        assert extract_arrival_time(item) == "출발대기"
+
+    def test_falls_back_to_travel_time_seconds(self):
+        item = {"traTime1": "61"}
+        assert extract_arrival_time(item) == "2분 후"
 
 
 class TestIsNightBusNumber:

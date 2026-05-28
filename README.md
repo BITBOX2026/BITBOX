@@ -93,6 +93,7 @@ OPENAI_API_KEY=
 KAKAO_REST_API_KEY=
 ODSAY_API_KEY=
 PUBLIC_DATA_SERVICE_KEY=
+API_AUTH_TOKEN=
 ```
 
 용도:
@@ -101,6 +102,7 @@ PUBLIC_DATA_SERVICE_KEY=
 - `KAKAO_REST_API_KEY`: 장소명 좌표 변환
 - `ODSAY_API_KEY`: 실제 대중교통 경로 조회
 - `PUBLIC_DATA_SERVICE_KEY`: 실시간 버스 도착 정보 조회
+- `API_AUTH_TOKEN`: 배포 시 `/api/process` 보호용 토큰. 비워두면 인증 없이 동작
 
 ## 환경변수 설정
 
@@ -141,8 +143,10 @@ source .venv/bin/activate
 패키지 설치:
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 ```
+
+백엔드만 설치할 때는 `requirements-backend.txt`, 라즈베리파이 클라이언트만 설치할 때는 `requirements-rpi.txt`를 사용할 수 있습니다. 기존 통합 설치용 `requirements.txt`도 유지됩니다.
 
 ## Mock Mode 실행
 
@@ -169,7 +173,7 @@ curl http://127.0.0.1:8000/health
 mock 요청 테스트:
 
 ```bash
-python test_client.py
+python scripts/test_client.py
 ```
 
 ## Real Mode 실행
@@ -184,9 +188,11 @@ OPENAI_API_KEY=
 KAKAO_REST_API_KEY=
 ODSAY_API_KEY=
 PUBLIC_DATA_SERVICE_KEY=
+API_AUTH_TOKEN=
 ```
 
 API 키 값은 코드, README, 로그에 남기지 않습니다.
+`API_AUTH_TOKEN`을 설정하면 라즈베리파이 클라이언트에도 같은 값을 설정해야 `/api/process` 요청이 허용됩니다.
 
 `PUBLIC_DATA_SERVICE_KEY`는 arrival 기능에서 필요합니다.
 공공데이터포털의 Decoding 키와 Encoding 키를 모두 입력할 수 있으며, 서버는 호출 전에 decoded 형태로 정규화합니다.
@@ -339,10 +345,10 @@ python scripts/test_arrival_cases.py --real
 app/main.py                         FastAPI 앱 진입점
 app/api/gateway.py                  /api/process 업로드 API
 app/services/pipeline.py            STT -> LLM -> 검증 -> 교통 API -> 응답 생성 흐름
-app/services/llm_service.py         OpenAI LLM 발화 구조화
-app/services/validate_service.py    필수 발화 필드 검증
-app/services/transport_service.py   Kakao 좌표 변환, ODsay 경로 조회/선택
-app/services/public_bus_service.py  공공데이터 기반 버스 도착 조회
+app/services/ai/llm_service.py      OpenAI LLM 발화 구조화
+app/services/transit/validate_service.py    필수 발화 필드 검증
+app/services/transit/transport_service.py   Kakao 좌표 변환, ODsay 경로 조회/선택
+app/services/transit/public_bus_service.py  공공데이터 기반 버스 도착 조회
 app/services/response_builder.py    최종 안내 문장 생성
 scripts/test_external_apis.py       외부 API 단독 테스트
 scripts/test_public_data_key.py     공공데이터 서비스키 인증 단독 테스트

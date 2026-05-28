@@ -8,7 +8,10 @@
       "Bash(python -c \"import pydantic_settings; import inspect; src = inspect.getsource\\(pydantic_settings\\); print\\(src[:3000]\\)\")",
       "Bash(python -c \"import starlette.config; print\\(starlette.config.Config._read_file\\)\")",
       "Bash(python -c \"import starlette.config; import inspect; print\\(inspect.getsource\\(starlette.config.Config._read_file\\)\\)\")",
-      "Bash(python -c ' *)"
+      "Bash(python -c ' *)",
+      "Bash(python -m pytest tests/ -q)",
+      "Bash(python -m pytest tests/test_pipeline.py::TestRunPipelineErrors::test_transport_error_returns_error_response -v)",
+      "Bash(python -c \"import sys; [print\\(l\\) for l in sys.stdin.read\\(\\).splitlines\\(\\)]\")"
     ]
   }
 }

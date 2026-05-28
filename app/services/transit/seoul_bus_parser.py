@@ -90,13 +90,18 @@ def extract_arrival_time(item: dict[str, str]) -> str | None:
     """
     서울시 도착 응답에서 사용자에게 보여줄 도착 시간 문자열을 추출합니다.
 
-    arrmsg(도착 메시지)를 우선하되 "출발대기"는 유효하지 않은 값으로 처리합니다.
+    arrmsg(도착 메시지)를 우선하되, 실제 도착 정보가 없을 때만 "출발대기"를 반환합니다.
     메시지가 없으면 traTime(초 단위 소요 시간)을 분 단위로 변환합니다.
     """
+    departure_waiting: str | None = None
+
     for message_key, time_key in [("arrmsg1", "traTime1"), ("arrmsg2", "traTime2")]:
         arrival_message = first_item_value(item, [message_key])
-        if arrival_message and arrival_message != "출발대기":
-            return arrival_message
+        if arrival_message:
+            if arrival_message == "출발대기":
+                departure_waiting = departure_waiting or arrival_message
+            else:
+                return arrival_message
 
         # 초 단위 소요 시간을 분으로 올림 변환 (0초는 제외)
         travel_time = safe_int(first_item_value(item, [time_key]))
@@ -104,7 +109,7 @@ def extract_arrival_time(item: dict[str, str]) -> str | None:
             minutes = max((travel_time + 59) // 60, 1)
             return f"{minutes}분 후"
 
-    return None
+    return departure_waiting
 
 
 def extract_arrival_station_name(item: dict[str, str]) -> str | None:
@@ -150,6 +155,12 @@ def contains_normalized(text: str, keyword: str) -> bool:
     return bool(normalized_keyword and normalized_keyword in normalized_text)
 
 
+def equals_normalized(text: str, keyword: str) -> bool:
+    """공백/대소문자를 무시하고 두 값이 같은지 확인합니다."""
+    normalized_keyword = normalize_token(keyword)
+    return bool(normalized_keyword and normalize_token(text) == normalized_keyword)
+
+
 def normalize_token(value: object) -> str:
     """공백 제거 + 대문자 변환으로 정규화합니다."""
     return "".join(str(value or "").split()).upper()
@@ -173,3 +184,8 @@ def safe_int(value: object) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def is_night_bus_number(bus_number: str) -> bool:
+    """야간버스 번호는 N으로 시작합니다 (예: N73, N26)."""
+    return bus_number.strip().upper().startswith("N")

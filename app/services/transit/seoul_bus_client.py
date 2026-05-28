@@ -17,6 +17,7 @@ from xml.etree import ElementTree
 import httpx
 
 from app.services.core.exceptions import TransportAPIError
+from app.services.core.http_client import get_http_client
 from app.services.core.http_utils import http_retry as _http_retry
 from app.services.core.settings_helper import get_setting
 
@@ -27,10 +28,9 @@ SUCCESS_CODES = {"0", "00", "NORMAL_CODE", "INFO-000", "SUCCESS"}
 @_http_retry
 async def _seoul_bus_get(url: str, params: dict[str, str]) -> httpx.Response:
     """서울버스 API GET 요청. 재시도 가능한 오류는 자동 재시도합니다."""
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        response = await client.get(url, params=params)
-        response.raise_for_status()
-        return response
+    response = await get_http_client().get(url, params=params)
+    response.raise_for_status()
+    return response
 
 
 async def request_seoul_bus_payload(

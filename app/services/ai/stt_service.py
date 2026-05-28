@@ -7,21 +7,10 @@ OpenAI Whisper API를 사용하며, mock 모드에서는 API 호출 없이 고�
 
 import io
 
-from openai import AsyncOpenAI
-
 from app.services.core.constants import DEFAULT_STT_MODEL
 from app.services.core.exceptions import STTProcessingError
+from app.services.core.openai_client import get_openai_client as _get_openai_client
 from app.services.core.settings_helper import get_setting, is_mock_mode
-
-# 모듈 수준 클라이언트 — 요청마다 새로 생성하지 않고 재사용
-_openai_client: AsyncOpenAI | None = None
-
-
-def _get_openai_client() -> AsyncOpenAI:
-    global _openai_client
-    if _openai_client is None:
-        _openai_client = AsyncOpenAI(api_key=get_setting("OPENAI_API_KEY"))
-    return _openai_client
 
 
 async def transcribe_audio(

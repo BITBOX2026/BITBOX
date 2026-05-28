@@ -223,3 +223,7 @@ class TestFormatArrivalTime:
         assert result.startswith("약 ")
         assert "후" in result
         assert result.count("후") == 1  # 중복 없음
+
+    def test_compact_public_data_message(self):
+        result = _format_arrival_time("10분34초후[3번째 전]")
+        assert result == "약 10분 34초 후, 3번째 전"

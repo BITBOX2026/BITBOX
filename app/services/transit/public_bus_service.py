@@ -19,6 +19,7 @@ from app.services.transit.seoul_bus_client import request_seoul_bus_payload
 from app.services.transit.seoul_bus_parser import (
     build_route_station,
     contains_normalized,
+    equals_normalized,
     extract_arrival_station_name,
     extract_arrival_time,
     extract_items,
@@ -35,19 +36,19 @@ async def search_bus_arrival(parsed: ParsedIntent) -> TransportResult:
     조회 실패 시 TransportAPIError를 발생시킵니다.
     """
     if not parsed.bus_number:
-        raise TransportAPIError("버스 번호를 말씀해 주세요.")
+        raise TransportAPIError(user_message="버스 번호를 말씀해 주세요.")
 
     if not parsed.stop_text:
-        raise TransportAPIError("어느 정류장 기준인지 말씀해 주세요.")
+        raise TransportAPIError(user_message="어느 정류장 기준인지 말씀해 주세요.")
 
     # 1단계: 버스 번호 → 노선 ID
     bus_route = await search_bus_route(parsed.bus_number)
     if not bus_route:
-        raise TransportAPIError("해당 버스 노선을 찾지 못했습니다.")
+        raise TransportAPIError(user_message="해당 버스 노선을 찾지 못했습니다.")
 
     bus_route_id = first_item_value(bus_route, ["busRouteId"])
     if not bus_route_id:
-        raise TransportAPIError("해당 버스 노선을 찾지 못했습니다.")
+        raise TransportAPIError(user_message="해당 버스 노선을 찾지 못했습니다.")
 
     # 2단계: 노선 경유 정류소에서 사용자가 말한 정류장 검색
     route_station = await _find_route_station_by_stop_text(
@@ -56,7 +57,7 @@ async def search_bus_arrival(parsed: ParsedIntent) -> TransportResult:
     )
     if not route_station:
         raise TransportAPIError(
-            "해당 노선에서 정류장을 찾지 못했습니다."
+            user_message="해당 노선에서 정류장을 찾지 못했습니다."
         )
 
     # 3단계: 실시간 도착 시간 조회
@@ -70,7 +71,7 @@ async def search_bus_arrival(parsed: ParsedIntent) -> TransportResult:
     arrival_time = arrival.get("arrival_time")
     if not arrival_time:
         raise TransportAPIError(
-            "해당 정류장의 버스 도착 정보를 찾지 못했습니다."
+            user_message="해당 정류장의 버스 도착 정보를 찾지 못했습니다."
         )
 
     return TransportResult(
@@ -159,14 +160,22 @@ async def _find_route_station_by_stop_text(
         stage="노선 경유 정류소 조회",
     )
 
+    exact_candidates: list[dict[str, str]] = []
+    partial_candidates: list[dict[str, str]] = []
+
     for item in extract_items(payload):
         station_name = first_item_value(item, ["stationNm", "stNm"]) or ""
-        if not contains_normalized(station_name, stop_text):
+        if equals_normalized(station_name, stop_text):
+            exact_candidates.append(item)
             continue
+        if contains_normalized(station_name, stop_text):
+            partial_candidates.append(item)
 
+    for item in exact_candidates + partial_candidates:
         route_station = build_route_station(item)
-        if route_station:
-            return route_station
+        if not route_station:
+            continue
+        return route_station
 
     return None
 

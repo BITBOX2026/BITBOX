@@ -18,6 +18,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 API_URL = os.getenv("API_URL", "http://127.0.0.1:8000/api/process")
+API_AUTH_TOKEN = os.getenv("API_AUTH_TOKEN")
 
 
 def send_audio_to_server(audio_path: str) -> dict:
@@ -32,10 +33,15 @@ def send_audio_to_server(audio_path: str) -> dict:
         raise ValueError(f"파일 경로가 아닙니다: {audio_path}")
 
     try:
+        headers = {}
+        if API_AUTH_TOKEN:
+            headers["x-bitbox-token"] = API_AUTH_TOKEN
+
         with path.open("rb") as audio_file:
             response = requests.post(
                 API_URL,
                 files={"file": (path.name, audio_file, "audio/wav")},
+                headers=headers,
                 timeout=30,
             )
         response.raise_for_status()

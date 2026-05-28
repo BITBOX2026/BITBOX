@@ -7,7 +7,10 @@ route intent:  "서울역에서 740번 버스를 타시면 강남역까지 가�
 arrival intent: "서울역 정류장 기준 740번 버스는 약 3분 후 도착 예정입니다."
 """
 
+import re
+
 from app.services.core.service_types import ParsedIntent, RouteSegment, TransportResult
+from app.services.transit.seoul_bus_parser import is_night_bus_number as _is_night_bus
 
 # 공공데이터 API가 반환하는 특수 도착 상태 문자열과 사용자 친화적 문구 매핑
 _SPECIAL_ARRIVAL_TEXTS: dict[str, str] = {
@@ -151,6 +154,17 @@ def _build_arrival_message(result: TransportResult) -> str:
 
 def _format_arrival_time(arrival_time: str) -> str:
     """공공데이터 API 도착 문구를 안내 문장에 맞게 정리합니다."""
+    compact = re.fullmatch(r"(\d+)분(?:(\d+)초)?후(?:\[(.+)\])?", arrival_time.strip())
+    if compact:
+        minutes, seconds, detail = compact.groups()
+        parts = [f"{minutes}분"]
+        if seconds:
+            parts.append(f"{seconds}초")
+        text = f"약 {' '.join(parts)} 후"
+        if detail:
+            text = f"{text}, {detail}"
+        return text
+
     if arrival_time.startswith("약 "):
         return arrival_time
     if arrival_time[:1].isdigit():
@@ -169,10 +183,6 @@ def _vehicle_label(seg: RouteSegment) -> str:
             return f"{seg.line} 야간버스"
         return f"{seg.line} 버스"
     return seg.line  # 지하철은 노선명 그대로 (예: "2호선")
-
-
-def _is_night_bus(bus_no: str) -> bool:
-    return bus_no.strip().upper().startswith("N")
 
 
 def _josa_reul(word: str) -> str:

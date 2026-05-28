@@ -46,12 +46,16 @@ async def search_transport_info(parsed: ParsedIntent) -> TransportResult:
     if parsed.intent == "arrival":
         return await search_bus_arrival(parsed)
 
-    raise TransportAPIError("지원하지 않는 교통 요청입니다.")
+    raise TransportAPIError(user_message="지원하지 않는 교통 요청입니다.")
 
 
 # ---------------------------------------------------------------------------
 # 캐시 내부 함수
 # ---------------------------------------------------------------------------
+
+def _make_cache_key(origin_name: str, destination_text: str, transport_mode: str) -> str:
+    return f"{origin_name}|{destination_text.strip()}|{transport_mode}"
+
 
 def _get_cached_route(key: str) -> TransportResult | None:
     entry = _route_cache.get(key)
@@ -87,7 +91,7 @@ async def _search_route_with_odsay(parsed: ParsedIntent) -> TransportResult:
         origin_name = parsed.origin_text.strip()
 
         # 캐시 확인을 Kakao API 호출보다 먼저 수행 — 반복 요청 시 API 비용 절감
-        cache_key = f"{origin_name}|{parsed.destination_text.strip()}|{parsed.transport_mode}"
+        cache_key = _make_cache_key(origin_name, parsed.destination_text, parsed.transport_mode)
         cached = _get_cached_route(cache_key)
         if cached is not None:
             logger.debug("경로 캐시 히트: %s → %s", origin_name, parsed.destination_text)
@@ -103,7 +107,7 @@ async def _search_route_with_odsay(parsed: ParsedIntent) -> TransportResult:
         # 기기 기본 출발지 사용 (DEFAULT_ORIGIN_NAME 또는 DEFAULT_ORIGIN_X/Y)
         origin_name, origin_x, origin_y = await resolve_origin(None)
 
-        cache_key = f"{origin_name}|{parsed.destination_text.strip()}|{parsed.transport_mode}"
+        cache_key = _make_cache_key(origin_name, parsed.destination_text, parsed.transport_mode)
         cached = _get_cached_route(cache_key)
         if cached is not None:
             logger.debug("경로 캐시 히트: %s → %s", origin_name, parsed.destination_text)

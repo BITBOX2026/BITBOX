@@ -30,6 +30,16 @@ def get_setting(name: str, default: Any = None) -> Any:
     return default
 
 
+def get_bool_setting(name: str, default: bool = False) -> bool:
+    """환경변수/설정값을 bool로 안전하게 해석합니다."""
+    value = get_setting(name, default)
+
+    if isinstance(value, bool):
+        return value
+
+    return str(value).strip().lower() in {"true", "1", "yes", "y", "on"}
+
+
 @lru_cache(maxsize=1)
 def is_mock_mode() -> bool:
     """
@@ -38,13 +48,7 @@ def is_mock_mode() -> bool:
     결과를 캐싱하므로 테스트 도중 USE_MOCK_EXTERNALS를 바꾸면
     clear_settings_cache()를 먼저 호출해야 합니다.
     """
-    value = get_setting("USE_MOCK_EXTERNALS", True)
-
-    if isinstance(value, bool):
-        return value
-
-    # 환경변수는 문자열로 들어오므로 truthy 값 목록과 비교
-    return str(value).lower() in {"true", "1", "yes", "y"}
+    return get_bool_setting("USE_MOCK_EXTERNALS", True)
 
 
 def clear_settings_cache() -> None:

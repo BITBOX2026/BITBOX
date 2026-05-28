@@ -15,9 +15,11 @@
 pipeline.py 에서 모두 잡아 사용자 친화적 메시지로 변환합니다.
 """
 
+import asyncio
 import time
 from dataclasses import asdict
 
+from app.core.config import settings
 from app.core.logger import get_logger
 from app.services.ai.llm_service import parse_transit_intent
 from app.services.ai.stt_service import transcribe_audio
@@ -25,7 +27,6 @@ from app.services.ai.tts_service import generate_tts_audio
 from app.services.core.exceptions import (
     CoordinateResolveError,
     LLMParsingError,
-    PipelineError,
     STTProcessingError,
     TransportAPIError,
 )
@@ -49,9 +50,27 @@ async def run_pipeline(
     result = await _run_pipeline_core(audio_bytes, filename, request_id)
 
     # TTS는 파이프라인 핵심 로직과 분리 — 실패해도 텍스트 응답은 반환
-    result["audio_base64"] = await generate_tts_audio(result.get("message", ""))
+    result["audio_base64"] = await _generate_tts_audio_safely(
+        result.get("message", ""),
+        request_id=request_id,
+    )
     result["request_id"] = request_id
     return result
+
+
+async def _generate_tts_audio_safely(text: str, request_id: str) -> str | None:
+    """TTS가 느리거나 실패해도 텍스트 응답은 그대로 반환합니다."""
+    if not text or not text.strip():
+        return None
+
+    try:
+        return await asyncio.wait_for(
+            generate_tts_audio(text),
+            timeout=settings.TTS_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("[%s] TTS 타임아웃", request_id)
+        return None
 
 
 async def _run_pipeline_core(
@@ -143,16 +162,6 @@ async def _run_pipeline_core(
     except (STTProcessingError, LLMParsingError, TransportAPIError) as exc:
         # 외부 API 오류 — 기술적 메시지 대신 user_message 반환
         logger.exception("외부 서비스 오류: %s", exc)
-        return _error_response(
-            message=exc.user_message,
-            transcript=transcript,
-            stop_name=None,
-            needs_confirmation=True,
-            **_parsed_fields(parsed),
-        )
-
-    except PipelineError as exc:
-        logger.warning("파이프라인 로직 오류: %s", exc)
         return _error_response(
             message=exc.user_message,
             transcript=transcript,

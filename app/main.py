@@ -5,18 +5,32 @@ FastAPI 애플리케이션을 초기화하고 미들웨어·라우터를 등록�
 서버 시작 시 환경변수 유효성을 검사하고, 기본 출발지 누락 경고를 출력합니다.
 """
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
+from app.api.schemas import HealthResponse
 from app.api.gateway import router as gateway_router
 from app.core.config import settings, validate_required_settings
 from app.core.logger import get_logger
 from app.core.rate_limiter import limiter
+from app.services.core.http_client import close_http_client
+from app.services.core.openai_client import close_openai_client
 from app.services.core.settings_helper import is_mock_mode
 
 _logger = get_logger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    try:
+        yield
+    finally:
+        await close_http_client()
+        await close_openai_client()
 
 # ---------------------------------------------------------------------------
 # 시작 시 필수 환경변수 검증
@@ -50,6 +64,7 @@ app = FastAPI(
     title="BITBOX Voice Transit Assistant Backend",
     description="음성 기반 버스/교통 안내 시스템 백엔드 API",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 # IP 기반 Rate Limiting (slowapi) — 분당 최대 요청 수를 gateway에서 제한
@@ -73,16 +88,21 @@ app.include_router(gateway_router, prefix="/api", tags=["Gateway"])
 # 헬스체크 엔드포인트
 # 서버 상태와 API 키 설정 여부를 반환합니다.
 # ---------------------------------------------------------------------------
-@app.get("/health")
-def health_check() -> dict:
-    return {
+@app.get("/health", response_model=HealthResponse)
+def health_check() -> HealthResponse:
+    body = {
         "status": "ok",
         "env": settings.APP_ENV,
         "mock_mode": is_mock_mode(),
-        "api_keys_configured": {
+        "api_keys_configured": None,
+    }
+
+    if settings.APP_ENV != "prod":
+        body["api_keys_configured"] = {
             "openai": bool(settings.OPENAI_API_KEY),
             "kakao": bool(settings.KAKAO_REST_API_KEY),
             "odsay": bool(settings.ODSAY_API_KEY),
             "public_data": bool(settings.PUBLIC_DATA_SERVICE_KEY),
-        },
-    }
+        }
+
+    return HealthResponse(**body)

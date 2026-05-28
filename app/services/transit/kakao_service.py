@@ -19,8 +19,9 @@ from app.services.core.constants import (
     KOREA_LONGITUDE_MIN,
 )
 from app.services.core.exceptions import CoordinateResolveError, TransportAPIError
+from app.services.core.http_client import get_http_client
 from app.services.core.http_utils import http_retry as _http_retry
-from app.services.core.settings_helper import get_setting
+from app.services.core.settings_helper import get_bool_setting, get_setting
 
 # 기기 기본 출발지 캐시 — 서버 재시작 전까지 유지
 _default_origin_cache: tuple[str, float, float] | None = None
@@ -29,14 +30,13 @@ _default_origin_cache: tuple[str, float, float] | None = None
 @_http_retry
 async def _kakao_fetch(kakao_key: str, place_text: str) -> dict:
     """Kakao Local 키워드 검색 API를 호출합니다. 실패 시 자동 재시도합니다."""
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        response = await client.get(
-            KAKAO_KEYWORD_SEARCH_URL,
-            headers={"Authorization": f"KakaoAK {kakao_key}"},
-            params={"query": place_text, "size": 1},
-        )
-        response.raise_for_status()
-        return response.json()
+    response = await get_http_client().get(
+        KAKAO_KEYWORD_SEARCH_URL,
+        headers={"Authorization": f"KakaoAK {kakao_key}"},
+        params={"query": place_text, "size": 1},
+    )
+    response.raise_for_status()
+    return response.json()
 
 
 async def resolve_place_coordinates(
@@ -56,9 +56,9 @@ async def resolve_place_coordinates(
     try:
         return await _resolve_via_kakao(normalized, label)
 
-    except CoordinateResolveError:
-        # Kakao 실패 시 내장 좌표 목록에서 보조 탐색
-        if normalized not in KNOWN_PLACE_COORDS:
+    except (CoordinateResolveError, TransportAPIError):
+        # Kakao API 실패(키 미설정 포함) 시 내장 좌표 목록에서 보조 탐색
+        if not _allow_known_place_fallback() or normalized not in KNOWN_PLACE_COORDS:
             raise
 
     longitude, latitude = KNOWN_PLACE_COORDS[normalized]
@@ -141,7 +141,7 @@ def _get_origin_coordinates_fallback() -> tuple[float, float]:
     origin_y = get_setting("DEFAULT_ORIGIN_Y") or get_setting("ORIGIN_Y")
 
     if origin_x is None or origin_y is None:
-        raise CoordinateResolveError("출발지를 말씀해 주세요.")
+        raise CoordinateResolveError(user_message="출발지를 말씀해 주세요.")
 
     try:
         longitude = float(origin_x)
@@ -166,3 +166,12 @@ def _validate_korea_coordinates(longitude: float, latitude: float, label: str) -
             f"{label} 좌표가 대한민국 서비스 범위를 벗어났습니다. "
             f"경도={longitude}, 위도={latitude}"
         )
+
+
+def _allow_known_place_fallback() -> bool:
+    """운영 환경에서는 Kakao 장애를 내장 좌표로 숨기지 않습니다."""
+    explicit = get_setting("ALLOW_KNOWN_PLACE_FALLBACK")
+    if explicit is not None:
+        return get_bool_setting("ALLOW_KNOWN_PLACE_FALLBACK", False)
+
+    return str(get_setting("APP_ENV", "local")).strip().lower() != "prod"

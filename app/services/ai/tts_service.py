@@ -8,23 +8,12 @@ OpenAI TTS API를 사용하며, 실패해도 파이프라인을 중단하지 않
 
 import base64
 
-from openai import AsyncOpenAI
-
 from app.core.logger import get_logger
 from app.services.core.constants import DEFAULT_TTS_MODEL, DEFAULT_TTS_VOICE
+from app.services.core.openai_client import get_openai_client as _get_openai_client
 from app.services.core.settings_helper import get_setting, is_mock_mode
 
 logger = get_logger(__name__)
-
-# 모듈 수준 클라이언트 — 요청마다 새로 생성하지 않고 재사용
-_openai_client: AsyncOpenAI | None = None
-
-
-def _get_openai_client() -> AsyncOpenAI:
-    global _openai_client
-    if _openai_client is None:
-        _openai_client = AsyncOpenAI(api_key=get_setting("OPENAI_API_KEY"))
-    return _openai_client
 
 
 async def generate_tts_audio(text: str) -> str | None:
