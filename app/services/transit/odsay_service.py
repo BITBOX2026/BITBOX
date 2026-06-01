@@ -158,7 +158,8 @@ def _convert_odsay_path_to_transport_result(
     sub_paths = path.get("subPath", [])
 
     total_time_min = safe_int(info.get("totalTime"))
-    payment = safe_int(info.get("payment"))
+    raw_payment = safe_int(info.get("payment"))
+    payment = raw_payment if (raw_payment is not None and raw_payment >= 0) else None
     bus_transit_count = safe_int(info.get("busTransitCount"))
     subway_transit_count = safe_int(info.get("subwayTransitCount"))
     path_type = safe_int(path.get("pathType"))
