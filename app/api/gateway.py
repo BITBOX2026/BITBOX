@@ -8,6 +8,7 @@ API Gateway — 음성 파일 수신 및 파이프라인 실행
 """
 
 import asyncio
+import re
 import secrets
 import uuid
 
@@ -111,21 +112,161 @@ async def upload_audio(request: Request, file: UploadFile = File(...)) -> dict:
 
 def _build_upload_compat_response(result: dict) -> dict:
     data = result.get("data") if isinstance(result.get("data"), dict) else {}
-    destination = data.get("destination_text") or data.get("destination")
+    intent = data.get("intent")
+    is_success = result.get("status") == "success"
+
+    # arrival 인텐트는 목적지가 없으므로 정류장명을 destination으로 노출
+    # 프론트 VoiceResult가 빈 제목으로 표시되는 문제를 방지
+    if intent == "arrival":
+        destination = data.get("stop_name") or data.get("stop_text")
+    else:
+        destination = data.get("destination")
+
     message = str(result.get("message") or destination or "요청을 처리했습니다.")
 
     return {
-        "success": result.get("status") == "success",
+        "success": is_success,
         "text": data.get("transcript"),
-        "intent": data.get("intent"),
+        "intent": intent,
         "destination": destination,
         "destination_text": destination,
         "bus_number": data.get("bus_number"),
         "message": message,
-        "buses": result.get("buses") if isinstance(result.get("buses"), list) else [],
+        "buses": _build_buses_from_result(data, is_success),
         "audio_base64": result.get("audio_base64"),
         "request_id": result.get("request_id"),
     }
+
+
+def _build_buses_from_result(data: dict, is_success: bool) -> list[dict]:
+    """파이프라인 결과에서 프론트 BusOption 형식의 버스 목록을 구성합니다."""
+    if not is_success:
+        return []
+    intent = data.get("intent")
+    if intent == "route":
+        return _build_buses_from_route(data)
+    if intent == "arrival":
+        return _build_buses_from_arrival(data)
+    return []
+
+
+def _build_buses_from_route(data: dict) -> list[dict]:
+    """ODsay 경로 결과를 프론트 BusOption + totalMin/steps 형식으로 변환합니다."""
+    bus_number = data.get("bus_number") or ""
+    total_time_min = int(data.get("total_time_min") or 0)
+    route_segments = data.get("route_segments") or []
+
+    if not bus_number and not route_segments:
+        return []
+
+    n_segs = len(route_segments) or 1
+    steps: list[dict] = []
+    for seg in route_segments:
+        line = seg.get("line", "")
+        is_bus = seg.get("vehicle_type") == "버스"
+        # 버스 구간은 번호만("146번" → "146"), 지하철 구간은 빈 문자열
+        seg_bus_number = line.replace("번", "").strip() if is_bus else ""
+        seg_time = seg.get("time_min")
+        duration = seg_time if seg_time is not None else round(total_time_min / n_segs)
+        steps.append({
+            "type": "bus",  # RouteStep은 "walk" | "bus"만 지원
+            "durationMin": duration,
+            "busNumber": seg_bus_number,
+            "fromStop": seg.get("start_name") or "",
+            "toStop": seg.get("end_name") or "",
+            "description": f"{line} {'탑승' if is_bus else '이용'}",
+        })
+
+    # 대표 버스 번호: bus_number 우선, 없으면 노선명에서 추출
+    if bus_number:
+        display_bus = bus_number
+    elif route_segments:
+        first_line = route_segments[0].get("line", "")
+        display_bus = first_line.replace("번", "").strip()
+    else:
+        display_bus = ""
+
+    origin_stop = steps[0]["fromStop"] if steps else (data.get("origin") or "")
+
+    return [{
+        "id": f"route-{display_bus}-0",
+        "busNumber": display_bus,
+        "arrivalMin": 0,
+        "traTimeSec": 60,   # 프론트 필터(traTime > 0) 통과용 최솟값
+        "arrivalMsg": f"{display_bus} 탑승 예정",
+        "currentStationName": origin_stop,
+        "remainingStops": 0,
+        "busType": 0,
+        "congetion": 0,     # 프론트 typo 그대로 유지
+        "isFullFlag": False,
+        "isLastBus": False,
+        "plainNo": "",
+        "isSecond": False,
+        # useRouteSelection이 (bus as any)로 접근하는 추가 필드
+        "totalMin": total_time_min,
+        "steps": steps,
+    }]
+
+
+# 버스가 운행을 마쳤거나 아직 차고지에서 출발 전인 상태 코드
+_TERMINAL_ARRIVAL_STATES = {"운행종료"}
+_STANDBY_ARRIVAL_STATES = {"출발대기"}
+
+
+def _build_buses_from_arrival(data: dict) -> list[dict]:
+    """버스 도착 정보 조회 결과를 프론트 BusOption 형식으로 변환합니다."""
+    bus_number = data.get("bus_number") or ""
+    if not bus_number:
+        return []
+
+    arrival_time = data.get("arrival_time") or ""
+    stop_name = data.get("stop_name") or data.get("stop_text") or ""
+
+    # 운행종료: 오늘 더 이상 운행하지 않음 → 버스 옵션 미제공
+    if arrival_time in _TERMINAL_ARRIVAL_STATES:
+        return []
+
+    # 출발대기: 차고지 대기 중 → arrivalMin=0으로 표시
+    if arrival_time in _STANDBY_ARRIVAL_STATES:
+        return [{
+            "id": f"arrival-{bus_number}",
+            "busNumber": bus_number,
+            "arrivalMin": 0,
+            "traTimeSec": 30,   # 프론트 필터(> 0) 통과용 최솟값
+            "arrivalMsg": "출발 대기 중",
+            "currentStationName": stop_name,
+            "remainingStops": 0,
+            "busType": 0,
+            "congetion": 0,
+            "isFullFlag": False,
+            "isLastBus": False,
+            "plainNo": "",
+            "isSecond": False,
+            "totalMin": 0,
+            "steps": [],
+        }]
+
+    m = re.search(r"(\d+)\s*분", arrival_time)
+    # 분 숫자가 없으면(곧 도착 등) arrivalMin=0으로 처리
+    arrival_min = int(m.group(1)) if m else 0
+
+    return [{
+        "id": f"arrival-{bus_number}",
+        "busNumber": bus_number,
+        "arrivalMin": arrival_min,
+        "traTimeSec": max(arrival_min * 60, 30),  # 최소 30초 — 프론트 필터 통과
+        "arrivalMsg": arrival_time or f"{bus_number}번 도착 정보",
+        "currentStationName": stop_name,
+        "remainingStops": 0,
+        "busType": 0,
+        "congetion": 0,
+        "isFullFlag": False,
+        "isLastBus": False,
+        "plainNo": "",
+        "isSecond": False,
+        "totalMin": arrival_min,
+        "steps": [],
+    }]
 
 
 def _verify_api_token(request: Request) -> None:

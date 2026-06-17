@@ -9,6 +9,19 @@ class DefaultBusArrivalItem(BaseModel):
     first_arrival_min: int | None = None
     second_arrival_min: int | None = None
     message: str
+    # Seoul Open API 원본 값 — 변환 과정에서 손실되지 않도록 보존
+    raw_arrmsg1: str | None = None       # 도착 메시지 "[N번째전]" 포함
+    raw_arrmsg2: str | None = None
+    raw_congestion1: str | None = None   # 혼잡도 (3=여유, 4=보통, 5=혼잡)
+    raw_congestion2: str | None = None
+    raw_is_last1: str | None = None      # 막차여부 (1=막차)
+    raw_is_last2: str | None = None
+    raw_bus_type1: str | None = None     # 버스 종류 (0=일반, 1=저상, 3=간선급행 등)
+    raw_bus_type2: str | None = None
+    raw_is_full_flag1: str | None = None # 만원여부 (1=만원)
+    raw_is_full_flag2: str | None = None
+    raw_station_nm1: str | None = None   # 현재 버스 위치 정류소명
+    raw_station_nm2: str | None = None
 
 
 class DefaultBusArrivalResponse(BaseModel):

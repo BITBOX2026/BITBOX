@@ -41,10 +41,11 @@ class ValidationResult:
 class RouteSegment:
     """경로의 한 구간(버스 1회 탑승 또는 지하철 1개 노선)을 나타냅니다."""
 
-    vehicle_type: str   # "버스" | "지하철"
-    line: str           # 예: "740번" | "2호선" | "공항철도"
-    start_name: str     # 탑승 정류장/역 이름
-    end_name: str       # 하차 정류장/역 이름
+    vehicle_type: str       # "버스" | "지하철"
+    line: str               # 예: "740번" | "2호선" | "공항철도"
+    start_name: str         # 탑승 정류장/역 이름
+    end_name: str           # 하차 정류장/역 이름
+    time_min: int | None = None  # ODsay subPath.time — 해당 구간 소요 시간(분)
 
 
 @dataclass

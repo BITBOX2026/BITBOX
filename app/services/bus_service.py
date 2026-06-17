@@ -237,6 +237,19 @@ def _build_arrival_item(item: dict[str, str]) -> DefaultBusArrivalItem:
         first_arrival_min=first_arrival_min,
         second_arrival_min=second_arrival_min,
         message=_arrival_message(bus_number, first_arrival_min, item),
+        # Seoul Open API 원본 값 — 변환 과정에서 손실 없이 프론트로 전달
+        raw_arrmsg1=first_item_value(item, ["arrmsg1", "arrMsg1"]) or None,
+        raw_arrmsg2=first_item_value(item, ["arrmsg2", "arrMsg2"]) or None,
+        raw_congestion1=first_item_value(item, ["congestion1", "congetion1"]) or None,
+        raw_congestion2=first_item_value(item, ["congestion2", "congetion2"]) or None,
+        raw_is_last1=first_item_value(item, ["isLast1"]) or None,
+        raw_is_last2=first_item_value(item, ["isLast2"]) or None,
+        raw_bus_type1=first_item_value(item, ["busType1"]) or None,
+        raw_bus_type2=first_item_value(item, ["busType2"]) or None,
+        raw_is_full_flag1=first_item_value(item, ["isFullFlag1"]) or None,
+        raw_is_full_flag2=first_item_value(item, ["isFullFlag2"]) or None,
+        raw_station_nm1=first_item_value(item, ["stationNm1"]) or None,
+        raw_station_nm2=first_item_value(item, ["stationNm2"]) or None,
     )
 
 
@@ -295,30 +308,38 @@ def _arrival_message(bus_number: str, first_arrival_min: int | None, item: dict[
 # ---------------------------------------------------------------------------
 
 def _build_seoul_station_item(item: DefaultBusArrivalItem, index: int) -> SeoulStationArrivalItem:
+    has_second = item.second_arrival_min is not None
     return SeoulStationArrivalItem(
         busRouteId=f"route-{item.bus_number or index}-{index}",
         rtNm=item.bus_number,
         vehId1="1",
         traTime1=str(_minutes_to_seconds(item.first_arrival_min)),
-        busType1="0",
-        isLast1="0",
-        isFullFlag1="0",
-        congestion1="3",
-        arrmsg1=item.message,
-        stationNm1=item.direction,
-        vehId2="2",
+        # 원본값 우선, 없으면 기본값
+        busType1=item.raw_bus_type1 or "0",
+        isLast1=item.raw_is_last1 or "0",
+        isFullFlag1=item.raw_is_full_flag1 or "0",
+        congestion1=item.raw_congestion1 or "3",
+        arrmsg1=item.raw_arrmsg1 or item.message,
+        # 현재 버스 위치 정류소명 우선, 없으면 방향명으로 대체
+        stationNm1=item.raw_station_nm1 or item.direction,
+        # 2번째 버스: 데이터 없으면 vehId2="0"으로 설정해 프론트가 필터링하도록
+        vehId2="2" if has_second else "0",
         traTime2=str(_minutes_to_seconds(item.second_arrival_min)),
-        busType2="0",
-        isLast2="0",
-        isFullFlag2="0",
-        congestion2="3",
-        arrmsg2=_second_arrival_message(item),
-        stationNm2=item.direction,
+        busType2=item.raw_bus_type2 or "0",
+        isLast2=item.raw_is_last2 or "0",
+        isFullFlag2=item.raw_is_full_flag2 or "0",
+        congestion2=item.raw_congestion2 or "3",
+        arrmsg2=item.raw_arrmsg2 or _second_arrival_message(item),
+        stationNm2=item.raw_station_nm2 or item.direction,
     )
 
 
 def _minutes_to_seconds(minutes: int | None) -> int:
-    return 0 if minutes is None else max(minutes, 0) * 60
+    if minutes is None:
+        return 0     # 데이터 없음 → 0 반환 → 프론트 traTime > 0 필터에 걸려 제외됨
+    if minutes <= 0:
+        return 30    # 곧 도착: 30초 → 프론트 필터 통과, arrivalMin = 0 → "곧 도착" 표시
+    return minutes * 60
 
 
 def _second_arrival_message(item: DefaultBusArrivalItem) -> str:

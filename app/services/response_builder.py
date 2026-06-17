@@ -154,16 +154,14 @@ def _build_arrival_message(result: TransportResult) -> str:
 
 def _format_arrival_time(arrival_time: str) -> str:
     """공공데이터 API 도착 문구를 안내 문장에 맞게 정리합니다."""
-    compact = re.fullmatch(r"(\d+)분(?:(\d+)초)?후(?:\[(.+)\])?", arrival_time.strip())
+    compact = re.fullmatch(r"(\d+)분(?:(\d+)초)?후(?:\[.+\])?", arrival_time.strip())
     if compact:
-        minutes, seconds, detail = compact.groups()
+        minutes, seconds = compact.group(1), compact.group(2)
         parts = [f"{minutes}분"]
         if seconds:
             parts.append(f"{seconds}초")
-        text = f"약 {' '.join(parts)} 후"
-        if detail:
-            text = f"{text}, {detail}"
-        return text
+        # "[N번째전]" 같은 정류소 수 표기는 TTS에서 어색하므로 제외
+        return f"약 {' '.join(parts)} 후"
 
     if arrival_time.startswith("약 "):
         return arrival_time

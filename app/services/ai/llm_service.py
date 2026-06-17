@@ -58,6 +58,7 @@ def _load_system_prompt() -> str:
         _system_prompt_cache = TRANSIT_INTENT_SYSTEM_PROMPT
     return _system_prompt_cache
 
+
 @retry(
     retry=retry_if_exception_type(LLMParsingError),
     stop=stop_after_attempt(2),

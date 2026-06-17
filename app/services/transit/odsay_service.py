@@ -233,6 +233,8 @@ def _extract_route_segments(sub_paths: list[dict[str, Any]]) -> list[RouteSegmen
         end_name = sp.get("endName") or ""
         lanes = sp.get("lane") or []
 
+        seg_time = safe_int(sp.get("time"))
+
         if traffic_type == 2:  # 버스
             bus_no = str(lanes[0].get("busNo", "")) if lanes else ""
             if bus_no:
@@ -241,6 +243,7 @@ def _extract_route_segments(sub_paths: list[dict[str, Any]]) -> list[RouteSegmen
                     line=f"{bus_no}번",
                     start_name=start_name,
                     end_name=end_name,
+                    time_min=seg_time,
                 ))
 
         elif traffic_type == 1:  # 지하철
@@ -251,6 +254,7 @@ def _extract_route_segments(sub_paths: list[dict[str, Any]]) -> list[RouteSegmen
                 line=line_name,
                 start_name=start_name,
                 end_name=end_name,
+                time_min=seg_time,
             ))
 
     return segments if segments else None
