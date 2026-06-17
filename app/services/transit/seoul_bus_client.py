@@ -38,6 +38,10 @@ async def request_seoul_bus_payload(
     params: dict[str, str],
     stage: str,
     service_key_param_names: tuple[str, ...] = ("ServiceKey", "serviceKey"),
+    service_key_setting_names: tuple[str, ...] = (
+        "SEOUL_BUS_API_KEY",
+        "PUBLIC_DATA_SERVICE_KEY",
+    ),
 ) -> Any:
     """
     서울시 버스 API를 호출하고 파싱된 응답(JSON dict 또는 XML Element)을 반환합니다.
@@ -45,9 +49,11 @@ async def request_seoul_bus_payload(
     service_key_param_names: 인증키 파라미터명 후보 목록 (API마다 다를 수 있음)
     두 번째 파라미터명으로 재시도할 때 첫 번째가 인증 오류인 경우에만 시도합니다.
     """
-    service_key = _normalize_service_key(get_setting("PUBLIC_DATA_SERVICE_KEY"))
+    service_key = _get_first_service_key(service_key_setting_names)
     if not service_key:
-        raise TransportAPIError("PUBLIC_DATA_SERVICE_KEY가 설정되지 않았습니다.")
+        raise TransportAPIError(
+            f"{' or '.join(service_key_setting_names)} is not configured"
+        )
 
     last_auth_error: tuple[str, str] | None = None
 
@@ -92,6 +98,14 @@ async def request_seoul_bus_payload(
         )
 
     raise TransportAPIError(f"공공데이터 API 오류({stage})")
+
+
+def _get_first_service_key(setting_names: tuple[str, ...]) -> str:
+    for setting_name in setting_names:
+        service_key = _normalize_service_key(get_setting(setting_name))
+        if service_key:
+            return service_key
+    return ""
 
 
 def _parse_response_payload(response: httpx.Response, stage: str) -> Any:

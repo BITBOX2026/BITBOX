@@ -13,7 +13,7 @@ import uuid
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 
-from app.api.schemas import ProcessResponse
+from app.api.schemas import ProcessResponse, UploadCompatResponse
 from app.core.config import settings
 from app.core.logger import get_logger
 from app.core.rate_limiter import limiter
@@ -100,6 +100,32 @@ async def process_audio(request: Request, file: UploadFile = File(...)) -> dict:
         result = build_timeout_error_response()
         result["request_id"] = request_id
         return result
+
+
+@router.post("/upload", response_model=UploadCompatResponse)
+async def upload_audio(request: Request, file: UploadFile = File(...)) -> dict:
+    """Compatibility alias for the existing React frontend."""
+    result = await process_audio(request, file)
+    return _build_upload_compat_response(result)
+
+
+def _build_upload_compat_response(result: dict) -> dict:
+    data = result.get("data") if isinstance(result.get("data"), dict) else {}
+    destination = data.get("destination_text") or data.get("destination")
+    message = str(result.get("message") or destination or "요청을 처리했습니다.")
+
+    return {
+        "success": result.get("status") == "success",
+        "text": data.get("transcript"),
+        "intent": data.get("intent"),
+        "destination": destination,
+        "destination_text": destination,
+        "bus_number": data.get("bus_number"),
+        "message": message,
+        "buses": result.get("buses") if isinstance(result.get("buses"), list) else [],
+        "audio_base64": result.get("audio_base64"),
+        "request_id": result.get("request_id"),
+    }
 
 
 def _verify_api_token(request: Request) -> None:

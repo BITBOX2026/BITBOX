@@ -17,6 +17,8 @@ from app.api.gateway import router as gateway_router
 from app.core.config import settings, validate_required_settings
 from app.core.logger import get_logger
 from app.core.rate_limiter import limiter
+from app.routers.bus import router as bus_router
+from app.routers.station import router as station_router
 from app.services.core.http_client import close_http_client
 from app.services.core.openai_client import close_openai_client
 from app.services.core.settings_helper import is_mock_mode
@@ -51,10 +53,19 @@ if not settings.DEFAULT_ORIGIN_NAME and not settings.DEFAULT_ORIGIN_X and not se
 # CORS_ALLOWED_ORIGINS=* 이면 모든 출처 허용 (개발용)
 # 특정 도메인만 허용하려면 쉼표로 구분: "https://a.com,https://b.com"
 # ---------------------------------------------------------------------------
+_frontend_dev_origins = {
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+}
 _cors_origins = (
-    [o.strip() for o in settings.CORS_ALLOWED_ORIGINS.split(",")]
-    if settings.CORS_ALLOWED_ORIGINS != "*"
-    else ["*"]
+    ["*"]
+    if settings.CORS_ALLOWED_ORIGINS == "*"
+    else sorted(
+        {
+            *[o.strip() for o in settings.CORS_ALLOWED_ORIGINS.split(",") if o.strip()],
+            *(  _frontend_dev_origins if settings.APP_ENV != "prod" else set()  ),
+        }
+    )
 )
 
 # ---------------------------------------------------------------------------
@@ -82,6 +93,8 @@ app.add_middleware(
 
 # API 라우터 등록 — /api/process 엔드포인트
 app.include_router(gateway_router, prefix="/api", tags=["Gateway"])
+app.include_router(bus_router, prefix="/api/bus", tags=["Bus"])
+app.include_router(station_router, prefix="/api/station", tags=["Station"])
 
 
 # ---------------------------------------------------------------------------
@@ -103,6 +116,7 @@ def health_check() -> HealthResponse:
             "kakao": bool(settings.KAKAO_REST_API_KEY),
             "odsay": bool(settings.ODSAY_API_KEY),
             "public_data": bool(settings.PUBLIC_DATA_SERVICE_KEY),
+            "seoul_bus": bool(settings.SEOUL_BUS_API_KEY),
         }
 
     return HealthResponse(**body)

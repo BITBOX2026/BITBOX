@@ -5,25 +5,35 @@
 중복 핸들러 등록을 방지하고, propagate=False로 루트 로거와 분리합니다.
 """
 
+import io
 import logging
+import sys
 
 
 def get_logger(name: str) -> logging.Logger:
     logger = logging.getLogger(name)
 
-    # 이미 핸들러가 등록된 로거는 그대로 반환 — 중복 출력 방지
     if logger.handlers:
         return logger
 
     logger.setLevel(logging.INFO)
 
-    handler = logging.StreamHandler()
+    # Windows CP949 환경에서 한글 로그가 깨지지 않도록 UTF-8 스트림 사용
+    stream = _utf8_stderr()
+    handler = logging.StreamHandler(stream=stream)
     handler.setFormatter(
         logging.Formatter("[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s")
     )
     logger.addHandler(handler)
 
-    # 루트 로거로 전파하지 않음 — 같은 메시지가 두 번 출력되는 현상 방지
     logger.propagate = False
 
     return logger
+
+
+def _utf8_stderr() -> io.TextIOWrapper:
+    """sys.stderr의 바이너리 버퍼를 UTF-8로 감싼 스트림을 반환합니다."""
+    stderr = sys.stderr
+    if hasattr(stderr, "buffer"):
+        return io.TextIOWrapper(stderr.buffer, encoding="utf-8", errors="replace", line_buffering=True)
+    return stderr

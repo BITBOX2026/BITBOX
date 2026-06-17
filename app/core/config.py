@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     KAKAO_REST_API_KEY: str | None = None    # 장소명 → 좌표 변환
     ODSAY_API_KEY: str | None = None         # 대중교통 경로 조회
     PUBLIC_DATA_SERVICE_KEY: str | None = None  # 실시간 버스 도착 정보
+    SEOUL_BUS_API_KEY: str | None = None
 
     # -------------------------------------------------------------------------
     # 기기 설치 위치 (버스 정류장 고정 설치용)
@@ -38,6 +39,8 @@ class Settings(BaseSettings):
     DEFAULT_ORIGIN_Y: str | None = None
     ORIGIN_X: str | None = None  # 하위 호환 유지용 구 변수명
     ORIGIN_Y: str | None = None
+    DEFAULT_BUS_STOP_NAME: str = "잠실역"
+    DEFAULT_BUS_STATION_ID: str | None = None
 
     # -------------------------------------------------------------------------
     # AI 모델 설정
@@ -95,8 +98,8 @@ def validate_required_settings() -> None:
         missing.append("KAKAO_REST_API_KEY")
     if not settings.ODSAY_API_KEY:
         missing.append("ODSAY_API_KEY")
-    if not settings.PUBLIC_DATA_SERVICE_KEY:
-        missing.append("PUBLIC_DATA_SERVICE_KEY")
+    if not settings.PUBLIC_DATA_SERVICE_KEY and not settings.SEOUL_BUS_API_KEY:
+        missing.append("PUBLIC_DATA_SERVICE_KEY or SEOUL_BUS_API_KEY")
 
     if missing:
         raise RuntimeError(

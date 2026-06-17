@@ -1,6 +1,6 @@
 """FastAPI response models for the public API."""
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -38,6 +38,19 @@ class ProcessResponse(BaseModel):
     status: Literal["success", "error"]
     message: str
     data: ProcessDataResponse = Field(default_factory=ProcessDataResponse)
+    audio_base64: str | None = None
+    request_id: str | None = None
+
+
+class UploadCompatResponse(BaseModel):
+    success: bool
+    text: str | None = None
+    intent: str | None = None
+    destination: str | None = None
+    destination_text: str | None = None
+    bus_number: str | None = None
+    message: str
+    buses: list[dict[str, Any]] = Field(default_factory=list)
     audio_base64: str | None = None
     request_id: str | None = None
 

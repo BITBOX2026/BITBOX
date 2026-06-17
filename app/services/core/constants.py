@@ -12,6 +12,7 @@ ODSAY_ROUTE_URL = "https://api.odsay.com/v1/api/searchPubTransPathT"
 KAKAO_KEYWORD_SEARCH_URL = "https://dapi.kakao.com/v2/local/search/keyword.json"
 SEOUL_BUS_ROUTE_SEARCH_URL = "http://ws.bus.go.kr/api/rest/busRouteInfo/getBusRouteList"
 SEOUL_STATION_SEARCH_URL = "http://ws.bus.go.kr/api/rest/stationinfo/getStationByName"
+SEOUL_STATION_ARRIVAL_URL = "http://ws.bus.go.kr/api/rest/stationinfo/getStationByUid"
 SEOUL_ROUTE_STATION_URL = "http://ws.bus.go.kr/api/rest/busRouteInfo/getStaionByRoute"
 SEOUL_BUS_ARRIVAL_URL = "http://ws.bus.go.kr/api/rest/arrive/getArrInfoByRoute"
 
