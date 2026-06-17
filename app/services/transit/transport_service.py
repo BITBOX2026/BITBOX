@@ -28,8 +28,10 @@ logger = get_logger(__name__)
 # ---------------------------------------------------------------------------
 # 경로 캐시 설정
 # 동일한 출발지→목적지 경로를 반복 조회할 때 외부 API 호출을 줄입니다.
+# per-key lock으로 같은 경로를 동시에 요청할 때 캐시 스탬피드를 방지합니다.
 # ---------------------------------------------------------------------------
 _route_cache: dict[str, tuple[TransportResult, float]] = {}
+_route_cache_locks: dict[str, asyncio.Lock] = {}
 _ROUTE_CACHE_TTL = 300       # 캐시 유효 시간: 5분 (초)
 _ROUTE_CACHE_MAX_SIZE = 100  # 최대 캐시 항목 수 — 초과 시 가장 오래된 항목 제거
 
@@ -87,48 +89,51 @@ async def _search_route_with_odsay(parsed: ParsedIntent) -> TransportResult:
     if not parsed.destination_text:
         raise CoordinateResolveError("목적지가 비어 있습니다.")
 
+    # 기본 출발지는 내부적으로 캐싱됨 — lock 밖에서 먼저 resolve
     if parsed.origin_text:
         origin_name = parsed.origin_text.strip()
-
-        # 캐시 확인을 Kakao API 호출보다 먼저 수행 — 반복 요청 시 API 비용 절감
-        cache_key = _make_cache_key(origin_name, parsed.destination_text, parsed.transport_mode)
-        cached = _get_cached_route(cache_key)
-        if cached is not None:
-            logger.debug("경로 캐시 히트: %s → %s", origin_name, parsed.destination_text)
-            return cached
-
-        # 캐시 미스 — 출발지·목적지 좌표를 동시에 조회 (병렬화)
-        (origin_x, origin_y), (destination_x, destination_y) = await asyncio.gather(
-            resolve_place_coordinates(origin_name, "출발지"),
-            resolve_place_coordinates(parsed.destination_text, "목적지"),
-        )
-
+        origin_coords: tuple[float, float] | None = None
     else:
-        # 기기 기본 출발지 사용 (DEFAULT_ORIGIN_NAME 또는 DEFAULT_ORIGIN_X/Y)
-        origin_name, origin_x, origin_y = await resolve_origin(None)
+        origin_name, ox, oy = await resolve_origin(None)
+        origin_coords = (ox, oy)
 
-        cache_key = _make_cache_key(origin_name, parsed.destination_text, parsed.transport_mode)
+    cache_key = _make_cache_key(origin_name, parsed.destination_text, parsed.transport_mode)
+
+    # 1차 캐시 확인 (lock 없이)
+    cached = _get_cached_route(cache_key)
+    if cached is not None:
+        logger.debug("경로 캐시 히트: %s → %s", origin_name, parsed.destination_text)
+        return cached
+
+    # 캐시 미스 — per-key lock으로 동일 경로 요청 직렬화 (캐시 스탬피드 방지)
+    async with _route_cache_locks.setdefault(cache_key, asyncio.Lock()):
         cached = _get_cached_route(cache_key)
         if cached is not None:
-            logger.debug("경로 캐시 히트: %s → %s", origin_name, parsed.destination_text)
             return cached
 
-        # 기본 출발지 좌표는 캐시됨 — 목적지만 Kakao API로 조회
-        destination_x, destination_y = await resolve_place_coordinates(
-            parsed.destination_text, "목적지"
-        )
+        if origin_coords is None:
+            # 출발지·목적지 좌표를 병렬 조회
+            (origin_x, origin_y), (destination_x, destination_y) = await asyncio.gather(
+                resolve_place_coordinates(origin_name, "출발지"),
+                resolve_place_coordinates(parsed.destination_text, "목적지"),
+            )
+        else:
+            origin_x, origin_y = origin_coords
+            destination_x, destination_y = await resolve_place_coordinates(
+                parsed.destination_text, "목적지"
+            )
 
-    result = await search_odsay_route(
-        origin_name=origin_name,
-        origin_x=origin_x,
-        origin_y=origin_y,
-        destination_text=parsed.destination_text,
-        destination_x=destination_x,
-        destination_y=destination_y,
-        transport_mode=parsed.transport_mode,
-    )
-    _set_cached_route(cache_key, result)
-    return result
+        result = await search_odsay_route(
+            origin_name=origin_name,
+            origin_x=origin_x,
+            origin_y=origin_y,
+            destination_text=parsed.destination_text,
+            destination_x=destination_x,
+            destination_y=destination_y,
+            transport_mode=parsed.transport_mode,
+        )
+        _set_cached_route(cache_key, result)
+        return result
 
 
 # ---------------------------------------------------------------------------

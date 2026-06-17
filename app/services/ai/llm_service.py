@@ -1,4 +1,5 @@
 import json
+import os
 import re
 
 from openai import AsyncOpenAI
@@ -23,7 +24,6 @@ def _load_system_prompt() -> str:
     파일이 변경되면(mtime 감지) 자동으로 다시 로드합니다.
     파일이 없거나 비어 있으면 내장 TRANSIT_INTENT_SYSTEM_PROMPT를 사용합니다.
     """
-    import os
     global _system_prompt_cache, _system_prompt_file_mtime
 
     prompt_file = get_setting("LLM_SYSTEM_PROMPT_FILE")

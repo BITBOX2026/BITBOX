@@ -76,10 +76,7 @@ async def get_bus_arrivals_by_station_id(
         return cached
 
     # per-key 락: 같은 ars_id 요청만 직렬화, 다른 정류장 요청은 병렬 가능
-    if ars_id not in _station_locks:
-        _station_locks[ars_id] = asyncio.Lock()
-
-    async with _station_locks[ars_id]:
+    async with _station_locks.setdefault(ars_id, asyncio.Lock()):
         cached = _get_station_cached(ars_id)
         if cached:
             return cached

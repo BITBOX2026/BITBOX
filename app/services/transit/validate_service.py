@@ -38,7 +38,7 @@ def validate_parsed_intent(parsed: ParsedIntent) -> ValidationResult:
     if parsed.intent == "arrival":
         if not parsed.bus_number:
             return ValidationResult(is_valid=False, message="버스 번호를 말씀해 주세요.")
-        if not parsed.stop_text:
+        if not parsed.stop_text and not _has_default_station():
             return ValidationResult(is_valid=False, message="어느 정류장 기준인지 말씀해 주세요.")
 
     return ValidationResult(is_valid=True, message="검증 성공")
@@ -51,3 +51,8 @@ def _has_default_origin() -> bool:
     has_x = bool(get_setting("DEFAULT_ORIGIN_X") or get_setting("ORIGIN_X"))
     has_y = bool(get_setting("DEFAULT_ORIGIN_Y") or get_setting("ORIGIN_Y"))
     return has_x and has_y
+
+
+def _has_default_station() -> bool:
+    """기기에 기본 정류장(설치 위치 정류소 arsId)이 설정되어 있는지 확인합니다."""
+    return bool(get_setting("DEFAULT_BUS_STATION_ID"))

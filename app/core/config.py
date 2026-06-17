@@ -63,14 +63,6 @@ class Settings(BaseSettings):
     TTS_TIMEOUT_SECONDS: int = 8        # TTS 단독 타임아웃 (초)
     ALLOW_KNOWN_PLACE_FALLBACK: bool | None = None
 
-    # -------------------------------------------------------------------------
-    # 라즈베리파이 클라이언트 설정
-    # -------------------------------------------------------------------------
-    API_URL: str = "http://127.0.0.1:8000/api/process"
-    AUDIO_OUTPUT_PATH: str = "recorded_audio.wav"
-    RECORD_SECONDS: int = 5
-    SAMPLE_RATE: int = 16000
-
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

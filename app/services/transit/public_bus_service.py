@@ -15,6 +15,7 @@ from app.services.core.constants import (
 )
 from app.services.core.exceptions import TransportAPIError
 from app.services.core.service_types import ParsedIntent, TransportResult
+from app.services.core.settings_helper import get_setting
 from app.services.transit.seoul_bus_client import request_seoul_bus_payload
 from app.services.transit.seoul_bus_parser import (
     build_route_station,
@@ -33,13 +34,11 @@ async def search_bus_arrival(parsed: ParsedIntent) -> TransportResult:
     """
     버스 번호와 정류장명으로 실시간 도착 정보를 조회합니다.
 
+    stop_text가 없으면 DEFAULT_BUS_STATION_ID(기기 기본 정류장)를 사용합니다.
     조회 실패 시 TransportAPIError를 발생시킵니다.
     """
     if not parsed.bus_number:
         raise TransportAPIError(user_message="버스 번호를 말씀해 주세요.")
-
-    if not parsed.stop_text:
-        raise TransportAPIError(user_message="어느 정류장 기준인지 말씀해 주세요.")
 
     # 1단계: 버스 번호 → 노선 ID
     bus_route = await search_bus_route(parsed.bus_number)
@@ -50,11 +49,22 @@ async def search_bus_arrival(parsed: ParsedIntent) -> TransportResult:
     if not bus_route_id:
         raise TransportAPIError(user_message="해당 버스 노선을 찾지 못했습니다.")
 
-    # 2단계: 노선 경유 정류소에서 사용자가 말한 정류장 검색
-    route_station = await _find_route_station_by_stop_text(
-        bus_route_id=bus_route_id,
-        stop_text=parsed.stop_text,
-    )
+    # 2단계: 노선 경유 정류소에서 정류장 검색
+    # stop_text가 있으면 이름으로 검색, 없으면 DEFAULT_BUS_STATION_ID(arsId)로 검색
+    if parsed.stop_text:
+        route_station = await _find_route_station_by_stop_text(
+            bus_route_id=bus_route_id,
+            stop_text=parsed.stop_text,
+        )
+    else:
+        default_ars_id = str(get_setting("DEFAULT_BUS_STATION_ID") or "").strip()
+        if not default_ars_id:
+            raise TransportAPIError(user_message="어느 정류장 기준인지 말씀해 주세요.")
+        route_station = await _find_route_station_by_ars_id(
+            bus_route_id=bus_route_id,
+            ars_id=default_ars_id,
+        )
+
     if not route_station:
         raise TransportAPIError(
             user_message="해당 노선에서 정류장을 찾지 못했습니다."
@@ -147,6 +157,23 @@ async def get_bus_arrival_time(
             extract_arrival_station_name(first_arrival) or route_station["station_name"]
         ),
     }
+
+
+async def _find_route_station_by_ars_id(
+    bus_route_id: str,
+    ars_id: str,
+) -> dict[str, str] | None:
+    """노선 경유 정류소 목록에서 arsId로 정류소 정보를 찾습니다 (기기 기본 정류장용)."""
+    payload = await request_seoul_bus_payload(
+        SEOUL_ROUTE_STATION_URL,
+        {"busRouteId": bus_route_id},
+        stage="노선 경유 정류소 조회",
+    )
+    for item in extract_items(payload):
+        route_station = build_route_station(item)
+        if route_station and route_station.get("ars_id") == ars_id:
+            return route_station
+    return None
 
 
 async def _find_route_station_by_stop_text(

@@ -172,6 +172,6 @@ def _allow_known_place_fallback() -> bool:
     """운영 환경에서는 Kakao 장애를 내장 좌표로 숨기지 않습니다."""
     explicit = get_setting("ALLOW_KNOWN_PLACE_FALLBACK")
     if explicit is not None:
-        return get_bool_setting("ALLOW_KNOWN_PLACE_FALLBACK", False)
+        return str(explicit).strip().lower() in {"true", "1", "yes", "y", "on"}
 
     return str(get_setting("APP_ENV", "local")).strip().lower() != "prod"

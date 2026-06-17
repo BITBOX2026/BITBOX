@@ -115,8 +115,8 @@ def health_check() -> HealthResponse:
             "openai": bool(settings.OPENAI_API_KEY),
             "kakao": bool(settings.KAKAO_REST_API_KEY),
             "odsay": bool(settings.ODSAY_API_KEY),
-            "public_data": bool(settings.PUBLIC_DATA_SERVICE_KEY),
-            "seoul_bus": bool(settings.SEOUL_BUS_API_KEY),
+            # PUBLIC_DATA_SERVICE_KEY와 SEOUL_BUS_API_KEY 둘 중 하나만 있어도 버스 API 동작
+            "bus_api": bool(settings.PUBLIC_DATA_SERVICE_KEY or settings.SEOUL_BUS_API_KEY),
         }
 
     return HealthResponse(**body)
