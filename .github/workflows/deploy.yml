@@ -1,0 +1,23 @@
+name: Deploy to EC2
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: 3.144.238.75
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            cd /home/ubuntu/BITBOX
+            git pull
+            .venv/bin/pip install -r requirements-backend.txt -q
+            pkill -f "uvicorn app.main:app" || true
+            sleep 1
+            nohup .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 > server_out.log 2> server_err.log &
