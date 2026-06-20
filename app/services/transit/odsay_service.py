@@ -52,6 +52,7 @@ async def search_odsay_route(
     params = {
         "SX": origin_x, "SY": origin_y,
         "EX": destination_x, "EY": destination_y,
+        "SearchPathType": 2,
         "apiKey": api_key,
     }
 
