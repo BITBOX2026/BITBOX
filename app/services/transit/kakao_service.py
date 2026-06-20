@@ -8,6 +8,8 @@ Kakao Local API 클라이언트 — 장소명 → 좌표 변환
 Kakao API 실패 시 KNOWN_PLACE_COORDS(내장 좌표 목록)를 보조로 사용합니다.
 """
 
+import asyncio
+
 import httpx
 
 from app.services.core.constants import (
@@ -25,6 +27,7 @@ from app.services.core.settings_helper import get_bool_setting, get_setting
 
 # 기기 기본 출발지 캐시 — 서버 재시작 전까지 유지
 _default_origin_cache: tuple[str, float, float] | None = None
+_default_origin_lock = asyncio.Lock()
 
 
 @_http_retry
@@ -122,17 +125,19 @@ async def _resolve_default_origin() -> tuple[str, float, float]:
     if _default_origin_cache is not None:
         return _default_origin_cache
 
-    default_name = get_setting("DEFAULT_ORIGIN_NAME")
-    if default_name:
-        # 장소명이 설정된 경우 Kakao API로 좌표 변환
-        x, y = await resolve_place_coordinates(default_name, "기본 출발지")
-        _default_origin_cache = (default_name, x, y)
-        return _default_origin_cache
+    async with _default_origin_lock:
+        if _default_origin_cache is not None:
+            return _default_origin_cache
 
-    # 좌표가 직접 설정된 경우
-    x, y = _get_origin_coordinates_fallback()
-    _default_origin_cache = ("현재 위치", x, y)
-    return _default_origin_cache
+        default_name = get_setting("DEFAULT_ORIGIN_NAME")
+        if default_name:
+            x, y = await resolve_place_coordinates(default_name, "기본 출발지")
+            _default_origin_cache = (default_name, x, y)
+            return _default_origin_cache
+
+        x, y = _get_origin_coordinates_fallback()
+        _default_origin_cache = ("현재 위치", x, y)
+        return _default_origin_cache
 
 
 def _get_origin_coordinates_fallback() -> tuple[float, float]:

@@ -86,13 +86,13 @@ async def _run_pipeline_core(
     try:
         # 1단계: STT — 음성 파일을 한국어 텍스트로 변환
         t0 = time.monotonic()
-        transcript = await transcribe_audio(audio_bytes=audio_bytes, filename=filename)
-        logger.debug("[%s] STT %.2fs", request_id, time.monotonic() - t0)
+        transcript = await transcribe_audio(audio_bytes=audio_bytes, filename=filename, request_id=request_id)
+        logger.info("[%s] STT %.2fs", request_id, time.monotonic() - t0)
 
         # 2단계: LLM — 텍스트를 intent/출발지/목적지/버스번호 등으로 구조화
         t1 = time.monotonic()
-        parsed = await parse_transit_intent(transcript)
-        logger.debug(
+        parsed = await parse_transit_intent(transcript, request_id=request_id)
+        logger.info(
             "[%s] LLM %.2fs — intent=%s confidence=%.2f",
             request_id, time.monotonic() - t1, parsed.intent, parsed.confidence,
         )
@@ -116,8 +116,8 @@ async def _run_pipeline_core(
 
         # 4단계: 교통 API — ODsay 경로 또는 서울버스 도착 정보 조회
         t2 = time.monotonic()
-        transport_result = await search_transport_info(parsed)
-        logger.debug(
+        transport_result = await search_transport_info(parsed, request_id=request_id)
+        logger.info(
             "[%s] Transport %.2fs — source=%s",
             request_id, time.monotonic() - t2, transport_result.source,
         )
@@ -136,6 +136,8 @@ async def _run_pipeline_core(
             transport_mode=transport_result.transport_mode,
             bus_number=transport_result.bus_number,
             arrival_time=transport_result.arrival_time,
+            arrival_time_2=transport_result.arrival_time_2,
+            first_bus_time=transport_result.first_bus_time,
             total_time_min=transport_result.total_time_min,
             payment=transport_result.payment,
             bus_transit_count=transport_result.bus_transit_count,
@@ -216,6 +218,8 @@ def _success_response(
     transport_mode: str | None,
     bus_number: str | None,
     arrival_time: str | None,
+    arrival_time_2: str | None,
+    first_bus_time: str | None,
     total_time_min: int | None,
     payment: int | None,
     bus_transit_count: int | None,
@@ -235,7 +239,9 @@ def _success_response(
             origin=origin, destination=destination,
             stop_text=stop_text, stop_name=stop_name,
             transport_mode=transport_mode, bus_number=bus_number,
-            arrival_time=arrival_time, total_time_min=total_time_min,
+            arrival_time=arrival_time, arrival_time_2=arrival_time_2,
+            first_bus_time=first_bus_time,
+            total_time_min=total_time_min,
             payment=payment, bus_transit_count=bus_transit_count,
             subway_transit_count=subway_transit_count, transfer_count=transfer_count,
             path_type=path_type, route_segments=route_segments,
@@ -285,16 +291,18 @@ def _build_response_data(
     transport_mode: str | None,
     bus_number: str | None,
     arrival_time: str | None,
-    total_time_min: int | None,
-    payment: int | None,
-    bus_transit_count: int | None,
-    subway_transit_count: int | None,
-    transfer_count: int | None,
-    path_type: int | None,
-    route_segments: list[RouteSegment] | None,
-    confidence: float,
-    source: str,
-    needs_confirmation: bool,
+    arrival_time_2: str | None = None,
+    first_bus_time: str | None = None,
+    total_time_min: int | None = None,
+    payment: int | None = None,
+    bus_transit_count: int | None = None,
+    subway_transit_count: int | None = None,
+    transfer_count: int | None = None,
+    path_type: int | None = None,
+    route_segments: list[RouteSegment] | None = None,
+    confidence: float = 0.0,
+    source: str = "none",
+    needs_confirmation: bool = False,
 ) -> dict:
     """성공/오류 응답 모두 사용하는 공통 data 스키마를 반환합니다."""
     return {
@@ -307,6 +315,8 @@ def _build_response_data(
         "transport_mode": transport_mode,
         "bus_number": bus_number,
         "arrival_time": arrival_time,
+        "arrival_time_2": arrival_time_2,
+        "first_bus_time": first_bus_time,
         "total_time_min": total_time_min,
         "payment": payment,
         "bus_transit_count": bus_transit_count,

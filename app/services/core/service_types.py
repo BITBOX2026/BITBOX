@@ -57,7 +57,9 @@ class TransportResult:
     stop_name: str | None = None          # 버스 도착 조회 시 확인된 정류장명
     transport_mode: TransportMode = "unknown"
     bus_number: str | None = None
-    arrival_time: str | None = None       # 실시간 도착 예정 시간 (예: "3분 후")
+    arrival_time: str | None = None       # 첫 번째 버스 실시간 도착 시간 (예: "3분 후")
+    arrival_time_2: str | None = None     # 두 번째 버스 실시간 도착 시간
+    first_bus_time: str | None = None     # 운행종료 시 내일 첫차 시간 (예: "05:30")
     total_time_min: int | None = None     # 예상 소요 시간 (분)
     payment: int | None = None            # 예상 요금 (원)
     bus_transit_count: int | None = None

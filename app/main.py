@@ -28,25 +28,21 @@ _logger = get_logger(__name__)
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    # 시작 시 필수 환경변수 검증 — import 시점이 아닌 서버 기동 시점에 실행
+    validate_required_settings()
+
+    if not settings.DEFAULT_ORIGIN_NAME and not settings.DEFAULT_ORIGIN_X and not settings.ORIGIN_X:
+        _logger.warning(
+            "기본 출발지가 설정되지 않았습니다. "
+            "사용자가 매번 출발지를 말해야 합니다. "
+            ".env에 DEFAULT_ORIGIN_NAME 또는 DEFAULT_ORIGIN_X/Y를 설정하면 자동 출발지를 사용할 수 있습니다."
+        )
+
     try:
         yield
     finally:
         await close_http_client()
         await close_openai_client()
-
-# ---------------------------------------------------------------------------
-# 시작 시 필수 환경변수 검증
-# mock 모드: API 키 없이 실행 가능 / real 모드: 4개 API 키 필수
-# ---------------------------------------------------------------------------
-validate_required_settings()
-
-# 기본 출발지가 전혀 설정되지 않은 경우 경고 — 사용자가 항상 출발지를 말해야 함
-if not settings.DEFAULT_ORIGIN_NAME and not settings.DEFAULT_ORIGIN_X and not settings.ORIGIN_X:
-    _logger.warning(
-        "기본 출발지가 설정되지 않았습니다. "
-        "사용자가 매번 출발지를 말해야 합니다. "
-        ".env에 DEFAULT_ORIGIN_NAME 또는 DEFAULT_ORIGIN_X/Y를 설정하면 자동 출발지를 사용할 수 있습니다."
-    )
 
 # ---------------------------------------------------------------------------
 # CORS 허용 출처 파싱

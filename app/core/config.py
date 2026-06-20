@@ -49,6 +49,7 @@ class Settings(BaseSettings):
     LLM_MODEL: str = "gpt-4o-mini"
     TTS_MODEL: str = "tts-1-hd"
     TTS_VOICE: str = "nova"
+    TTS_SPEED: float = 0.85  # 노인 사용자 대상 — 기본보다 약간 느리게 (0.25~4.0)
     # 파일 경로를 지정하면 내장 프롬프트 대신 해당 파일을 사용합니다.
     LLM_SYSTEM_PROMPT_FILE: str | None = None
 

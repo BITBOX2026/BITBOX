@@ -3,6 +3,8 @@ import os
 import re
 
 from openai import AsyncOpenAI
+
+from app.core.logger import get_logger
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_fixed
 
 from app.services.core.constants import DEFAULT_LLM_MODEL, TRANSIT_INTENT_SYSTEM_PROMPT
@@ -11,6 +13,7 @@ from app.services.core.openai_client import get_openai_client as _get_openai_cli
 from app.services.core.service_types import ParsedIntent
 from app.services.core.settings_helper import get_setting, is_mock_mode
 
+logger = get_logger(__name__)
 
 _system_prompt_cache: str | None = None
 _system_prompt_file_mtime: float | None = None  # 마지막으로 읽은 파일의 수정 시각
@@ -138,11 +141,13 @@ async def _call_llm(client: AsyncOpenAI, llm_model: str, transcript: str) -> Par
     )
 
 
-async def parse_transit_intent(transcript: str) -> ParsedIntent:
+async def parse_transit_intent(transcript: str, request_id: str = "") -> ParsedIntent:
     """STT 문장을 교통 안내용 intent JSON 구조로 변환합니다."""
 
     if not transcript or not transcript.strip():
         return ParsedIntent()
+
+    logger.info("[%s] LLM 분석 시작: transcript=%s", request_id, transcript[:50])
 
     if is_mock_mode():
         return _mock_parse_transit_intent(transcript)

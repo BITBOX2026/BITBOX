@@ -7,15 +7,19 @@ OpenAI Whisper API를 사용하며, mock 모드에서는 API 호출 없이 고�
 
 import io
 
+from app.core.logger import get_logger
 from app.services.core.constants import DEFAULT_STT_MODEL
 from app.services.core.exceptions import STTProcessingError
 from app.services.core.openai_client import get_openai_client as _get_openai_client
 from app.services.core.settings_helper import get_setting, is_mock_mode
 
+logger = get_logger(__name__)
+
 
 async def transcribe_audio(
     audio_bytes: bytes,
     filename: str = "audio.wav",
+    request_id: str = "",
 ) -> str:
     """
     음성 bytes를 한국어 텍스트로 변환합니다.
@@ -26,6 +30,8 @@ async def transcribe_audio(
 
     if not audio_bytes:
         raise STTProcessingError("음성 파일이 비어 있습니다.")
+
+    logger.info("[%s] STT 변환 시작: filename=%s", request_id, filename)
 
     if is_mock_mode():
         return "서울역에서 강남역 가는 버스 알려줘"

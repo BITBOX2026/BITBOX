@@ -19,6 +19,9 @@ _SPECIAL_ARRIVAL_TEXTS: dict[str, str] = {
     "운행종료": "운행이 종료되었습니다.",
 }
 
+# 오늘 더 이상 운행하지 않는 상태 코드 (두 번째 버스 안내 제외에 사용)
+_TERMINAL_ARRIVAL_STATES = {"운행종료"}
+
 
 def build_user_message(
     parsed: ParsedIntent,
@@ -75,30 +78,17 @@ def _build_segment_guidance(segments: list[RouteSegment]) -> list[str]:
             f"{seg.end_name}까지 가실 수 있습니다."
         ]
 
-    parts: list[str] = []
-
-    # 첫 번째 구간 — 탑승 안내
+    # 환승이 있는 경로 — 첫 탑승 수단과 최종 목적지만 안내
+    # 중간 환승 안내는 TTS가 너무 길어져 노인 사용자가 기억하기 어렵기 때문
     first = segments[0]
-    label = _vehicle_label(first)
-    parts.append(f"{first.start_name}에서 {label}{_josa_reul(label)} 타세요.")
-
-    # 중간 환승 구간 (첫 번째와 마지막 제외)
-    for i in range(1, len(segments) - 1):
-        prev = segments[i - 1]
-        cur = segments[i]
-        label = _vehicle_label(cur)
-        parts.append(f"{prev.end_name}에서 내려 {label}{_josa_ro(label)} 환승하세요.")
-
-    # 마지막 구간 — 도착 안내
-    prev = segments[-2]
     last = segments[-1]
-    label = _vehicle_label(last)
-    parts.append(
-        f"{prev.end_name}에서 내려 {label}{_josa_ro(label)} 환승하시면 "
-        f"{last.end_name}에 도착합니다."
-    )
-
-    return parts
+    label = _vehicle_label(first)
+    transfer_count = len(segments) - 1
+    transfer_text = f"{transfer_count}번 환승 후 " if transfer_count > 1 else "환승 후 "
+    return [
+        f"{first.start_name}에서 {label}{_josa_reul(label)} 타세요. "
+        f"{transfer_text}{last.end_name}까지 가실 수 있습니다."
+    ]
 
 
 def _build_fallback_guidance(result: TransportResult) -> str:
@@ -144,12 +134,24 @@ def _build_arrival_message(result: TransportResult) -> str:
     # 출발대기 / 곧 도착 / 운행종료 등 특수 상태 처리
     special = _SPECIAL_ARRIVAL_TEXTS.get(result.arrival_time)
     if special:
-        return f"{result.stop_name} 정류장 기준 {result.bus_number}번 버스는 {special}"
+        base = f"{result.stop_name} 정류장 기준 {result.bus_number}번 버스는 {special}"
+        if result.arrival_time == "운행종료" and result.first_bus_time:
+            base += f" 내일 첫차는 {result.first_bus_time}입니다."
+        return base
 
-    return (
+    message = (
         f"{result.stop_name} 정류장 기준 {result.bus_number}번 버스는 "
         f"{_format_arrival_time(result.arrival_time)} 도착 예정입니다."
     )
+
+    if result.arrival_time_2:
+        second_special = _SPECIAL_ARRIVAL_TEXTS.get(result.arrival_time_2)
+        if second_special:
+            message += f" 다음 버스는 {second_special}"
+        elif result.arrival_time_2 not in _TERMINAL_ARRIVAL_STATES:
+            message += f" 다음 버스는 {_format_arrival_time(result.arrival_time_2)} 도착합니다."
+
+    return message
 
 
 def _format_arrival_time(arrival_time: str) -> str:

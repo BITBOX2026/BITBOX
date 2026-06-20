@@ -5,6 +5,7 @@
 API 버전이나 응답 형식에 따라 필드명이 다를 수 있어 여러 후보 이름을 순서대로 시도합니다.
 """
 
+import re
 from collections.abc import Callable
 from typing import Any
 from xml.etree import ElementTree
@@ -87,29 +88,29 @@ def first_item_value(item: dict[str, str], names: list[str]) -> str | None:
 
 
 def extract_arrival_time(item: dict[str, str]) -> str | None:
-    """
-    서울시 도착 응답에서 사용자에게 보여줄 도착 시간 문자열을 추출합니다.
+    """첫 번째 버스 도착 시간을 반환합니다."""
+    first, _ = extract_arrival_times(item)
+    return first
 
-    arrmsg(도착 메시지)를 우선하되, 실제 도착 정보가 없을 때만 "출발대기"를 반환합니다.
-    메시지가 없으면 traTime(초 단위 소요 시간)을 분 단위로 변환합니다.
-    """
-    departure_waiting: str | None = None
 
-    for message_key, time_key in [("arrmsg1", "traTime1"), ("arrmsg2", "traTime2")]:
-        arrival_message = first_item_value(item, [message_key])
-        if arrival_message:
-            if arrival_message == "출발대기":
-                departure_waiting = departure_waiting or arrival_message
-            else:
-                return arrival_message
+def extract_arrival_times(item: dict[str, str]) -> tuple[str | None, str | None]:
+    """첫 번째·두 번째 버스 도착 시간을 반환합니다."""
+    return (
+        _parse_single_arrival(item, "arrmsg1", "traTime1"),
+        _parse_single_arrival(item, "arrmsg2", "traTime2"),
+    )
 
-        # 초 단위 소요 시간을 분으로 올림 변환 (0초는 제외)
-        travel_time = safe_int(first_item_value(item, [time_key]))
-        if travel_time is not None and travel_time > 0:
-            minutes = max((travel_time + 59) // 60, 1)
-            return f"{minutes}분 후"
 
-    return departure_waiting
+def _parse_single_arrival(item: dict[str, str], msg_key: str, time_key: str) -> str | None:
+    """특정 arrmsg/traTime 쌍에서 도착 시간 문자열을 추출합니다."""
+    message = first_item_value(item, [msg_key])
+    if message and message != "출발대기":
+        return message
+    travel_time = safe_int(first_item_value(item, [time_key]))
+    if travel_time is not None and travel_time > 0:
+        minutes = max((travel_time + 59) // 60, 1)
+        return f"{minutes}분 후"
+    return message or None  # "출발대기" 또는 None
 
 
 def extract_arrival_station_name(item: dict[str, str]) -> str | None:
@@ -189,3 +190,29 @@ def safe_int(value: object) -> int | None:
 def is_night_bus_number(bus_number: str) -> bool:
     """야간버스 번호는 N으로 시작합니다 (예: N73, N26)."""
     return bus_number.strip().upper().startswith("N")
+
+
+def parse_first_bus_time(raw: str | None) -> str | None:
+    """
+    서울버스 API의 firstBusTm 필드를 HH:MM 형식으로 변환합니다.
+
+    API마다 포맷이 다릅니다:
+    - "0500"           → HHMM
+    - "050000"         → HHMMSS
+    - "20240620050000" → YYYYMMDDHHmmSS
+    """
+    if not raw:
+        return None
+    digits = re.sub(r"\D", "", raw)
+    if len(digits) >= 12:
+        hh, mm = digits[8:10], digits[10:12]
+    elif len(digits) >= 4:
+        hh, mm = digits[0:2], digits[2:4]
+    else:
+        return None
+    if not hh.isdigit() or not mm.isdigit():
+        return None
+    h, m = int(hh), int(mm)
+    if not (0 <= h <= 23 and 0 <= m <= 59):
+        return None
+    return f"{h:02d}:{m:02d}"

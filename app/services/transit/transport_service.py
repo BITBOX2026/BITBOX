@@ -14,6 +14,7 @@ intent별 처리:
 
 import asyncio
 import time
+from dataclasses import replace
 
 from app.core.logger import get_logger
 from app.services.core.exceptions import CoordinateResolveError, TransportAPIError
@@ -21,7 +22,7 @@ from app.services.core.service_types import ParsedIntent, RouteSegment, Transpor
 from app.services.core.settings_helper import is_mock_mode
 from app.services.transit.kakao_service import resolve_origin, resolve_place_coordinates
 from app.services.transit.odsay_service import search_odsay_route
-from app.services.transit.public_bus_service import search_bus_arrival
+from app.services.transit.public_bus_service import fetch_arrival_at_default_stop, search_bus_arrival
 
 logger = get_logger(__name__)
 
@@ -36,14 +37,35 @@ _ROUTE_CACHE_TTL = 300       # 캐시 유효 시간: 5분 (초)
 _ROUTE_CACHE_MAX_SIZE = 100  # 최대 캐시 항목 수 — 초과 시 가장 오래된 항목 제거
 
 
-async def search_transport_info(parsed: ParsedIntent) -> TransportResult:
+async def search_transport_info(parsed: ParsedIntent, request_id: str = "") -> TransportResult:
     """검증된 intent를 바탕으로 교통 정보를 조회합니다."""
+
+    logger.info("[%s] Transport 조회 시작: intent=%s", request_id, parsed.intent)
 
     if is_mock_mode():
         return _mock_transport_result(parsed)
 
     if parsed.intent == "route":
-        return await _search_route_with_odsay(parsed)
+        result = await _search_route_with_odsay(parsed)
+        # 기본 정류장 출발일 때 실시간 도착 시간을 공공데이터포털로 보강
+        if result.bus_number and parsed.origin_text is None:
+            try:
+                arrival_time, arrival_time_2 = await asyncio.wait_for(
+                    fetch_arrival_at_default_stop(result.bus_number),
+                    timeout=5.0,
+                )
+                updates = {}
+                if arrival_time:
+                    updates["arrival_time"] = arrival_time
+                if arrival_time_2:
+                    updates["arrival_time_2"] = arrival_time_2
+                if updates:
+                    result = replace(result, **updates)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.debug("[%s] 실시간 도착 보강 실패 (무시): %s", request_id, exc)
+        return result
 
     if parsed.intent == "arrival":
         return await search_bus_arrival(parsed)
@@ -64,19 +86,23 @@ def _get_cached_route(key: str) -> TransportResult | None:
     if entry is None:
         return None
     result, ts = entry
-    # TTL 만료 시 캐시에서 제거
     if time.monotonic() - ts > _ROUTE_CACHE_TTL:
-        del _route_cache[key]
+        _evict_cache_entry(key)
         return None
     return result
 
 
 def _set_cached_route(key: str, result: TransportResult) -> None:
-    # 최대 크기 초과 시 가장 오래된(타임스탬프가 가장 작은) 항목을 제거
     if len(_route_cache) >= _ROUTE_CACHE_MAX_SIZE:
         oldest_key = min(_route_cache, key=lambda k: _route_cache[k][1])
-        del _route_cache[oldest_key]
+        _evict_cache_entry(oldest_key)
     _route_cache[key] = (result, time.monotonic())
+
+
+def _evict_cache_entry(key: str) -> None:
+    """캐시 항목과 대응하는 Lock을 함께 제거합니다."""
+    _route_cache.pop(key, None)
+    _route_cache_locks.pop(key, None)
 
 
 # ---------------------------------------------------------------------------

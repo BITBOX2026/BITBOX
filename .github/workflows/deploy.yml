@@ -11,13 +11,15 @@ jobs:
       - name: Deploy to EC2
         uses: appleboy/ssh-action@v1.0.3
         with:
-          host: 3.144.238.75
+          host: ${{ secrets.EC2_HOST }}
           username: ubuntu
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
             cd /home/ubuntu/BITBOX
-            git pull
+            git pull origin backend
             .venv/bin/pip install -r requirements-backend.txt -q
-            pkill -f "uvicorn app.main:app" || true
-            sleep 1
+            pkill -SIGTERM -f "uvicorn app.main:app" || true
+            for i in $(seq 1 10); do pgrep -f "uvicorn app.main:app" || break; sleep 1; done
             nohup .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 > server_out.log 2> server_err.log &
+            sleep 3
+            curl -sf http://localhost:8000/health || { echo "Health check failed"; exit 1; }

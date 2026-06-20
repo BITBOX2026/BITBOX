@@ -16,10 +16,13 @@ from xml.etree import ElementTree
 
 import httpx
 
+from app.core.logger import get_logger
 from app.services.core.exceptions import TransportAPIError
 from app.services.core.http_client import get_http_client
 from app.services.core.http_utils import http_retry as _http_retry
 from app.services.core.settings_helper import get_setting
+
+logger = get_logger(__name__)
 
 # 서울시 버스 API가 성공으로 반환하는 결과 코드 목록
 SUCCESS_CODES = {"0", "00", "NORMAL_CODE", "INFO-000", "SUCCESS"}
@@ -69,6 +72,8 @@ async def request_seoul_bus_payload(
             payload = _parse_response_payload(response, stage)
 
             code, message = extract_result_code_message(payload)
+            if code is None:
+                logger.debug("공공데이터 API 응답에 resultCode 없음 (%s) — 성공으로 간주", stage)
             if code and not is_success_code(code):
                 message = message or "공공데이터 API 오류"
 

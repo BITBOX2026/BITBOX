@@ -60,14 +60,15 @@ async def process_audio(request: Request, file: UploadFile = File(...)) -> dict:
     # 파일 크기 확인 (기본 10MB)
     max_size = settings.MAX_AUDIO_SIZE_MB * 1024 * 1024
     audio_bytes = await file.read(max_size + 1)
+
+    if not audio_bytes:
+        raise HTTPException(status_code=400, detail="오디오 파일이 비어 있습니다.")
+
     if len(audio_bytes) > max_size:
         raise HTTPException(
             status_code=413,
             detail=f"오디오 파일 크기는 {settings.MAX_AUDIO_SIZE_MB}MB 이하여야 합니다.",
         )
-
-    if not audio_bytes:
-        raise HTTPException(status_code=400, detail="오디오 파일이 비어 있습니다.")
 
     if not _looks_like_supported_audio(content_type, audio_bytes):
         raise HTTPException(
@@ -104,6 +105,7 @@ async def process_audio(request: Request, file: UploadFile = File(...)) -> dict:
 
 
 @router.post("/upload", response_model=UploadCompatResponse)
+@limiter.limit("10/minute")
 async def upload_audio(request: Request, file: UploadFile = File(...)) -> dict:
     """Compatibility alias for the existing React frontend."""
     result = await process_audio(request, file)
@@ -188,12 +190,16 @@ def _build_buses_from_route(data: dict) -> list[dict]:
 
     origin_stop = steps[0]["fromStop"] if steps else (data.get("origin") or "")
 
+    arrival_time = data.get("arrival_time") or ""
+    m = re.search(r"(\d+)\s*분", arrival_time)
+    arrival_min = int(m.group(1)) if m else 0
+
     return [{
         "id": f"route-{display_bus}-0",
         "busNumber": display_bus,
-        "arrivalMin": 0,
-        "traTimeSec": 60,   # 프론트 필터(traTime > 0) 통과용 최솟값
-        "arrivalMsg": f"{display_bus} 탑승 예정",
+        "arrivalMin": arrival_min,
+        "traTimeSec": max(arrival_min * 60, 60),
+        "arrivalMsg": arrival_time or f"{display_bus} 탑승 예정",
         "currentStationName": origin_stop,
         "remainingStops": 0,
         "busType": 0,
@@ -220,19 +226,36 @@ def _build_buses_from_arrival(data: dict) -> list[dict]:
         return []
 
     arrival_time = data.get("arrival_time") or ""
+    arrival_time_2 = data.get("arrival_time_2") or ""
     stop_name = data.get("stop_name") or data.get("stop_text") or ""
 
-    # 운행종료: 오늘 더 이상 운행하지 않음 → 버스 옵션 미제공
     if arrival_time in _TERMINAL_ARRIVAL_STATES:
         return []
 
-    # 출발대기: 차고지 대기 중 → arrivalMin=0으로 표시
+    buses = []
+    if arrival_time:
+        buses.append(_make_arrival_bus_entry(bus_number, arrival_time, stop_name, is_second=False))
+    if arrival_time_2 and arrival_time_2 not in _TERMINAL_ARRIVAL_STATES:
+        buses.append(_make_arrival_bus_entry(bus_number, arrival_time_2, stop_name, is_second=True))
+
+    return buses
+
+
+def _make_arrival_bus_entry(
+    bus_number: str,
+    arrival_time: str,
+    stop_name: str,
+    is_second: bool,
+) -> dict:
+    """단일 버스 도착 항목을 프론트 BusOption 형식으로 생성합니다."""
+    suffix = "-2" if is_second else ""
+
     if arrival_time in _STANDBY_ARRIVAL_STATES:
-        return [{
-            "id": f"arrival-{bus_number}",
+        return {
+            "id": f"arrival-{bus_number}{suffix}",
             "busNumber": bus_number,
             "arrivalMin": 0,
-            "traTimeSec": 30,   # 프론트 필터(> 0) 통과용 최솟값
+            "traTimeSec": 30,
             "arrivalMsg": "출발 대기 중",
             "currentStationName": stop_name,
             "remainingStops": 0,
@@ -241,20 +264,19 @@ def _build_buses_from_arrival(data: dict) -> list[dict]:
             "isFullFlag": False,
             "isLastBus": False,
             "plainNo": "",
-            "isSecond": False,
+            "isSecond": is_second,
             "totalMin": 0,
             "steps": [],
-        }]
+        }
 
     m = re.search(r"(\d+)\s*분", arrival_time)
-    # 분 숫자가 없으면(곧 도착 등) arrivalMin=0으로 처리
     arrival_min = int(m.group(1)) if m else 0
 
-    return [{
-        "id": f"arrival-{bus_number}",
+    return {
+        "id": f"arrival-{bus_number}{suffix}",
         "busNumber": bus_number,
         "arrivalMin": arrival_min,
-        "traTimeSec": max(arrival_min * 60, 30),  # 최소 30초 — 프론트 필터 통과
+        "traTimeSec": max(arrival_min * 60, 30),
         "arrivalMsg": arrival_time or f"{bus_number}번 도착 정보",
         "currentStationName": stop_name,
         "remainingStops": 0,
@@ -263,10 +285,10 @@ def _build_buses_from_arrival(data: dict) -> list[dict]:
         "isFullFlag": False,
         "isLastBus": False,
         "plainNo": "",
-        "isSecond": False,
+        "isSecond": is_second,
         "totalMin": arrival_min,
         "steps": [],
-    }]
+    }
 
 
 def _verify_api_token(request: Request) -> None:
