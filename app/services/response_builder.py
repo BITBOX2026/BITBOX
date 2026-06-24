@@ -70,25 +70,38 @@ def _build_segment_guidance(segments: list[RouteSegment]) -> list[str]:
     if not segments:
         return []
 
-    if len(segments) == 1:
-        seg = segments[0]
+    transit = [s for s in segments if s.vehicle_type != "도보"]
+    last_walk = segments[-1] if segments[-1].vehicle_type == "도보" else None
+
+    if not transit:
+        # 도보만 있는 경로
+        total_min = sum(s.time_min or 0 for s in segments)
+        return [f"목적지까지 도보로 약 {total_min}분 소요됩니다."]
+
+    if len(transit) == 1:
+        seg = transit[0]
         label = _vehicle_label(seg)
-        return [
+        parts = [
             f"{seg.start_name}에서 {label}{_josa_reul(label)} 타시면 "
-            f"{seg.end_name}까지 가실 수 있습니다."
+            f"{seg.end_name}에 내리세요."
+        ]
+    else:
+        # 환승이 있는 경로 — 첫 탑승 수단과 최종 하차역만 안내
+        # 중간 환승 안내는 TTS가 너무 길어져 노인 사용자가 기억하기 어렵기 때문
+        first = transit[0]
+        last_transit = transit[-1]
+        label = _vehicle_label(first)
+        transfer_count = len(transit) - 1
+        transfer_text = f"{transfer_count}번 환승 후 " if transfer_count > 1 else "환승 후 "
+        parts = [
+            f"{first.start_name}에서 {label}{_josa_reul(label)} 타세요. "
+            f"{transfer_text}{last_transit.end_name}에 내리세요."
         ]
 
-    # 환승이 있는 경로 — 첫 탑승 수단과 최종 목적지만 안내
-    # 중간 환승 안내는 TTS가 너무 길어져 노인 사용자가 기억하기 어렵기 때문
-    first = segments[0]
-    last = segments[-1]
-    label = _vehicle_label(first)
-    transfer_count = len(segments) - 1
-    transfer_text = f"{transfer_count}번 환승 후 " if transfer_count > 1 else "환승 후 "
-    return [
-        f"{first.start_name}에서 {label}{_josa_reul(label)} 타세요. "
-        f"{transfer_text}{last.end_name}까지 가실 수 있습니다."
-    ]
+    if last_walk and last_walk.time_min:
+        parts.append(f"이후 약 {last_walk.time_min}분 걸어가시면 됩니다.")
+
+    return parts
 
 
 def _build_fallback_guidance(result: TransportResult) -> str:
@@ -101,10 +114,7 @@ def _build_fallback_guidance(result: TransportResult) -> str:
             f"{result.destination}까지 가실 수 있습니다."
         )
 
-    if result.transport_mode == "subway":
-        return f"{result.origin}에서 {result.destination} 방향 지하철을 이용하시면 됩니다."
-
-    return f"{result.origin}에서 {result.destination}까지 버스와 지하철을 이용하시면 됩니다."
+    return f"{result.origin}에서 {result.destination}까지 가는 경로를 찾지 못했습니다."
 
 
 def _build_time_payment(total_time_min: int | None, payment: int | None) -> str:

@@ -18,6 +18,7 @@ from app.core.config import settings, validate_required_settings
 from app.core.logger import get_logger
 from app.core.rate_limiter import limiter
 from app.routers.bus import router as bus_router
+from app.routers.place import router as place_router
 from app.routers.station import router as station_router
 from app.services.core.http_client import close_http_client
 from app.services.core.openai_client import close_openai_client
@@ -90,6 +91,7 @@ app.add_middleware(
 # API 라우터 등록 — /api/process 엔드포인트
 app.include_router(gateway_router, prefix="/api", tags=["Gateway"])
 app.include_router(bus_router, prefix="/api/bus", tags=["Bus"])
+app.include_router(place_router, prefix="/api/places", tags=["Places"])
 app.include_router(station_router, prefix="/api/station", tags=["Station"])
 
 

@@ -46,6 +46,10 @@ class RouteSegment:
     start_name: str         # 탑승 정류장/역 이름
     end_name: str           # 하차 정류장/역 이름
     time_min: int | None = None  # ODsay subPath.time — 해당 구간 소요 시간(분)
+    start_x: float | None = None  # 탑승 정류장 경도 (Kakao 지도용)
+    start_y: float | None = None  # 탑승 정류장 위도
+    end_x: float | None = None    # 하차 정류장 경도
+    end_y: float | None = None    # 하차 정류장 위도
 
 
 @dataclass
@@ -54,6 +58,10 @@ class TransportResult:
 
     origin: str | None = None
     destination: str | None = None
+    origin_x: float | None = None         # 출발지 경도 (Kakao 지도용)
+    origin_y: float | None = None         # 출발지 위도
+    destination_x: float | None = None    # 목적지 경도
+    destination_y: float | None = None    # 목적지 위도
     stop_name: str | None = None          # 버스 도착 조회 시 확인된 정류장명
     transport_mode: TransportMode = "unknown"
     bus_number: str | None = None

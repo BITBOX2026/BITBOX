@@ -27,6 +27,7 @@ from app.services.transit.seoul_bus_parser import (
     find_first,
     first_item_value,
     is_matching_bus_route,
+    normalize_token,
     parse_first_bus_time,
 )
 
@@ -158,7 +159,11 @@ async def get_bus_arrival_time(
 
     items = extract_items(payload)
     if not items:
-        return {"arrival_time": None, "arrival_time_2": None, "station_name": route_station["station_name"]}
+        return {
+            "arrival_time": None,
+            "arrival_time_2": None,
+            "station_name": route_station["station_name"],
+        }
 
     first_arrival = items[0]
     arrival_time, arrival_time_2 = extract_arrival_times(first_arrival)
@@ -171,16 +176,17 @@ async def get_bus_arrival_time(
     }
 
 
-async def fetch_arrival_at_default_stop(bus_number: str) -> tuple[str | None, str | None]:
-    """기기 기본 정류장(DEFAULT_BUS_STATION_ID)에서 버스 실시간 도착 시간을 조회합니다.
+async def fetch_arrival_at_stop(
+    bus_number: str,
+    stop_name: str,
+) -> tuple[str | None, str | None]:
+    """특정 정류장에서 특정 버스의 실시간 도착 시간을 조회합니다.
+
+    경로 결과의 첫 번째 버스 탑승 정류장 기준으로 도착 시간을 가져올 때 사용합니다.
 
     Returns:
         (arrival_time, arrival_time_2) — 첫 번째·두 번째 버스 도착 시간
     """
-    default_ars_id = str(get_setting("DEFAULT_BUS_STATION_ID") or "").strip()
-    if not default_ars_id:
-        return None, None
-
     bus_route = await search_bus_route(bus_number)
     if not bus_route:
         return None, None
@@ -189,7 +195,10 @@ async def fetch_arrival_at_default_stop(bus_number: str) -> tuple[str | None, st
     if not bus_route_id:
         return None, None
 
-    route_station = await _find_route_station_by_ars_id(bus_route_id, default_ars_id)
+    route_station = await _find_route_station_by_stop_text(
+        bus_route_id=bus_route_id,
+        stop_text=stop_name,
+    )
     if not route_station:
         return None, None
 
@@ -200,6 +209,45 @@ async def fetch_arrival_at_default_stop(bus_number: str) -> tuple[str | None, st
         station_name=route_station["station_name"],
     )
     return arrival.get("arrival_time"), arrival.get("arrival_time_2")
+
+
+async def fetch_arrival_at_default_stop(bus_number: str) -> tuple[str | None, str | None]:
+    """기기 기본 정류장(DEFAULT_BUS_STATION_ID)에서 버스 실시간 도착 시간을 조회합니다.
+
+    getStationByUid(arsId)로 정류장 전체 버스를 한 번에 가져온 뒤
+    버스 번호로 필터링합니다. route 기반 3-step 조회보다 단순하고 신뢰성이 높습니다.
+
+    Returns:
+        (arrival_time, arrival_time_2) — 첫 번째·두 번째 버스 도착 시간
+    """
+    from app.services.bus_service import get_bus_arrivals_by_station_id
+
+    default_ars_id = str(get_setting("DEFAULT_BUS_STATION_ID") or "").strip()
+    if not default_ars_id:
+        return None, None
+
+    response = await get_bus_arrivals_by_station_id(default_ars_id)
+    if not response.success:
+        return None, None
+
+    target = normalize_token(bus_number)
+    for item in response.items:
+        if normalize_token(item.bus_number) != target:
+            continue
+        return (
+            _arrmsg_or_minutes(item.raw_arrmsg1, item.first_arrival_min),
+            _arrmsg_or_minutes(item.raw_arrmsg2, item.second_arrival_min),
+        )
+
+    return None, None
+
+
+def _arrmsg_or_minutes(raw_arrmsg: str | None, minutes: int | None) -> str | None:
+    if raw_arrmsg:
+        return raw_arrmsg
+    if minutes is None:
+        return None
+    return "곧 도착" if minutes <= 0 else f"{minutes}분 후"
 
 
 async def _find_route_station_by_ars_id(

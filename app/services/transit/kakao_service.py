@@ -31,12 +31,24 @@ _default_origin_lock = asyncio.Lock()
 
 
 @_http_retry
-async def _kakao_fetch(kakao_key: str, place_text: str) -> dict:
+async def _kakao_fetch(
+    kakao_key: str,
+    place_text: str,
+    x: float | None = None,
+    y: float | None = None,
+    size: int = 1,
+) -> dict:
     """Kakao Local 키워드 검색 API를 호출합니다. 실패 시 자동 재시도합니다."""
+    params: dict = {"query": place_text, "size": size}
+    if x is not None and y is not None:
+        # 기기 위치 기준으로 가장 가까운 결과를 반환 — 동명이인 장소명 오인식 방지
+        params["x"] = x
+        params["y"] = y
+        params["sort"] = "distance"
     response = await get_http_client().get(
         KAKAO_KEYWORD_SEARCH_URL,
         headers={"Authorization": f"KakaoAK {kakao_key}"},
-        params={"query": place_text, "size": 1},
+        params=params,
     )
     response.raise_for_status()
     return response.json()
@@ -74,8 +86,10 @@ async def _resolve_via_kakao(place_text: str, label: str) -> tuple[float, float]
     if not kakao_key:
         raise TransportAPIError("KAKAO_REST_API_KEY가 설정되지 않았습니다.")
 
+    device_x, device_y = _get_device_coordinates()
+
     try:
-        payload = await _kakao_fetch(kakao_key, place_text)
+        payload = await _kakao_fetch(kakao_key, place_text, device_x, device_y)
 
     except httpx.HTTPStatusError as exc:
         raise TransportAPIError(
@@ -101,6 +115,42 @@ async def _resolve_via_kakao(place_text: str, label: str) -> tuple[float, float]
 
     _validate_korea_coordinates(longitude, latitude, label)
     return longitude, latitude
+
+
+async def search_place_suggestions(
+    query: str,
+    max_results: int = 5,
+) -> list[dict]:
+    """
+    장소명 자동완성 후보를 반환합니다.
+
+    Kakao 키워드 검색으로 최대 max_results개 결과를 가져와
+    [{"name": ..., "address": ..., "x": ..., "y": ...}, ...] 형태로 반환합니다.
+    결과가 없거나 API 오류면 빈 리스트를 반환합니다.
+    """
+    kakao_key = get_setting("KAKAO_REST_API_KEY")
+    if not kakao_key or not query.strip():
+        return []
+
+    device_x, device_y = _get_device_coordinates()
+
+    try:
+        payload = await _kakao_fetch(
+            kakao_key, query.strip(), device_x, device_y, size=max_results
+        )
+    except (httpx.HTTPStatusError, httpx.RequestError):
+        return []
+
+    return [
+        {
+            "name": doc.get("place_name", ""),
+            "address": doc.get("road_address_name") or doc.get("address_name") or "",
+            "x": doc.get("x"),
+            "y": doc.get("y"),
+        }
+        for doc in payload.get("documents", [])
+        if doc.get("place_name")
+    ]
 
 
 async def resolve_origin(origin_text: str | None) -> tuple[str, float, float]:
@@ -171,6 +221,27 @@ def _validate_korea_coordinates(longitude: float, latitude: float, label: str) -
             f"{label} 좌표가 대한민국 서비스 범위를 벗어났습니다. "
             f"경도={longitude}, 위도={latitude}"
         )
+
+
+def _get_device_coordinates() -> tuple[float | None, float | None]:
+    """기기 설치 위치의 (경도, 위도)를 반환합니다.
+
+    캐시된 기본 출발지 좌표를 우선 사용하고, 없으면 환경변수에서 읽습니다.
+    좌표를 알 수 없으면 (None, None)을 반환합니다.
+    """
+    if _default_origin_cache is not None:
+        _, x, y = _default_origin_cache
+        return x, y
+
+    origin_x = get_setting("DEFAULT_ORIGIN_X") or get_setting("ORIGIN_X")
+    origin_y = get_setting("DEFAULT_ORIGIN_Y") or get_setting("ORIGIN_Y")
+    if origin_x is None or origin_y is None:
+        return None, None
+
+    try:
+        return float(origin_x), float(origin_y)
+    except (TypeError, ValueError):
+        return None, None
 
 
 def _allow_known_place_fallback() -> bool:

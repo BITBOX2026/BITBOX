@@ -10,13 +10,22 @@ class RouteSegmentResponse(BaseModel):
     line: str
     start_name: str
     end_name: str
+    time_min: int | None = None
+    start_x: float | None = None  # 탑승 정류장 경도
+    start_y: float | None = None  # 탑승 정류장 위도
+    end_x: float | None = None    # 하차 정류장 경도
+    end_y: float | None = None    # 하차 정류장 위도
 
 
 class ProcessDataResponse(BaseModel):
     transcript: str | None = None
     intent: str | None = None
     origin: str | None = None
+    origin_x: float | None = None       # 출발지 경도
+    origin_y: float | None = None       # 출발지 위도
     destination: str | None = None
+    destination_x: float | None = None  # 목적지 경도
+    destination_y: float | None = None  # 목적지 위도
     stop_text: str | None = None
     stop_name: str | None = None
     transport_mode: str | None = None

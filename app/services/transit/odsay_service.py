@@ -23,6 +23,15 @@ from app.services.core.settings_helper import get_setting
 from app.services.transit.seoul_bus_parser import is_night_bus_number, safe_int
 
 
+def _safe_float(value: object) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 @_http_retry
 async def _odsay_fetch(params: dict) -> dict:
     """ODsay 경로 검색 API를 호출합니다. 실패 시 자동 재시도합니다."""
@@ -80,10 +89,9 @@ async def search_odsay_route(
         raise TransportAPIError(user_message="조회 가능한 대중교통 경로를 찾지 못했습니다.")
 
     return _convert_odsay_path_to_transport_result(
-        origin=origin_name,
-        destination=destination_text,
-        path=best_path,
-        transport_mode=transport_mode,
+        origin=origin_name, origin_x=origin_x, origin_y=origin_y,
+        destination=destination_text, destination_x=destination_x, destination_y=destination_y,
+        path=best_path, transport_mode=transport_mode,
     )
 
 
@@ -150,7 +158,11 @@ def _path_has_regular_bus(path: dict[str, Any]) -> bool:
 
 def _convert_odsay_path_to_transport_result(
     origin: str,
+    origin_x: float,
+    origin_y: float,
     destination: str,
+    destination_x: float,
+    destination_y: float,
     path: dict[str, Any],
     transport_mode: str,
 ) -> TransportResult:
@@ -170,7 +182,11 @@ def _convert_odsay_path_to_transport_result(
 
     return TransportResult(
         origin=origin,
+        origin_x=origin_x,
+        origin_y=origin_y,
         destination=destination,
+        destination_x=destination_x,
+        destination_y=destination_y,
         transport_mode=transport_mode,
         bus_number=first_bus_number,
         arrival_time=None,
@@ -227,16 +243,33 @@ def _extract_route_segments(sub_paths: list[dict[str, Any]]) -> list[RouteSegmen
 
     for sp in sub_paths:
         traffic_type = sp.get("trafficType")
-        if traffic_type == 3:
-            continue  # 도보 구간 제외
 
         start_name = sp.get("startName") or ""
         end_name = sp.get("endName") or ""
         lanes = sp.get("lane") or []
 
         seg_time = safe_int(sp.get("time"))
+        start_x = _safe_float(sp.get("startX"))
+        start_y = _safe_float(sp.get("startY"))
+        end_x = _safe_float(sp.get("endX"))
+        end_y = _safe_float(sp.get("endY"))
 
-        if traffic_type == 2:  # 버스
+        if traffic_type == 3:  # 도보
+            distance_m = safe_int(sp.get("distance"))
+            if seg_time and seg_time > 0:
+                segments.append(RouteSegment(
+                    vehicle_type="도보",
+                    line=f"{distance_m}m" if distance_m else "",
+                    start_name=start_name,
+                    end_name=end_name,
+                    time_min=seg_time,
+                    start_x=start_x,
+                    start_y=start_y,
+                    end_x=end_x,
+                    end_y=end_y,
+                ))
+
+        elif traffic_type == 2:  # 버스
             bus_no = str(lanes[0].get("busNo", "")) if lanes else ""
             if bus_no:
                 segments.append(RouteSegment(
@@ -245,17 +278,12 @@ def _extract_route_segments(sub_paths: list[dict[str, Any]]) -> list[RouteSegmen
                     start_name=start_name,
                     end_name=end_name,
                     time_min=seg_time,
+                    start_x=start_x,
+                    start_y=start_y,
+                    end_x=end_x,
+                    end_y=end_y,
                 ))
 
-        elif traffic_type == 1:  # 지하철
-            subway_code = (safe_int(lanes[0].get("subwayCode")) or 0) if lanes else 0
-            line_name = SUBWAY_LINE_NAMES.get(subway_code, f"{subway_code}호선")
-            segments.append(RouteSegment(
-                vehicle_type="지하철",
-                line=line_name,
-                start_name=start_name,
-                end_name=end_name,
-                time_min=seg_time,
-            ))
+        # trafficType 1(지하철)은 버스 정류장 기반 시스템이므로 제외
 
     return segments if segments else None

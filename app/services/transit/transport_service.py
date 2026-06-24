@@ -22,7 +22,7 @@ from app.services.core.service_types import ParsedIntent, RouteSegment, Transpor
 from app.services.core.settings_helper import is_mock_mode
 from app.services.transit.kakao_service import resolve_origin, resolve_place_coordinates
 from app.services.transit.odsay_service import search_odsay_route
-from app.services.transit.public_bus_service import fetch_arrival_at_default_stop, search_bus_arrival
+from app.services.transit.public_bus_service import fetch_arrival_at_default_stop, fetch_arrival_at_stop, search_bus_arrival
 
 logger = get_logger(__name__)
 
@@ -47,24 +47,7 @@ async def search_transport_info(parsed: ParsedIntent, request_id: str = "") -> T
 
     if parsed.intent == "route":
         result = await _search_route_with_odsay(parsed)
-        # 기본 정류장 출발일 때 실시간 도착 시간을 공공데이터포털로 보강
-        if result.bus_number and parsed.origin_text is None:
-            try:
-                arrival_time, arrival_time_2 = await asyncio.wait_for(
-                    fetch_arrival_at_default_stop(result.bus_number),
-                    timeout=5.0,
-                )
-                updates = {}
-                if arrival_time:
-                    updates["arrival_time"] = arrival_time
-                if arrival_time_2:
-                    updates["arrival_time_2"] = arrival_time_2
-                if updates:
-                    result = replace(result, **updates)
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                logger.debug("[%s] 실시간 도착 보강 실패 (무시): %s", request_id, exc)
+        result = await _enrich_arrival_time(result, parsed, request_id)
         return result
 
     if parsed.intent == "arrival":
@@ -89,6 +72,55 @@ def _get_cached_route(key: str) -> TransportResult | None:
     if time.monotonic() - ts > _ROUTE_CACHE_TTL:
         _evict_cache_entry(key)
         return None
+    return result
+
+
+async def _enrich_arrival_time(
+    result: TransportResult,
+    parsed: ParsedIntent,
+    request_id: str,
+) -> TransportResult:
+    """경로 결과에 첫 번째 버스 탑승 정류장의 실시간 도착 시간을 추가합니다.
+
+    - 출발지 미지정(기본 정류장): getStationByUid 기반으로 빠르게 조회
+    - 출발지 지정: 경로의 첫 번째 버스 구간 탑승 정류장명으로 조회
+    """
+    if not result.route_segments:
+        return result
+
+    first_bus = next(
+        (s for s in result.route_segments if s.vehicle_type == "버스"), None
+    )
+    if not first_bus:
+        return result
+
+    bus_number = first_bus.line.replace("번", "").strip()
+
+    try:
+        if parsed.origin_text is None:
+            arrival_time, arrival_time_2 = await asyncio.wait_for(
+                fetch_arrival_at_default_stop(bus_number),
+                timeout=5.0,
+            )
+        else:
+            arrival_time, arrival_time_2 = await asyncio.wait_for(
+                fetch_arrival_at_stop(bus_number, first_bus.start_name),
+                timeout=5.0,
+            )
+
+        updates = {}
+        if arrival_time:
+            updates["arrival_time"] = arrival_time
+        if arrival_time_2:
+            updates["arrival_time_2"] = arrival_time_2
+        if updates:
+            result = replace(result, **updates)
+
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.debug("[%s] 실시간 도착 보강 실패 (무시): %s", request_id, exc)
+
     return result
 
 
