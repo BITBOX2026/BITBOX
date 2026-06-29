@@ -132,7 +132,13 @@ async def _run_pipeline_core(
             origin=transport_result.origin,
             origin_x=transport_result.origin_x,
             origin_y=transport_result.origin_y,
-            destination=transport_result.destination,
+            # arrival intent에는 이동 목적지가 없지만, 프론트 결과 화면은
+            # destination을 표시 제목으로 사용하므로 조회 정류장명을 제공합니다.
+            destination=(
+                transport_result.stop_name
+                if parsed.intent == "arrival"
+                else transport_result.destination
+            ),
             destination_x=transport_result.destination_x,
             destination_y=transport_result.destination_y,
             stop_text=parsed.stop_text,

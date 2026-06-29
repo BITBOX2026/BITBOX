@@ -31,6 +31,8 @@ class ProcessDataResponse(BaseModel):
     transport_mode: str | None = None
     bus_number: str | None = None
     arrival_time: str | None = None
+    arrival_time_2: str | None = None
+    first_bus_time: str | None = None
     total_time_min: int | None = None
     payment: int | None = None
     bus_transit_count: int | None = None
@@ -58,6 +60,9 @@ class UploadCompatResponse(BaseModel):
     destination: str | None = None
     destination_text: str | None = None
     bus_number: str | None = None
+    arrival_time: str | None = None
+    arrival_time_2: str | None = None
+    first_bus_time: str | None = None
     message: str
     buses: list[dict[str, Any]] = Field(default_factory=list)
     audio_base64: str | None = None

@@ -96,12 +96,27 @@ async def _enrich_arrival_time(
 
     bus_number = first_bus.line.replace("번", "").strip()
 
+    # 프론트의 대표 버스는 실제 첫 탑승 버스와 같아야 합니다. ODsay의 대표
+    # 노선 선택값(일반버스 우선)이 이후 환승 버스를 가리킬 수 있어 여기서 교정합니다.
+    result = replace(
+        result,
+        bus_number=bus_number,
+        stop_name=first_bus.start_name,
+    )
+
     try:
         if parsed.origin_text is None:
             arrival_time, arrival_time_2 = await asyncio.wait_for(
                 fetch_arrival_at_default_stop(bus_number),
                 timeout=5.0,
             )
+            # 기기 기본 위치와 ODsay가 선택한 실제 탑승 정류장이 다를 수 있습니다.
+            # 기본 정류장에서 노선을 찾지 못하면 실제 탑승 정류장으로 재조회합니다.
+            if not arrival_time and first_bus.start_name:
+                arrival_time, arrival_time_2 = await asyncio.wait_for(
+                    fetch_arrival_at_stop(bus_number, first_bus.start_name),
+                    timeout=5.0,
+                )
         else:
             arrival_time, arrival_time_2 = await asyncio.wait_for(
                 fetch_arrival_at_stop(bus_number, first_bus.start_name),
@@ -118,8 +133,21 @@ async def _enrich_arrival_time(
 
     except asyncio.CancelledError:
         raise
+    except asyncio.TimeoutError:
+        logger.warning(
+            "[%s] 실시간 도착 보강 시간 초과: bus=%s stop=%s",
+            request_id,
+            bus_number,
+            first_bus.start_name,
+        )
     except Exception as exc:
-        logger.debug("[%s] 실시간 도착 보강 실패 (무시): %s", request_id, exc)
+        logger.warning(
+            "[%s] 실시간 도착 보강 실패: bus=%s stop=%s error=%s",
+            request_id,
+            bus_number,
+            first_bus.start_name,
+            exc,
+        )
 
     return result
 

@@ -10,11 +10,14 @@ DEFAULT_TTS_VOICE = "nova"
 # 외부 교통/지도 API 엔드포인트입니다.
 ODSAY_ROUTE_URL = "https://api.odsay.com/v1/api/searchPubTransPathT"
 KAKAO_KEYWORD_SEARCH_URL = "https://dapi.kakao.com/v2/local/search/keyword.json"
-SEOUL_BUS_ROUTE_SEARCH_URL = "https://ws.bus.go.kr/api/rest/busRouteInfo/getBusRouteList"
-SEOUL_STATION_SEARCH_URL = "https://ws.bus.go.kr/api/rest/stationinfo/getStationByName"
-SEOUL_STATION_ARRIVAL_URL = "https://ws.bus.go.kr/api/rest/stationinfo/getStationByUid"
-SEOUL_ROUTE_STATION_URL = "https://ws.bus.go.kr/api/rest/busRouteInfo/getStaionByRoute"
-SEOUL_BUS_ARRIVAL_URL = "https://ws.bus.go.kr/api/rest/arrive/getArrInfoByRoute"
+# ws.bus.go.kr은 현재 HTTPS 연결을 제공하지 않아 443 포트에서 타임아웃됩니다.
+# 서울시 버스 Open API가 실제로 제공하는 HTTP 엔드포인트를 사용합니다.
+SEOUL_BUS_API_BASE_URL = "http://ws.bus.go.kr/api/rest"
+SEOUL_BUS_ROUTE_SEARCH_URL = f"{SEOUL_BUS_API_BASE_URL}/busRouteInfo/getBusRouteList"
+SEOUL_STATION_SEARCH_URL = f"{SEOUL_BUS_API_BASE_URL}/stationinfo/getStationByName"
+SEOUL_STATION_ARRIVAL_URL = f"{SEOUL_BUS_API_BASE_URL}/stationinfo/getStationByUid"
+SEOUL_ROUTE_STATION_URL = f"{SEOUL_BUS_API_BASE_URL}/busRouteInfo/getStaionByRoute"
+SEOUL_BUS_ARRIVAL_URL = f"{SEOUL_BUS_API_BASE_URL}/arrive/getArrInfoByRoute"
 
 # 대한민국 서비스 범위 기준 좌표 검증값입니다.
 # ODsay 기준 X는 경도, Y는 위도입니다.

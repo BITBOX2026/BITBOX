@@ -254,22 +254,10 @@ def _extract_route_segments(sub_paths: list[dict[str, Any]]) -> list[RouteSegmen
         end_x = _safe_float(sp.get("endX"))
         end_y = _safe_float(sp.get("endY"))
 
-        if traffic_type == 3:  # 도보
-            distance_m = safe_int(sp.get("distance"))
-            if seg_time and seg_time > 0:
-                segments.append(RouteSegment(
-                    vehicle_type="도보",
-                    line=f"{distance_m}m" if distance_m else "",
-                    start_name=start_name,
-                    end_name=end_name,
-                    time_min=seg_time,
-                    start_x=start_x,
-                    start_y=start_y,
-                    end_x=end_x,
-                    end_y=end_y,
-                ))
+        if traffic_type == 3:  # 도보는 프론트가 출발지/환승지 좌표로 별도 구성
+            continue
 
-        elif traffic_type == 2:  # 버스
+        if traffic_type == 2:  # 버스
             bus_no = str(lanes[0].get("busNo", "")) if lanes else ""
             if bus_no:
                 segments.append(RouteSegment(
