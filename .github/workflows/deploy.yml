@@ -18,8 +18,15 @@ jobs:
             cd /home/ubuntu/BITBOX
             git pull origin backend
             .venv/bin/pip install -r requirements-backend.txt -q
-            pkill -SIGTERM -f "uvicorn app.main:app" || true
-            for i in $(seq 1 10); do pgrep -f "uvicorn app.main:app" || break; sleep 1; done
-            nohup .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 > server_out.log 2> server_err.log &
-            sleep 3
-            curl -sf http://localhost:8000/health || { echo "Health check failed"; exit 1; }
+            sudo cp deploy/bitbox-backend.service /etc/systemd/system/bitbox-backend.service
+            sudo systemctl daemon-reload
+            sudo systemctl enable bitbox-backend.service
+            sudo systemctl restart bitbox-backend.service
+            for i in $(seq 1 15); do
+              if curl -sf http://localhost:8000/health; then
+                exit 0
+              fi
+              sleep 1
+            done
+            sudo systemctl status bitbox-backend.service --no-pager
+            exit 1

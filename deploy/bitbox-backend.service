@@ -1,0 +1,19 @@
+[Unit]
+Description=BITBOX FastAPI backend
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/BITBOX
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/ubuntu/BITBOX/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=3
+StandardOutput=append:/home/ubuntu/BITBOX/server_out.log
+StandardError=append:/home/ubuntu/BITBOX/server_err.log
+
+[Install]
+WantedBy=multi-user.target
