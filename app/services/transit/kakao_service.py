@@ -20,10 +20,13 @@ from app.services.core.constants import (
     KOREA_LONGITUDE_MAX,
     KOREA_LONGITUDE_MIN,
 )
+from app.core.logger import get_logger
 from app.services.core.exceptions import CoordinateResolveError, TransportAPIError
 from app.services.core.http_client import get_http_client
 from app.services.core.http_utils import http_retry as _http_retry
 from app.services.core.settings_helper import get_bool_setting, get_setting
+
+logger = get_logger(__name__)
 
 # 기기 기본 출발지 캐시 — 서버 재시작 전까지 유지
 _default_origin_cache: tuple[str, float, float] | None = None
@@ -138,7 +141,8 @@ async def search_place_suggestions(
         payload = await _kakao_fetch(
             kakao_key, query.strip(), device_x, device_y, size=max_results
         )
-    except (httpx.HTTPStatusError, httpx.RequestError):
+    except (httpx.HTTPStatusError, httpx.RequestError) as exc:
+        logger.warning("Kakao 장소 검색 실패: %s", exc)
         return []
 
     return [

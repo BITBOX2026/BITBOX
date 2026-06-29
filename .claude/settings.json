@@ -11,7 +11,36 @@
       "Bash(python -c ' *)",
       "Bash(python -m pytest tests/ -q)",
       "Bash(python -m pytest tests/test_pipeline.py::TestRunPipelineErrors::test_transport_error_returns_error_response -v)",
-      "Bash(python -c \"import sys; [print\\(l\\) for l in sys.stdin.read\\(\\).splitlines\\(\\)]\")"
+      "Bash(python -c \"import sys; [print\\(l\\) for l in sys.stdin.read\\(\\).splitlines\\(\\)]\")",
+      "Bash(ls ~/Downloads/*.pem 2>/dev/null || echo \"없음\")",
+      "Read(//c/Users/amg85/Downloads/**)",
+      "Bash(mkdir -p .github/workflows)",
+      "Bash(.venv/Scripts/python.exe -c ' *)",
+      "Bash(cd \"/c/Users/amg85/OneDrive/문서/GitHub/BITBOX\" && ls .venv/)",
+      "Read(//c/c/Users/amg85/OneDrive/문서/GitHub/BITBOX/**)",
+      "Bash(ssh -i \"C:/Users/amg85/.ssh/project2-12-ohio-bitbox-key.pem\" ubuntu@3.144.238.75 \"sed -i 's/DEFAULT_BUS_STOP_NAME=.*/DEFAULT_BUS_STOP_NAME=올림픽공원역/' /home/ubuntu/BITBOX/.env && sed -i 's/DEFAULT_BUS_STATION_ID=.*/DEFAULT_BUS_STATION_ID=24245/' /home/ubuntu/BITBOX/.env && pkill -f 'uvicorn app.main:app'; sleep 1; nohup /home/ubuntu/BITBOX/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 > /home/ubuntu/BITBOX/server_out.log 2> /home/ubuntu/BITBOX/server_err.log &\")",
+      "Bash(ssh -i \"C:/Users/amg85/.ssh/project2-12-ohio-bitbox-key.pem\" -o StrictHostKeyChecking=no ubuntu@3.144.238.75 \"echo connected\")",
+      "Bash(ssh -i C:/Users/amg85/.ssh/project2-12-ohio-bitbox-key.pem -o StrictHostKeyChecking=no ubuntu@3.144.238.75 'python3 -c \" *)",
+      "Bash(ssh -i \"C:/Users/amg85/.ssh/project2-12-ohio-bitbox-key.pem\" -o StrictHostKeyChecking=no ubuntu@3.144.238.75 \"pkill -f 'uvicorn app.main:app'; sleep 1; cd /home/ubuntu/BITBOX && nohup .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 > server_out.log 2> server_err.log & sleep 3 && curl -s http://localhost:8000/api/bus/default | python3 -c \\\\\"import sys,json; d=json.load\\(sys.stdin\\); print\\(d['station_name'], d['station_id'], d['success']\\)\\\\\"\")",
+      "Bash(ssh -i \"C:/Users/amg85/.ssh/project2-12-ohio-bitbox-key.pem\" -o StrictHostKeyChecking=no ubuntu@3.144.238.75 \"pkill -f 'uvicorn app.main:app' || true\")",
+      "Bash(ssh -i \"C:/Users/amg85/.ssh/project2-12-ohio-bitbox-key.pem\" -o StrictHostKeyChecking=no ubuntu@3.144.238.75 \"grep 'DEFAULT_BUS' /home/ubuntu/BITBOX/.env\")",
+      "Bash(ssh -i \"C:/Users/amg85/.ssh/project2-12-ohio-bitbox-key.pem\" -o StrictHostKeyChecking=no ubuntu@3.144.238.75 \"cat /home/ubuntu/BITBOX/.env | tail -20\")",
+      "Bash(ssh -i \"C:/Users/amg85/.ssh/project2-12-ohio-bitbox-key.pem\" -o StrictHostKeyChecking=no ubuntu@3.144.238.75 \"echo '' >> /home/ubuntu/BITBOX/.env && echo 'DEFAULT_BUS_STOP_NAME=올림픽공원역' >> /home/ubuntu/BITBOX/.env && echo 'DEFAULT_BUS_STATION_ID=24245' >> /home/ubuntu/BITBOX/.env && echo 'done'\")",
+      "Bash(ssh -i \"C:/Users/amg85/.ssh/project2-12-ohio-bitbox-key.pem\" -o StrictHostKeyChecking=no ubuntu@3.144.238.75 \"tail -5 /home/ubuntu/BITBOX/.env\")",
+      "Bash(ssh -i \"C:/Users/amg85/.ssh/project2-12-ohio-bitbox-key.pem\" -o StrictHostKeyChecking=no ubuntu@3.144.238.75 \"pkill -f 'uvicorn app.main:app' || true; sleep 1; cd /home/ubuntu/BITBOX && nohup .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 > server_out.log 2> server_err.log &\")",
+      "Bash(ssh -i \"C:/Users/amg85/.ssh/project2-12-ohio-bitbox-key.pem\" -o StrictHostKeyChecking=no ubuntu@3.144.238.75 \"ps aux | grep uvicorn | grep -v grep\")",
+      "Bash(ssh -i \"C:/Users/amg85/.ssh/project2-12-ohio-bitbox-key.pem\" -o StrictHostKeyChecking=no ubuntu@3.144.238.75 \"setsid /home/ubuntu/BITBOX/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --app-dir /home/ubuntu/BITBOX >> /home/ubuntu/BITBOX/server_out.log 2>> /home/ubuntu/BITBOX/server_err.log &\")",
+      "Bash(ssh -i \"C:/Users/amg85/.ssh/project2-12-ohio-bitbox-key.pem\" -o StrictHostKeyChecking=no ubuntu@3.144.238.75 \"curl -s http://localhost:8000/api/bus/default | python3 -c \\\\\"import sys,json; d=json.load\\(sys.stdin\\); print\\('station:', d['station_name'], '| id:', d['station_id'], '| success:', d['success']\\)\\\\\"\")",
+      "Bash(ssh -i \"C:/Users/amg85/.ssh/project2-12-ohio-bitbox-key.pem\" -o StrictHostKeyChecking=no ubuntu@3.144.238.75 \"pkill -f uvicorn || true; sleep 1; bash -c 'cd /home/ubuntu/BITBOX && setsid .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 >> server_out.log 2>> server_err.log &'\")",
+      "Bash(ssh -i \"C:/Users/amg85/.ssh/project2-12-ohio-bitbox-key.pem\" -o StrictHostKeyChecking=no ubuntu@3.144.238.75 \"cat /home/ubuntu/BITBOX/.env\")",
+      "Bash(ssh -i \"C:/Users/amg85/.ssh/project2-12-ohio-bitbox-key.pem\" -o StrictHostKeyChecking=no ubuntu@3.144.238.75 \"echo 'DEFAULT_ORIGIN_NAME=올림픽공원역' >> /home/ubuntu/BITBOX/.env && echo done\")",
+      "Bash(ssh -i \"C:/Users/amg85/.ssh/project2-12-ohio-bitbox-key.pem\" -o StrictHostKeyChecking=no ubuntu@3.144.238.75 \"curl -s http://localhost:8000/health\")",
+      "Bash(ssh -i \"C:/Users/amg85/.ssh/project2-12-ohio-bitbox-key.pem\" -o StrictHostKeyChecking=no ubuntu@3.144.238.75 \"curl -s http://localhost:8000/api/bus/default | python3 -c \\\\\"import sys,json; d=json.load\\(sys.stdin\\); print\\('버스정류장:', d['station_name'], '| arsId:', d['station_id']\\); [print\\(' -', i['bus_number'], i['direction'], i['message']\\) for i in d['items'][:3]]\\\\\"\")",
+      "Bash(ssh -i \"C:/Users/amg85/.ssh/project2-12-ohio-bitbox-key.pem\" -o StrictHostKeyChecking=no ubuntu@3.144.238.75 \"cd /home/ubuntu/BITBOX && git log --oneline -3\")",
+      "Bash(ssh -i \"C:/Users/amg85/.ssh/project2-12-ohio-bitbox-key.pem\" -o StrictHostKeyChecking=no ubuntu@3.144.238.75 \"cd /home/ubuntu/BITBOX && git pull && git log --oneline -3\")"
+    ],
+    "additionalDirectories": [
+      "c:\\Users\\amg85\\OneDrive\\문서\\GitHub\\BITBOX\\.github"
     ]
   }
 }

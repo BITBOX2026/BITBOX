@@ -28,7 +28,30 @@
       "Bash(python -c ' *)",
       "Bash(python -c \"import sys; print\\(sys.version\\)\")",
       "Bash(python -c \"import tomllib; d=tomllib.load\\(open\\('pyproject.toml','rb'\\)\\); print\\(d.get\\('project',{}\\).get\\('requires-python','not found'\\)\\)\")",
-      "Bash(python -c \"import configparser; c=configparser.ConfigParser\\(\\); c.read\\('setup.cfg'\\); print\\(dict\\(c['options']\\) if 'options' in c else 'no setup.cfg'\\)\")"
+      "Bash(python -c \"import configparser; c=configparser.ConfigParser\\(\\); c.read\\('setup.cfg'\\); print\\(dict\\(c['options']\\) if 'options' in c else 'no setup.cfg'\\)\")",
+      "Read(//c/Users/amg85/.claude/projects/c--Users-amg85-OneDrive----GitHub-BITBOX/tool-results/**)",
+      "Read(//c/Users/amg85/OneDrive/文档/GitHub/BITBOX/app/services/core/**)",
+      "Bash(python -m uvicorn app.main:app --host 127.0.0.1 --port 8765 --log-level warning)",
+      "Bash(echo \"PID: $!\")",
+      "Bash(cat /tmp/bitbox_server.log)",
+      "Read(//tmp/**)",
+      "Bash(curl -s http://127.0.0.1:8765/api/bus/default)",
+      "Bash(python -m json.tool)",
+      "Bash(curl -s http://127.0.0.1:8765/api/bus/default -H \"Accept: application/json\")",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d, ensure_ascii=False, indent=2\\)\\)\")",
+      "Bash(pkill -f \"uvicorn app.main:app.*8765\")",
+      "Bash(python -m uvicorn app.main:app --host 127.0.0.1 --port 8765 --log-level info)",
+      "Bash(curl -v --connect-timeout 5 \"https://ws.bus.go.kr/api/rest/stationinfo/getStationByUid?ServiceKey=test&arsId=24245&resultType=json\")",
+      "Bash(curl -s --connect-timeout 5 \"https://dapi.kakao.com/v2/local/search/keyword.json?query=잠실역\" -H \"Authorization: KakaoAK 7759bc80dc3a2d24659a84df94797164\")",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('Kakao OK - 결과수:', len\\(d.get\\('documents',[]\\)\\)\\)\")",
+      "Bash(curl -s --connect-timeout 5 \"https://api.odsay.com/v1/api/searchPubTransPathT?SX=127.0&SY=37.5&EX=127.1&EY=37.6&apiKey=ntWWADcGKdQYPZotGVPnstH1atdfQcJWBJwio5t7dkc\")",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('ODsay OK - 키:', list\\(d.keys\\(\\)\\)[:3]\\)\")",
+      "Bash(curl -s --connect-timeout 5 \"https://dapi.kakao.com/v2/local/search/keyword.json?query=%EC%9E%A1%EC%8B%A4%EC%97%AD\" -H \"Authorization: KakaoAK 7759bc80dc3a2d24659a84df94797164\")",
+      "Bash(python -c \"from app.main import app; print\\('import OK'\\)\")",
+      "Bash(python -m uvicorn app.main:app --port 8001 --host 127.0.0.1)",
+      "Bash(curl -s http://127.0.0.1:8001/)",
+      "Bash(curl -s http://127.0.0.1:8001/api/config)",
+      "Bash(pkill -f \"uvicorn app.main:app --port 8001\")"
     ]
   }
 }

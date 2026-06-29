@@ -200,11 +200,6 @@ def _josa_reul(word: str) -> str:
     return "를" if _last_jongseong(word) == 0 else "을"
 
 
-def _josa_ro(word: str) -> str:
-    """받침 유무에 따라 방향격 조사 '로' 또는 '으로'를 반환합니다. ㄹ 받침은 '로'."""
-    j = _last_jongseong(word)
-    return "로" if j == 0 or j == 8 else "으로"  # 8 = ㄹ 받침
-
 
 def _last_jongseong(word: str) -> int:
     """마지막 한글 글자의 받침 인덱스를 반환합니다. 받침 없음 = 0."""

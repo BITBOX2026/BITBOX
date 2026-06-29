@@ -42,6 +42,10 @@ async def search_bus_arrival(parsed: ParsedIntent) -> TransportResult:
     if not parsed.bus_number:
         raise TransportAPIError(user_message="버스 번호를 말씀해 주세요.")
 
+    # stop_text 없으면 getStationByUid로 기본 정류장에서 직접 조회 (더 신뢰성 높음)
+    if not parsed.stop_text:
+        return await _search_arrival_at_default_stop(parsed.bus_number)
+
     # 1단계: 버스 번호 → 노선 ID
     bus_route = await search_bus_route(parsed.bus_number)
     if not bus_route:
@@ -51,21 +55,11 @@ async def search_bus_arrival(parsed: ParsedIntent) -> TransportResult:
     if not bus_route_id:
         raise TransportAPIError(user_message="해당 버스 노선을 찾지 못했습니다. 현재 서울 버스만 조회 가능합니다.")
 
-    # 2단계: 노선 경유 정류소에서 정류장 검색
-    # stop_text가 있으면 이름으로 검색, 없으면 DEFAULT_BUS_STATION_ID(arsId)로 검색
-    if parsed.stop_text:
-        route_station = await _find_route_station_by_stop_text(
-            bus_route_id=bus_route_id,
-            stop_text=parsed.stop_text,
-        )
-    else:
-        default_ars_id = str(get_setting("DEFAULT_BUS_STATION_ID") or "").strip()
-        if not default_ars_id:
-            raise TransportAPIError(user_message="어느 정류장 기준인지 말씀해 주세요.")
-        route_station = await _find_route_station_by_ars_id(
-            bus_route_id=bus_route_id,
-            ars_id=default_ars_id,
-        )
+    # 2단계: 노선 경유 정류소에서 정류장 이름으로 검색
+    route_station = await _find_route_station_by_stop_text(
+        bus_route_id=bus_route_id,
+        stop_text=parsed.stop_text,
+    )
 
     if not route_station:
         raise TransportAPIError(
@@ -240,6 +234,38 @@ async def fetch_arrival_at_default_stop(bus_number: str) -> tuple[str | None, st
         )
 
     return None, None
+
+
+async def _search_arrival_at_default_stop(bus_number: str) -> TransportResult:
+    """기본 정류장(DEFAULT_BUS_STATION_ID)에서 getStationByUid로 버스 도착 시간을 조회합니다."""
+    from app.services.bus_service import get_bus_arrivals_by_station_id
+
+    default_ars_id = str(get_setting("DEFAULT_BUS_STATION_ID") or "").strip()
+    if not default_ars_id:
+        raise TransportAPIError(user_message="어느 정류장 기준인지 말씀해 주세요.")
+
+    response = await get_bus_arrivals_by_station_id(default_ars_id)
+    if not response.success:
+        raise TransportAPIError(user_message="버스 도착정보 조회에 실패했습니다.")
+
+    target = normalize_token(bus_number)
+    for item in response.items:
+        if normalize_token(item.bus_number) != target:
+            continue
+        arrival_time = _arrmsg_or_minutes(item.raw_arrmsg1, item.first_arrival_min)
+        arrival_time_2 = _arrmsg_or_minutes(item.raw_arrmsg2, item.second_arrival_min)
+        if not arrival_time:
+            continue
+        return TransportResult(
+            stop_name=response.station_name,
+            transport_mode="bus",
+            bus_number=bus_number,
+            arrival_time=arrival_time,
+            arrival_time_2=arrival_time_2,
+            source="public_data",
+        )
+
+    raise TransportAPIError(user_message="해당 정류장의 버스 도착 정보를 찾지 못했습니다.")
 
 
 def _arrmsg_or_minutes(raw_arrmsg: str | None, minutes: int | None) -> str | None:

@@ -284,6 +284,19 @@ def _extract_route_segments(sub_paths: list[dict[str, Any]]) -> list[RouteSegmen
                     end_y=end_y,
                 ))
 
-        # trafficType 1(지하철)은 버스 정류장 기반 시스템이므로 제외
+        elif traffic_type == 1:  # 지하철
+            subway_code = (safe_int(lanes[0].get("subwayCode")) or 0) if lanes else 0
+            line_name = SUBWAY_LINE_NAMES.get(subway_code, f"{subway_code}호선")
+            segments.append(RouteSegment(
+                vehicle_type="지하철",
+                line=line_name,
+                start_name=start_name,
+                end_name=end_name,
+                time_min=seg_time,
+                start_x=start_x,
+                start_y=start_y,
+                end_x=end_x,
+                end_y=end_y,
+            ))
 
     return segments if segments else None

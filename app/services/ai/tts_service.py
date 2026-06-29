@@ -37,7 +37,7 @@ async def generate_tts_audio(text: str) -> str | None:
 
     tts_model = get_setting("TTS_MODEL", DEFAULT_TTS_MODEL)
     tts_voice = get_setting("TTS_VOICE", DEFAULT_TTS_VOICE)
-    tts_speed = float(get_setting("TTS_SPEED") or 0.85)
+    tts_speed = max(0.25, min(4.0, float(get_setting("TTS_SPEED") or 0.85)))
 
     try:
         client = _get_openai_client()
