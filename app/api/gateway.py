@@ -4,7 +4,7 @@ API Gateway — 음성 파일 수신 및 파이프라인 실행
 클라이언트(라즈베리파이)가 녹음한 오디오를 받아 파이프라인을 실행하고
 구조화된 JSON 응답(교통 안내 + TTS 오디오)을 반환합니다.
 
-엔드포인트: POST /api/process
+엔드포인트: POST /api/process 
 """
 
 import asyncio
