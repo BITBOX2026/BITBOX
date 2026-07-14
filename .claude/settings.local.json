@@ -51,7 +51,15 @@
       "Bash(python -m uvicorn app.main:app --port 8001 --host 127.0.0.1)",
       "Bash(curl -s http://127.0.0.1:8001/)",
       "Bash(curl -s http://127.0.0.1:8001/api/config)",
-      "Bash(pkill -f \"uvicorn app.main:app --port 8001\")"
+      "Bash(pkill -f \"uvicorn app.main:app --port 8001\")",
+      "Bash(git -C \"c:\\\\Users\\\\amg85\\\\OneDrive\\\\문서\\\\GitHub\\\\BITBOX\" log --oneline --max-count=20)",
+      "Bash(grep -E \"\\\\.py$\")",
+      "Bash(git -C \"c:\\\\Users\\\\amg85\\\\OneDrive\\\\문서\\\\GitHub\\\\BITBOX\" remote -v)",
+      "PowerShell(python -c \"import docx; print\\('ok'\\)\" 2>&1)",
+      "PowerShell(pip install python-docx -q)",
+      "PowerShell(python -c \"import docx; print\\('ok'\\)\")",
+      "PowerShell(python \"C:\\\\Users\\\\amg85\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-amg85-OneDrive----GitHub-BITBOX\\\\96d762ae-978c-4b2d-af3b-981d35258ccb\\\\scratchpad\\\\make_report.py\")",
+      "PowerShell(if \\(Test-Path \"C:\\\\Users\\\\amg85\\\\OneDrive\\\\문서\\\\GitHub\\\\BITBOX\\\\BITBOX_개발보고서_2026.docx\"\\) { Write-Host \"OK - $\\(\\(Get-Item 'C:\\\\Users\\\\amg85\\\\OneDrive\\\\문서\\\\GitHub\\\\BITBOX\\\\BITBOX_개발보고서_2026.docx'\\).Length\\) bytes\" } else { Write-Host \"NOT FOUND\" })"
     ]
   }
 }
