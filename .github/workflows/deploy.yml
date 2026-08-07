@@ -91,9 +91,15 @@ jobs:
             git checkout merge-frontend-backend
             git pull --ff-only origin merge-frontend-backend
             .venv/bin/pip install -r requirements-backend.txt -q
-            if ! command -v nginx >/dev/null 2>&1 || ! command -v envsubst >/dev/null 2>&1 || ! command -v certbot >/dev/null 2>&1 || ! command -v aws >/dev/null 2>&1; then
+            if ! command -v nginx >/dev/null 2>&1 || ! command -v envsubst >/dev/null 2>&1 || ! command -v certbot >/dev/null 2>&1; then
               sudo apt-get update -qq
-              sudo apt-get install -y nginx gettext-base certbot awscli
+              sudo apt-get install -y nginx gettext-base certbot
+            fi
+            if command -v aws >/dev/null 2>&1; then
+              AWS_CLI=$(command -v aws)
+            else
+              .venv/bin/pip install awscli -q
+              AWS_CLI=.venv/bin/aws
             fi
 
             if [[ ! -f "$BITBOX_TLS_CERT_PATH" || ! -f "$BITBOX_TLS_KEY_PATH" ]]; then
@@ -110,7 +116,7 @@ jobs:
               SECURITY_GROUP=$(curl --fail --silent --show-error --max-time 3 -H "$METADATA_HEADER" \
                 "http://169.254.169.254/latest/meta-data/network/interfaces/macs/${MAC}security-group-ids" | head -n 1)
 
-              if ! aws sts get-caller-identity --region "$REGION" >/dev/null 2>&1; then
+              if ! "$AWS_CLI" sts get-caller-identity --region "$REGION" >/dev/null 2>&1; then
                 echo 'EC2 instance IAM role is missing or cannot call AWS APIs.' >&2
                 exit 1
               fi
@@ -118,7 +124,7 @@ jobs:
               open_port() {
                 local port="$1"
                 local error_output
-                if ! error_output=$(aws ec2 authorize-security-group-ingress \
+                if ! error_output=$("$AWS_CLI" ec2 authorize-security-group-ingress \
                   --region "$REGION" --group-id "$SECURITY_GROUP" \
                   --protocol tcp --port "$port" --cidr 0.0.0.0/0 2>&1); then
                   if ! grep -q 'InvalidPermission.Duplicate' <<<"$error_output"; then
