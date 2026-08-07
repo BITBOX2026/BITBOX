@@ -21,7 +21,7 @@ jobs:
 
       - name: Test backend
         run: |
-          python -m pip install -r requirements-backend.txt
+          python -m pip install -r requirements-backend.txt pytest
           python -m pytest -q
 
       - uses: actions/setup-node@v4
