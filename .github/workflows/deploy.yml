@@ -148,6 +148,10 @@ jobs:
             sudo test -f "$BITBOX_TLS_CERT_PATH"
             sudo test -f "$BITBOX_TLS_KEY_PATH"
 
+            sudo install -d -o root -g root -m 755 /var/www/bitbox
+            sudo cp -a frontend/dist/. /var/www/bitbox/
+            sudo chmod -R a+rX /var/www/bitbox
+
             sudo install -d -m 700 /etc/bitbox
             printf 'APP_ENV=prod\nUSE_MOCK_EXTERNALS=false\nCORS_ALLOWED_ORIGINS=\nAPI_AUTH_TOKEN=%s\nOPENAI_API_KEY=%s\nKAKAO_REST_API_KEY=%s\nODSAY_API_KEY=%s\nPUBLIC_DATA_SERVICE_KEY=%s\nDEFAULT_ORIGIN_NAME=올림픽공원역\nDEFAULT_BUS_STOP_NAME=올림픽공원역\nDEFAULT_BUS_STATION_ID=24245\n' \
               "$API_AUTH_TOKEN" "$OPENAI_API_KEY" "$KAKAO_REST_API_KEY" "$ODSAY_API_KEY" "$PUBLIC_DATA_SERVICE_KEY" \
@@ -191,7 +195,10 @@ jobs:
             for i in $(seq 1 20); do
               if curl --fail --silent --show-error \
                 --resolve "$BITBOX_SERVER_NAME:443:127.0.0.1" \
-                "https://$BITBOX_SERVER_NAME/health" | grep -q '"version":"1.1.0"'; then
+                "https://$BITBOX_SERVER_NAME/health" | grep -q '"version":"1.1.0"' \
+                && curl --fail --silent --show-error \
+                  --resolve "$BITBOX_SERVER_NAME:443:127.0.0.1" \
+                  "https://$BITBOX_SERVER_NAME/" | grep -q 'id="root"'; then
                 exit 0
               fi
               sleep 1
