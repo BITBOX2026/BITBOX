@@ -1,4 +1,11 @@
 server {
+    listen 80;
+    server_name ${BITBOX_SERVER_NAME};
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl;
     listen 8000 ssl;
     server_name ${BITBOX_SERVER_NAME};
 

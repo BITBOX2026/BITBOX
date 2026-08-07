@@ -131,18 +131,23 @@ EC2_HOST
 EC2_SSH_KEY
 API_AUTH_TOKEN
 KAKAO_MAP_APPKEY
+OPENAI_API_KEY
+KAKAO_REST_API_KEY
+ODSAY_API_KEY
+PUBLIC_DATA_SERVICE_KEY
 BITBOX_SERVER_NAME
 BITBOX_TLS_CERT_PATH
 BITBOX_TLS_KEY_PATH
 ```
 
 - `API_AUTH_TOKEN`: URL-safe 난수 문자열을 사용합니다.
-- `BITBOX_SERVER_NAME`: 인증서에 포함된 실제 도메인입니다.
-- 인증서와 개인 키는 EC2에 미리 설치하고 절대 저장소에 커밋하지 않습니다.
-- Kakao Developers 웹 플랫폼에도 `https://도메인:8000`을 허용 주소로 등록합니다.
+- `BITBOX_SERVER_NAME`: EC2 주소로 해석되는 실제 도메인입니다.
+- 인증서가 없으면 배포 작업이 EC2 인스턴스 IAM 역할로 보안 그룹의 `80/443`을 열고 Certbot 인증서를 발급합니다. 해당 역할에는 보안 그룹 인바운드 규칙 변경 권한이 필요합니다.
+- 인증서와 개인 키는 EC2에만 저장되며 저장소에 커밋하지 않습니다.
+- Kakao Developers 웹 플랫폼에는 `https://도메인`과 기존 호환 주소 `https://도메인:8000`을 등록합니다.
 
 병합 브랜치 푸시 시 GitHub 러너가 백엔드 테스트, 프론트 테스트·타입 검사·빌드를 수행합니다.
-검증된 정적 파일만 EC2로 전송하며, 필수 비밀값이나 TLS 파일이 없으면 서비스 전환 전에 배포를 중단합니다.
+검증된 정적 파일만 EC2로 전송하며, 필수 비밀값·IAM 권한·TLS 발급 중 하나라도 실패하면 서비스 전환 전에 배포를 중단합니다.
 
 ## 6. 안내 정확도 범위
 

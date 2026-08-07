@@ -34,16 +34,28 @@ jobs:
         env:
           API_AUTH_TOKEN: ${{ secrets.API_AUTH_TOKEN }}
           KAKAO_MAP_APPKEY: ${{ secrets.KAKAO_MAP_APPKEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          KAKAO_REST_API_KEY: ${{ secrets.KAKAO_REST_API_KEY }}
+          ODSAY_API_KEY: ${{ secrets.ODSAY_API_KEY }}
+          PUBLIC_DATA_SERVICE_KEY: ${{ secrets.PUBLIC_DATA_SERVICE_KEY }}
           BITBOX_SERVER_NAME: ${{ secrets.BITBOX_SERVER_NAME }}
           BITBOX_TLS_CERT_PATH: ${{ secrets.BITBOX_TLS_CERT_PATH }}
           BITBOX_TLS_KEY_PATH: ${{ secrets.BITBOX_TLS_KEY_PATH }}
         run: |
           test -n "$API_AUTH_TOKEN"
           test -n "$KAKAO_MAP_APPKEY"
+          test -n "$OPENAI_API_KEY"
+          test -n "$KAKAO_REST_API_KEY"
+          test -n "$ODSAY_API_KEY"
+          test -n "$PUBLIC_DATA_SERVICE_KEY"
           test -n "$BITBOX_SERVER_NAME"
           test -n "$BITBOX_TLS_CERT_PATH"
           test -n "$BITBOX_TLS_KEY_PATH"
           [[ "$API_AUTH_TOKEN" =~ ^[A-Za-z0-9_-]{32,}$ ]]
+          [[ "$OPENAI_API_KEY" != *[[:space:]]* ]]
+          [[ "$KAKAO_REST_API_KEY" != *[[:space:]]* ]]
+          [[ "$ODSAY_API_KEY" != *[[:space:]]* ]]
+          [[ "$PUBLIC_DATA_SERVICE_KEY" != *[[:space:]]* ]]
           [[ "$BITBOX_SERVER_NAME" =~ ^[A-Za-z0-9.-]+$ ]]
           [[ "$BITBOX_TLS_CERT_PATH" =~ ^/[A-Za-z0-9_./-]+$ ]]
           [[ "$BITBOX_TLS_KEY_PATH" =~ ^/[A-Za-z0-9_./-]+$ ]]
@@ -63,10 +75,15 @@ jobs:
 
       - name: Prepare EC2
         uses: appleboy/ssh-action@v1.0.3
+        env:
+          BITBOX_SERVER_NAME: ${{ secrets.BITBOX_SERVER_NAME }}
+          BITBOX_TLS_CERT_PATH: ${{ secrets.BITBOX_TLS_CERT_PATH }}
+          BITBOX_TLS_KEY_PATH: ${{ secrets.BITBOX_TLS_KEY_PATH }}
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ubuntu
           key: ${{ secrets.EC2_SSH_KEY }}
+          envs: BITBOX_SERVER_NAME,BITBOX_TLS_CERT_PATH,BITBOX_TLS_KEY_PATH
           script: |
             set -euo pipefail
             cd /home/ubuntu/BITBOX
@@ -74,9 +91,55 @@ jobs:
             git checkout merge-frontend-backend
             git pull --ff-only origin merge-frontend-backend
             .venv/bin/pip install -r requirements-backend.txt -q
-            if ! command -v nginx >/dev/null 2>&1 || ! command -v envsubst >/dev/null 2>&1; then
+            if ! command -v nginx >/dev/null 2>&1 || ! command -v envsubst >/dev/null 2>&1 || ! command -v certbot >/dev/null 2>&1 || ! command -v aws >/dev/null 2>&1; then
               sudo apt-get update -qq
-              sudo apt-get install -y nginx gettext-base
+              sudo apt-get install -y nginx gettext-base certbot awscli
+            fi
+
+            if [[ ! -f "$BITBOX_TLS_CERT_PATH" || ! -f "$BITBOX_TLS_KEY_PATH" ]]; then
+              IMDS_TOKEN=$(curl --fail --silent --show-error --max-time 3 \
+                -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 300' \
+                http://169.254.169.254/latest/api/token)
+              METADATA_HEADER="X-aws-ec2-metadata-token: $IMDS_TOKEN"
+              REGION=$(curl --fail --silent --show-error --max-time 3 -H "$METADATA_HEADER" \
+                http://169.254.169.254/latest/meta-data/placement/region)
+              PUBLIC_IP=$(curl --fail --silent --show-error --max-time 3 -H "$METADATA_HEADER" \
+                http://169.254.169.254/latest/meta-data/public-ipv4)
+              MAC=$(curl --fail --silent --show-error --max-time 3 -H "$METADATA_HEADER" \
+                http://169.254.169.254/latest/meta-data/network/interfaces/macs/ | head -n 1)
+              SECURITY_GROUP=$(curl --fail --silent --show-error --max-time 3 -H "$METADATA_HEADER" \
+                "http://169.254.169.254/latest/meta-data/network/interfaces/macs/${MAC}security-group-ids" | head -n 1)
+
+              if ! aws sts get-caller-identity --region "$REGION" >/dev/null 2>&1; then
+                echo 'EC2 instance IAM role is missing or cannot call AWS APIs.' >&2
+                exit 1
+              fi
+
+              open_port() {
+                local port="$1"
+                local error_output
+                if ! error_output=$(aws ec2 authorize-security-group-ingress \
+                  --region "$REGION" --group-id "$SECURITY_GROUP" \
+                  --protocol tcp --port "$port" --cidr 0.0.0.0/0 2>&1); then
+                  if ! grep -q 'InvalidPermission.Duplicate' <<<"$error_output"; then
+                    echo "Unable to open TCP $port on $SECURITY_GROUP: $error_output" >&2
+                    exit 1
+                  fi
+                fi
+              }
+              open_port 80
+              open_port 443
+
+              if ! getent ahostsv4 "$BITBOX_SERVER_NAME" | awk '{print $1}' | grep -qx "$PUBLIC_IP"; then
+                echo 'BITBOX_SERVER_NAME does not resolve to EC2_HOST.' >&2
+                exit 1
+              fi
+
+              sudo systemctl stop nginx || true
+              sudo certbot certonly --standalone --non-interactive --agree-tos \
+                --register-unsafely-without-email --preferred-challenges http \
+                --pre-hook 'systemctl stop nginx' --post-hook 'systemctl start nginx' \
+                -d "$BITBOX_SERVER_NAME"
             fi
 
       - name: Upload frontend build
@@ -92,6 +155,10 @@ jobs:
         uses: appleboy/ssh-action@v1.0.3
         env:
           API_AUTH_TOKEN: ${{ secrets.API_AUTH_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          KAKAO_REST_API_KEY: ${{ secrets.KAKAO_REST_API_KEY }}
+          ODSAY_API_KEY: ${{ secrets.ODSAY_API_KEY }}
+          PUBLIC_DATA_SERVICE_KEY: ${{ secrets.PUBLIC_DATA_SERVICE_KEY }}
           BITBOX_SERVER_NAME: ${{ secrets.BITBOX_SERVER_NAME }}
           BITBOX_TLS_CERT_PATH: ${{ secrets.BITBOX_TLS_CERT_PATH }}
           BITBOX_TLS_KEY_PATH: ${{ secrets.BITBOX_TLS_KEY_PATH }}
@@ -99,11 +166,15 @@ jobs:
           host: ${{ secrets.EC2_HOST }}
           username: ubuntu
           key: ${{ secrets.EC2_SSH_KEY }}
-          envs: API_AUTH_TOKEN,BITBOX_SERVER_NAME,BITBOX_TLS_CERT_PATH,BITBOX_TLS_KEY_PATH
+          envs: API_AUTH_TOKEN,OPENAI_API_KEY,KAKAO_REST_API_KEY,ODSAY_API_KEY,PUBLIC_DATA_SERVICE_KEY,BITBOX_SERVER_NAME,BITBOX_TLS_CERT_PATH,BITBOX_TLS_KEY_PATH
           script: |
             set -euo pipefail
             cd /home/ubuntu/BITBOX
             [[ "$API_AUTH_TOKEN" =~ ^[A-Za-z0-9_-]{32,}$ ]]
+            [[ -n "$OPENAI_API_KEY" && "$OPENAI_API_KEY" != *[[:space:]]* ]]
+            [[ -n "$KAKAO_REST_API_KEY" && "$KAKAO_REST_API_KEY" != *[[:space:]]* ]]
+            [[ -n "$ODSAY_API_KEY" && "$ODSAY_API_KEY" != *[[:space:]]* ]]
+            [[ -n "$PUBLIC_DATA_SERVICE_KEY" && "$PUBLIC_DATA_SERVICE_KEY" != *[[:space:]]* ]]
             [[ "$BITBOX_SERVER_NAME" =~ ^[A-Za-z0-9.-]+$ ]]
             [[ "$BITBOX_TLS_CERT_PATH" =~ ^/[A-Za-z0-9_./-]+$ ]]
             [[ "$BITBOX_TLS_KEY_PATH" =~ ^/[A-Za-z0-9_./-]+$ ]]
@@ -111,7 +182,8 @@ jobs:
             test -f "$BITBOX_TLS_KEY_PATH"
 
             sudo install -d -m 700 /etc/bitbox
-            printf 'APP_ENV=prod\nCORS_ALLOWED_ORIGINS=\nAPI_AUTH_TOKEN=%s\n' "$API_AUTH_TOKEN" \
+            printf 'APP_ENV=prod\nUSE_MOCK_EXTERNALS=false\nCORS_ALLOWED_ORIGINS=\nAPI_AUTH_TOKEN=%s\nOPENAI_API_KEY=%s\nKAKAO_REST_API_KEY=%s\nODSAY_API_KEY=%s\nPUBLIC_DATA_SERVICE_KEY=%s\nDEFAULT_ORIGIN_NAME=올림픽공원역\nDEFAULT_BUS_STOP_NAME=올림픽공원역\nDEFAULT_BUS_STATION_ID=24245\n' \
+              "$API_AUTH_TOKEN" "$OPENAI_API_KEY" "$KAKAO_REST_API_KEY" "$ODSAY_API_KEY" "$PUBLIC_DATA_SERVICE_KEY" \
               | sudo tee /etc/bitbox/bitbox.env >/dev/null
             sudo chmod 600 /etc/bitbox/bitbox.env
 
@@ -123,13 +195,9 @@ jobs:
             sudo rm -f /etc/nginx/sites-enabled/default
             sudo nginx -t
 
-            DEPLOY_API_AUTH_TOKEN="$API_AUTH_TOKEN"
-            set -a
-            source .env
-            set +a
             export APP_ENV=prod
+            export USE_MOCK_EXTERNALS=false
             export CORS_ALLOWED_ORIGINS=
-            export API_AUTH_TOKEN="$DEPLOY_API_AUTH_TOKEN"
             .venv/bin/python -c 'from app.core.config import validate_required_settings; validate_required_settings()'
 
             sudo cp deploy/bitbox-backend.service /etc/systemd/system/bitbox-backend.service
@@ -140,8 +208,8 @@ jobs:
 
             for i in $(seq 1 20); do
               if curl --fail --silent --show-error \
-                --resolve "$BITBOX_SERVER_NAME:8000:127.0.0.1" \
-                "https://$BITBOX_SERVER_NAME:8000/health" | grep -q '"version":"1.1.0"'; then
+                --resolve "$BITBOX_SERVER_NAME:443:127.0.0.1" \
+                "https://$BITBOX_SERVER_NAME/health" | grep -q '"version":"1.1.0"'; then
                 exit 0
               fi
               sleep 1
