@@ -5,21 +5,21 @@ import { apiFetch } from "./client";
 interface DefaultBackendItem {
   bus_number: string;
   direction: string;
-  first_arrival_min: number;
-  second_arrival_min: number;
+  first_arrival_min?: number | null;
+  second_arrival_min?: number | null;
   message: string;
-  raw_arrmsg1: string;
-  raw_arrmsg2: string;
-  raw_congestion1: string;
-  raw_congestion2: string;
-  raw_is_last1: string;
-  raw_is_last2: string;
-  raw_bus_type1: string;
-  raw_bus_type2: string;
-  raw_is_full_flag1: string;
-  raw_is_full_flag2: string;
-  raw_station_nm1: string;
-  raw_station_nm2: string;
+  raw_arrmsg1?: string | null;
+  raw_arrmsg2?: string | null;
+  raw_congestion1?: string | null;
+  raw_congestion2?: string | null;
+  raw_is_last1?: string | null;
+  raw_is_last2?: string | null;
+  raw_bus_type1?: string | null;
+  raw_bus_type2?: string | null;
+  raw_is_full_flag1?: string | null;
+  raw_is_full_flag2?: string | null;
+  raw_station_nm1?: string | null;
+  raw_station_nm2?: string | null;
   raw_veh_id1?: string;
   raw_veh_id2?: string;
 }
@@ -35,17 +35,18 @@ interface DefaultApiResponse {
 /**
  * 혼잡도 수치 변환 헬퍼 함수
  */
-function toCongestion(val: string): BusCongetion {
-  const n = parseInt(val, 10);
+export function toCongestion(val?: string | null): BusCongetion {
+  const n = Number.parseInt(val ?? "", 10);
+  if (n === 3) return 3;
   if (n === 4) return 4;
   if (n === 5) return 5;
-  return 3;
+  return 0;
 }
 
 /**
  * 문자열에서 남은 정류장 수 파싱
  */
-export function parseRemainingStops(arrmsg: string): number {
+export function parseRemainingStops(arrmsg?: string | null): number {
   if (!arrmsg) return -1;
   if (arrmsg.includes("곧 도착")) return 0;
   const match = arrmsg.match(/(?:\[)?(\d+)\s*(?:번째|정거장)\s*전(?:\])?/);
@@ -53,11 +54,10 @@ export function parseRemainingStops(arrmsg: string): number {
 }
 
 /**
- * 경기 버스 노선 번호 뒤의 한글 지역명 제거 정규식
+ * 노선명은 마을버스의 한글 지역명을 보존하고 불필요한 "번" 접미사만 제거
  */
-function cleanBusNumber(name: string): string {
-  if (!name) return "";
-  return name.replace(/[가-힣]/g, "").trim();
+export function cleanBusNumber(name: string): string {
+  return name.trim().replace(/\s*번$/, "");
 }
 
 /**
@@ -78,7 +78,7 @@ export async function getDefaultArrivals(): Promise<{ stationName: string; buses
     const cleanNum = cleanBusNumber(item.bus_number);
 
     // 1번째 도착 예정 버스 객체화
-    if (item.first_arrival_min >= 0) {
+    if (item.first_arrival_min != null && item.first_arrival_min >= 0) {
       result.push({
         id: item.raw_veh_id1 || `${item.bus_number}-1`,
         busNumber: cleanNum, 
@@ -97,7 +97,7 @@ export async function getDefaultArrivals(): Promise<{ stationName: string; buses
     }
 
     // 2번째 도착 예정 버스 객체화
-    if (item.second_arrival_min >= 0) {
+    if (item.second_arrival_min != null && item.second_arrival_min >= 0) {
       result.push({
         id: item.raw_veh_id2 || `${item.bus_number}-2`,
         busNumber: cleanNum, 
@@ -132,13 +132,14 @@ export async function getDefaultArrivals(): Promise<{ stationName: string; buses
  * UI 뱃지용 혼잡도 라벨/컬러 매핑 헬퍼 함수들
  */
 export function getCongestionLabel(c: BusCongetion): string {
-  return ({ 3: "여유", 4: "보통", 5: "혼잡" } as Record<number, string>)[c] ?? "여유";
+  return ({ 0: "정보 없음", 3: "여유", 4: "보통", 5: "혼잡" } as Record<BusCongetion, string>)[c];
 }
 
 export function getCongestionColor(c: BusCongetion): string {
   return ({
+    0: "text-slate-700 bg-slate-100 border-slate-300",
     3: "text-[#065F46] bg-[#D1FAE5] border-[#34D399]",
     4: "text-[#92400E] bg-[#FEF3C7] border-[#F59E0B]",
     5: "text-[#991B1B] bg-[#FEE2E2] border-[#F87171]",
-  } as Record<number, string>)[c] ?? "text-[#065F46] bg-[#D1FAE5] border-[#34D399]";
+  } as Record<BusCongetion, string>)[c];
 }

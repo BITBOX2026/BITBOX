@@ -11,6 +11,7 @@ from app.api.gateway import _build_upload_compat_response, _looks_like_supported
 from app.api.schemas import ProcessResponse, TextRouteRequest, UploadCompatResponse
 from app.routers.bus import router as bus_router
 from app.services import pipeline
+from app.services.bus_service import _extract_arrival_minutes
 from app.services.response_builder import build_user_message
 from app.services.ai import llm_service
 from app.services.core.constants import (
@@ -306,6 +307,21 @@ def test_typed_route_uses_same_frontend_contract(monkeypatch) -> None:
 def test_default_bus_route_omits_none_fields_for_javascript_comparison() -> None:
     route = next(route for route in bus_router.routes if route.path == "/default")
     assert route.response_model_exclude_none is True
+
+
+@pytest.mark.parametrize("message", ["운행종료", "운행 종료", "출발대기", "출발 대기"])
+def test_unavailable_bus_is_not_reported_as_arriving(message: str) -> None:
+    assert _extract_arrival_minutes(
+        {"traTime1": "0", "arrmsg1": message},
+        1,
+    ) is None
+
+
+def test_imminent_bus_with_zero_seconds_is_reported_as_arriving() -> None:
+    assert _extract_arrival_minutes(
+        {"traTime1": "0", "arrmsg1": "곧 도착"},
+        1,
+    ) == 0
 
 
 def test_seoul_bus_urls_use_reachable_http_endpoint() -> None:

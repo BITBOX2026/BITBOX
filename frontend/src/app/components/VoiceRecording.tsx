@@ -6,7 +6,7 @@ import { BusOption } from "../../types/bus";
 type RecorderStatus = "idle" | "listening" | "loading" | "result";
 const NO_SPEECH_TIMEOUT_MS = 8_000;
 const MAX_RECORDING_MS = 20_000;
-const REQUEST_TIMEOUT_MS = 25_000;
+const REQUEST_TIMEOUT_MS = 35_000;
 
 export function selectRecordingMimeType(
   isSupported: (mimeType: string) => boolean = MediaRecorder.isTypeSupported,

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { parseRemainingStops } from "./busService";
+import {
+  cleanBusNumber,
+  getCongestionLabel,
+  parseRemainingStops,
+  toCongestion,
+} from "./busService";
 
 describe("parseRemainingStops", () => {
   it("parses common Seoul arrival message formats", () => {
@@ -11,5 +16,19 @@ describe("parseRemainingStops", () => {
 
   it("returns -1 when no stop count is available", () => {
     expect(parseRemainingStops("운행 종료")).toBe(-1);
+  });
+});
+
+describe("bus display values", () => {
+  it("preserves Korean village-bus route names", () => {
+    expect(cleanBusNumber("강동01")).toBe("강동01");
+    expect(cleanBusNumber("송파02번")).toBe("송파02");
+  });
+
+  it("keeps unavailable congestion distinct from free seating", () => {
+    expect(toCongestion(undefined)).toBe(0);
+    expect(toCongestion("0")).toBe(0);
+    expect(toCongestion("3")).toBe(3);
+    expect(getCongestionLabel(0)).toBe("정보 없음");
   });
 });

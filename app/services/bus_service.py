@@ -30,6 +30,7 @@ from app.services.transit.seoul_bus_parser import (
 
 CACHE_TTL_SECONDS = 15.0
 STATION_CACHE_MAX_SIZE = 100
+_UNAVAILABLE_ARRIVAL_MARKERS = ("운행종료", "운행 종료", "출발대기", "출발 대기")
 
 _default_cache: tuple[float, DefaultBusArrivalResponse] | None = None
 _default_cache_lock = asyncio.Lock()
@@ -257,18 +258,22 @@ def _build_arrival_item(item: dict[str, str]) -> DefaultBusArrivalItem:
 
 
 def _extract_arrival_minutes(item: dict[str, str], index: int) -> int | None:
+    message = first_item_value(item, [f"arrmsg{index}", f"arrMsg{index}"])
+    if message and any(marker in message for marker in _UNAVAILABLE_ARRIVAL_MARKERS):
+        return None
+    if message and "곧" in message:
+        return 0
+
     travel_seconds = safe_int(
         first_item_value(item, [
             f"traTime{index}", f"travelTime{index}",
             f"arrTime{index}", f"arrivalTime{index}",
         ])
     )
-    if travel_seconds is not None:
-        return 0 if travel_seconds <= 0 else max((travel_seconds + 59) // 60, 1)
+    if travel_seconds is not None and travel_seconds > 0:
+        return max((travel_seconds + 59) // 60, 1)
 
-    return _minutes_from_message(
-        first_item_value(item, [f"arrmsg{index}", f"arrMsg{index}"])
-    )
+    return _minutes_from_message(message)
 
 
 def _minutes_from_message(message: str | None) -> int | None:

@@ -28,6 +28,12 @@ describe("accessibilityScore", () => {
       accessibilityScore(bus({ isFullFlag: true })),
     );
   });
+
+  it("does not rank unknown congestion as available seating", () => {
+    expect(accessibilityScore(bus({ congetion: 0 }))).toBeGreaterThan(
+      accessibilityScore(bus({ congetion: 3 })),
+    );
+  });
 });
 
 describe("selectRecordingMimeType", () => {

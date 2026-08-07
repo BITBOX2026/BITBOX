@@ -16,7 +16,7 @@ const DAY_KR = ["일", "월", "화", "수", "목", "금", "토"];
 export function accessibilityScore(bus: BusInfo): number {
   const fullPenalty = bus.isFullFlag ? 100 : 0;
   const lowFloorBonus = bus.busType === 1 ? -20 : 0;
-  const congestionPenalty = bus.congetion === 5 ? 15 : bus.congetion === 4 ? 5 : 0;
+  const congestionPenalty = bus.congetion === 5 ? 15 : bus.congetion === 4 ? 5 : bus.congetion === 0 ? 10 : 0;
   return fullPenalty + lowFloorBonus + congestionPenalty + bus.arrivalMin;
 }
 
