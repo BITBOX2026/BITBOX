@@ -171,6 +171,21 @@ jobs:
             sudo systemctl daemon-reload
             sudo systemctl enable bitbox-backend.service nginx
             sudo systemctl restart bitbox-backend.service
+
+            legacy_uvicorn_stopped=0
+            for pid in $(sudo fuser 8000/tcp 2>/dev/null || true); do
+              command_line=$(sudo ps -p "$pid" -o args=)
+              if grep -Eq 'uvicorn .*app\.main:app.*--port([= ]+)8000' <<<"$command_line"; then
+                sudo kill "$pid"
+                legacy_uvicorn_stopped=1
+              elif ! grep -q 'nginx' <<<"$command_line"; then
+                echo "TCP 8000 is occupied by an unexpected process: $command_line" >&2
+                exit 1
+              fi
+            done
+            if [[ "$legacy_uvicorn_stopped" == 1 ]]; then
+              sleep 2
+            fi
             sudo systemctl restart nginx
 
             for i in $(seq 1 20); do
