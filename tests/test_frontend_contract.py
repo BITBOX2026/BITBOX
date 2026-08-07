@@ -100,7 +100,14 @@ def test_text_route_preserves_selected_destination_coordinates(monkeypatch) -> N
         )
 
     monkeypatch.setattr(pipeline, "search_transport_info", search)
-    asyncio.run(pipeline.run_text_route("강남역 2호선", 127.0276, 37.4979))
+    asyncio.run(
+        pipeline.run_text_route(
+            "강남역 2호선",
+            127.0276,
+            37.4979,
+            origin="올림픽공원역",
+        )
+    )
 
     assert captured is not None
     assert captured.destination_x == 127.0276
