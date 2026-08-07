@@ -38,7 +38,10 @@ export function RouteDetailOverlay({ route, destination, viewMode, onToggleView 
     if (!hasCoordinates(segment)) return;
     const start = { lat: Number(segment.start_y), lng: Number(segment.start_x) };
     const end = { lat: Number(segment.end_y), lng: Number(segment.end_x) };
-    mapLines.push({ path: [start, end], color: ROUTE_COLORS[index % ROUTE_COLORS.length], busNumber: segment.line || route.busNumber });
+    const stationPath = (segment.path_points ?? [])
+      .filter((point) => Number.isFinite(Number(point.x)) && Number.isFinite(Number(point.y)))
+      .map((point) => ({ lat: Number(point.y), lng: Number(point.x) }));
+    mapLines.push({ path: stationPath.length >= 2 ? stationPath : [start, end], color: ROUTE_COLORS[index % ROUTE_COLORS.length], busNumber: segment.line || route.busNumber });
     mapMarkers.push({ ...start, name: segment.start_name || "탑승 정류장" });
     if (index === segments.length - 1) mapMarkers.push({ ...end, name: segment.end_name || destination });
 
@@ -48,12 +51,16 @@ export function RouteDetailOverlay({ route, destination, viewMode, onToggleView 
     }
   });
 
-  const originLat = Number(route.origin_y);
-  const originLng = Number(route.origin_x);
-  const destinationLat = Number(route.destination_y);
-  const destinationLng = Number(route.destination_x);
-  if (Number.isFinite(originLat) && Number.isFinite(originLng)) mapMarkers.unshift({ lat: originLat, lng: originLng, name: route.origin || "출발지" });
-  if (Number.isFinite(destinationLat) && Number.isFinite(destinationLng)) mapMarkers.push({ lat: destinationLat, lng: destinationLng, name: destination || "목적지" });
+  if (route.origin_x != null && route.origin_y != null) {
+    const originLat = Number(route.origin_y);
+    const originLng = Number(route.origin_x);
+    if (Number.isFinite(originLat) && Number.isFinite(originLng)) mapMarkers.unshift({ lat: originLat, lng: originLng, name: route.origin || "출발지" });
+  }
+  if (route.destination_x != null && route.destination_y != null) {
+    const destinationLat = Number(route.destination_y);
+    const destinationLng = Number(route.destination_x);
+    if (Number.isFinite(destinationLat) && Number.isFinite(destinationLng)) mapMarkers.push({ lat: destinationLat, lng: destinationLng, name: destination || "목적지" });
+  }
 
   return (
     <div className="absolute inset-0 flex h-full w-full flex-col overflow-hidden bg-white text-[#171D23]">

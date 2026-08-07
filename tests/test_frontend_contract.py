@@ -2,8 +2,13 @@
 
 import asyncio
 
+import pytest
+from fastapi import HTTPException
+from pydantic import ValidationError
+from starlette.requests import Request
+
 from app.api.gateway import _build_upload_compat_response
-from app.api.schemas import ProcessResponse, UploadCompatResponse
+from app.api.schemas import ProcessResponse, TextRouteRequest, UploadCompatResponse
 from app.routers.bus import router as bus_router
 from app.services import pipeline
 from app.services.ai import llm_service
@@ -21,7 +26,29 @@ from app.services.core.service_types import (
     ValidationResult,
 )
 from app.services.transit import transport_service
-from app.services.transit.odsay_service import _extract_route_segments
+from app.services.transit.odsay_service import _extract_route_segments, _select_best_path
+from app.services.transit.validate_service import validate_parsed_intent
+from app.core import auth
+
+
+def test_shared_api_token_rejects_missing_token(monkeypatch) -> None:
+    monkeypatch.setattr(auth, "get_setting", lambda _name: "kiosk-secret")
+    request = Request({"type": "http", "headers": []})
+
+    with pytest.raises(HTTPException) as exc_info:
+        auth.verify_api_token(request)
+
+    assert exc_info.value.status_code == 401
+
+
+def test_shared_api_token_accepts_kiosk_header(monkeypatch) -> None:
+    monkeypatch.setattr(auth, "get_setting", lambda _name: "kiosk-secret")
+    request = Request({
+        "type": "http",
+        "headers": [(b"x-bitbox-token", b"kiosk-secret")],
+    })
+
+    auth.verify_api_token(request)
 
 
 def test_clear_destination_uses_fast_intent_path(monkeypatch) -> None:
@@ -35,6 +62,25 @@ def test_clear_destination_uses_fast_intent_path(monkeypatch) -> None:
     assert parsed.intent == "route"
     assert parsed.destination_text == "강남역"
     assert parsed.transport_mode == "bus"
+
+
+def test_text_route_contract_only_accepts_bus_mode() -> None:
+    assert TextRouteRequest(destination="강남역").transport_mode == "bus"
+    with pytest.raises(ValidationError):
+        TextRouteRequest(destination="강남역", transport_mode="subway")
+
+
+def test_explicit_subway_voice_request_is_rejected() -> None:
+    validation = validate_parsed_intent(
+        ParsedIntent(
+            intent="route",
+            destination_text="강남역",
+            transport_mode="subway",
+            confidence=0.95,
+        )
+    )
+    assert validation.is_valid is False
+    assert "버스 경로만" in validation.message
 
 
 def test_process_schema_preserves_all_arrival_fields() -> None:
@@ -140,11 +186,11 @@ def test_typed_route_uses_same_frontend_contract(monkeypatch) -> None:
             source="odsay",
         )
 
-    async def no_tts(_text: str, request_id: str):
-        return None
+    async def fail_tts(_text: str):
+        raise AssertionError("typed route must not request paid TTS")
 
     monkeypatch.setattr(pipeline, "search_transport_info", search)
-    monkeypatch.setattr(pipeline, "_generate_tts_audio_safely", no_tts)
+    monkeypatch.setattr(pipeline, "generate_tts_audio", fail_tts)
 
     result = asyncio.run(
         pipeline.run_text_route("강남역", origin="서울시청", request_id="typed-route")
@@ -155,6 +201,7 @@ def test_typed_route_uses_same_frontend_contract(monkeypatch) -> None:
     assert compat["destination"] == "강남역"
     assert compat["buses"][0]["busNumber"] == "402"
     assert compat["buses"][0]["routeDetail"]["totalMin"] == 28
+    assert result["audio_base64"] is None
 
 
 def test_default_bus_route_omits_none_fields_for_javascript_comparison() -> None:
@@ -189,6 +236,15 @@ def test_odsay_segments_exclude_walks_rendered_by_frontend() -> None:
                 "startName": "올림픽공원역",
                 "endName": "잠실역",
                 "lane": [{"busNo": "3214"}],
+                "startX": 127.10,
+                "startY": 37.51,
+                "endX": 127.12,
+                "endY": 37.53,
+                "passStopList": {
+                    "stations": [
+                        {"x": "127.11", "y": "37.52"},
+                    ]
+                },
             },
         ]
     )
@@ -197,6 +253,24 @@ def test_odsay_segments_exclude_walks_rendered_by_frontend() -> None:
     assert [(segment.vehicle_type, segment.line) for segment in segments] == [
         ("버스", "3214번")
     ]
+    assert segments[0].path_points == [
+        {"x": 127.10, "y": 37.51},
+        {"x": 127.11, "y": 37.52},
+        {"x": 127.12, "y": 37.53},
+    ]
+
+
+def test_odsay_bus_mode_excludes_mixed_subway_path() -> None:
+    mixed = {
+        "info": {"totalTime": 10, "busTransitCount": 1, "subwayTransitCount": 1},
+        "subPath": [{"trafficType": 2, "lane": [{"busNo": "146"}]}, {"trafficType": 1}],
+    }
+    bus_only = {
+        "info": {"totalTime": 20, "busTransitCount": 1, "subwayTransitCount": 0},
+        "subPath": [{"trafficType": 2, "lane": [{"busNo": "402"}]}],
+    }
+    selected = _select_best_path({"result": {"path": [mixed, bus_only]}})
+    assert selected is bus_only
 
 
 def test_route_arrival_uses_first_boarding_bus_and_stop_fallback(monkeypatch) -> None:

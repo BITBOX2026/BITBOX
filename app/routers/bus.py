@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter, Request
 
+from app.core.auth import verify_api_token
 from app.core.rate_limiter import limiter
 from app.schemas.bus import DefaultBusArrivalResponse
 from app.services.bus_service import get_default_bus_arrivals
@@ -18,4 +19,5 @@ router = APIRouter()
 )
 @limiter.limit("30/minute")
 async def get_default_bus_arrival(request: Request) -> DefaultBusArrivalResponse:
+    verify_api_token(request)
     return await get_default_bus_arrivals()

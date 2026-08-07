@@ -1,17 +1,19 @@
 # BITBOX
 
-음성으로 대중교통 경로를 안내하는 백엔드 서버입니다.
+정류장에서 음성으로 버스 경로와 실시간 도착 정보를 안내하는 AI 승차 도우미입니다.
 
 클라이언트(라즈베리파이 등)가 녹음한 음성 파일을 전송하면, 실시간 경로/도착 정보를 조회해 안내 문장과 TTS 음성으로 응답합니다.
 
 **지원 기능**
 - 경로 안내: "서울역에서 강남역 가는 버스 알려줘"
 - 도착 정보: "서울역 정류장에 402번 언제 와?"
+- 안심 승차: 저상·비만차·저혼잡 버스 우선 표시
+- 접근 알림: 선택한 버스가 3정거장·1정거장 전에 도착 음성 안내
 
 **사용 API**
 - OpenAI — 음성 인식(STT), 발화 분석(LLM), 음성 합성(TTS)
 - Kakao Local API — 장소명 → 좌표 변환
-- ODsay API — 대중교통 경로 조회
+- ODsay API — 버스 전용 경로 조회
 - 공공데이터포털 — 실시간 버스 도착 정보
 
 ---
@@ -90,21 +92,19 @@ file: <WAV 파일>
 ```json
 {
   "status": "success",
-  "message": "잠실에서 2호선을 타세요. 왕십리에서 경의중앙선으로 환승하시면 용산에 도착합니다. 약 41분 소요되며, 요금은 1,750원입니다.",
+  "message": "서울역버스환승센터에서 402번 버스를 타고 강남역에 내리세요. 약 42분 소요됩니다.",
   "audio_base64": "<TTS 음성 base64>",
   "request_id": "e4e65e7f",
   "data": {
-    "transcript": "용산역에 가고 싶어.",
+    "transcript": "서울역에서 강남역 가는 버스 알려줘.",
     "intent": "route",
-    "origin": "잠실역",
-    "destination": "용산역",
-    "transport_mode": "transit",
-    "total_time_min": 41,
-    "payment": 1750,
-    "transfer_count": 1,
+    "origin": "서울역",
+    "destination": "강남역",
+    "transport_mode": "bus",
+    "total_time_min": 42,
+    "transfer_count": 0,
     "route_segments": [
-      { "vehicle_type": "지하철", "line": "2호선", "start_name": "잠실", "end_name": "왕십리" },
-      { "vehicle_type": "지하철", "line": "경의중앙선", "start_name": "왕십리", "end_name": "용산" }
+      { "vehicle_type": "버스", "line": "402번", "start_name": "서울역버스환승센터", "end_name": "강남역" }
     ],
     "source": "odsay"
   }

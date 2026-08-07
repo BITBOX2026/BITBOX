@@ -85,10 +85,8 @@ async def run_text_route(
             **_parsed_fields(parsed),
         )
 
-    result["audio_base64"] = await _generate_tts_audio_safely(
-        result.get("message", ""),
-        request_id=request_id,
-    )
+    # 텍스트 검색은 브라우저 음성 합성을 사용해 응답 지연과 TTS 비용을 줄입니다.
+    result["audio_base64"] = None
     result["request_id"] = request_id
     return result
 
@@ -226,7 +224,6 @@ async def _run_parsed_pipeline(
         total_time_min=transport_result.total_time_min,
         payment=transport_result.payment,
         bus_transit_count=transport_result.bus_transit_count,
-        subway_transit_count=transport_result.subway_transit_count,
         transfer_count=transport_result.transfer_count,
         path_type=transport_result.path_type,
         route_segments=transport_result.route_segments,
@@ -279,7 +276,6 @@ def _success_response(
     total_time_min: int | None,
     payment: int | None,
     bus_transit_count: int | None,
-    subway_transit_count: int | None,
     transfer_count: int | None,
     path_type: int | None,
     route_segments: list[RouteSegment] | None,
@@ -300,7 +296,7 @@ def _success_response(
             first_bus_time=first_bus_time,
             total_time_min=total_time_min,
             payment=payment, bus_transit_count=bus_transit_count,
-            subway_transit_count=subway_transit_count, transfer_count=transfer_count,
+            transfer_count=transfer_count,
             path_type=path_type, route_segments=route_segments,
             confidence=confidence, source=source, needs_confirmation=needs_confirmation,
         ),
@@ -331,7 +327,7 @@ def _error_response(
             stop_text=stop_text, stop_name=stop_name,
             transport_mode=transport_mode, bus_number=bus_number,
             arrival_time=None, total_time_min=None, payment=None,
-            bus_transit_count=None, subway_transit_count=None,
+            bus_transit_count=None,
             transfer_count=None, path_type=None, route_segments=None,
             confidence=confidence, source="none", needs_confirmation=needs_confirmation,
         ),
@@ -357,7 +353,6 @@ def _build_response_data(
     total_time_min: int | None = None,
     payment: int | None = None,
     bus_transit_count: int | None = None,
-    subway_transit_count: int | None = None,
     transfer_count: int | None = None,
     path_type: int | None = None,
     route_segments: list[RouteSegment] | None = None,
@@ -385,7 +380,6 @@ def _build_response_data(
         "total_time_min": total_time_min,
         "payment": payment,
         "bus_transit_count": bus_transit_count,
-        "subway_transit_count": subway_transit_count,
         "transfer_count": transfer_count,
         "path_type": path_type,
         # RouteSegment dataclass를 dict로 변환 — JSON 직렬화 가능하도록

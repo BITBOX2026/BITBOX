@@ -52,4 +52,5 @@ export interface RouteSegment {
   start_y?: number | null;
   end_x?: number | null;
   end_y?: number | null;
+  path_points?: Array<{ x: number; y: number }> | null;
 }

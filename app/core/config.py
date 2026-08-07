@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     # -------------------------------------------------------------------------
     OPENAI_API_KEY: str | None = None        # STT / LLM / TTS
     KAKAO_REST_API_KEY: str | None = None    # 장소명 → 좌표 변환
-    ODSAY_API_KEY: str | None = None         # 대중교통 경로 조회
+    ODSAY_API_KEY: str | None = None         # 버스 전용 경로 조회
     PUBLIC_DATA_SERVICE_KEY: str | None = None  # 실시간 버스 도착 정보
     SEOUL_BUS_API_KEY: str | None = None
 

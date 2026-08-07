@@ -9,16 +9,15 @@ API Gateway — 음성 파일 수신 및 파이프라인 실행
 
 import asyncio
 import re
-import secrets
 import uuid
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 
 from app.api.schemas import ProcessResponse, TextRouteRequest, UploadCompatResponse
+from app.core.auth import verify_api_token
 from app.core.config import settings
 from app.core.logger import get_logger
 from app.core.rate_limiter import limiter
-from app.services.core.settings_helper import get_setting
 from app.services.pipeline import build_timeout_error_response, run_pipeline, run_text_route
 
 router = APIRouter()
@@ -47,7 +46,7 @@ async def process_audio(request: Request, file: UploadFile = File(...)) -> dict:
     3. 구조화된 JSON 응답 반환
     """
 
-    _verify_api_token(request)
+    verify_api_token(request)
 
     # MIME 타입 확인 (세미콜론 이후 파라미터 제거 후 비교)
     content_type = (file.content_type or "").split(";")[0].strip().lower()
@@ -116,7 +115,7 @@ async def upload_audio(request: Request, file: UploadFile = File(...)) -> dict:
 @limiter.limit("20/minute")
 async def process_text_route(request: Request, body: TextRouteRequest) -> dict:
     """Return the same frontend contract as voice upload for a typed destination."""
-    _verify_api_token(request)
+    verify_api_token(request)
     request_id = uuid.uuid4().hex[:8]
 
     try:
@@ -192,9 +191,7 @@ def _build_buses_from_route(data: dict) -> list[dict]:
     steps: list[dict] = []
     for seg in route_segments:
         line = seg.get("line", "")
-        is_bus = seg.get("vehicle_type") == "버스"
-        # 버스 구간은 번호만("146번" → "146"), 지하철 구간은 빈 문자열
-        seg_bus_number = line.replace("번", "").strip() if is_bus else ""
+        seg_bus_number = line.replace("번", "").strip()
         seg_time = seg.get("time_min")
         duration = seg_time if seg_time is not None else round(total_time_min / n_segs)
         steps.append({
@@ -203,7 +200,7 @@ def _build_buses_from_route(data: dict) -> list[dict]:
             "busNumber": seg_bus_number,
             "fromStop": seg.get("start_name") or "",
             "toStop": seg.get("end_name") or "",
-            "description": f"{line} {'탑승' if is_bus else '이용'}",
+            "description": f"{line} 탑승",
         })
 
     # 대표 버스 번호: bus_number 우선, 없으면 노선명에서 추출
@@ -329,22 +326,6 @@ def _make_arrival_bus_entry(
         "totalMin": arrival_min,
         "steps": [],
     }
-
-
-def _verify_api_token(request: Request) -> None:
-    """API_AUTH_TOKEN이 설정된 경우 요청 헤더의 토큰을 검증합니다."""
-    expected = get_setting("API_AUTH_TOKEN")
-    expected_token = str(expected or "").strip()
-    if not expected_token:
-        return
-
-    provided = (request.headers.get("x-bitbox-token") or "").strip()
-    auth_header = request.headers.get("authorization") or ""
-    if auth_header.lower().startswith("bearer "):
-        provided = auth_header[7:].strip()
-
-    if not provided or not secrets.compare_digest(expected_token, provided):
-        raise HTTPException(status_code=401, detail="인증 토큰이 올바르지 않습니다.")
 
 
 def _looks_like_supported_audio(content_type: str, audio_bytes: bytes) -> bool:

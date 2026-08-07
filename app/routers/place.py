@@ -3,6 +3,7 @@
 from fastapi import APIRouter, Query, Request
 from pydantic import BaseModel
 
+from app.core.auth import verify_api_token
 from app.core.rate_limiter import limiter
 from app.services.transit.kakao_service import search_place_suggestions
 
@@ -32,6 +33,7 @@ async def suggest_places(
     기기 위치 기준으로 가장 가까운 순서로 최대 5개 결과를 반환합니다.
     Kakao API 오류 시 빈 리스트를 반환합니다.
     """
+    verify_api_token(request)
     results = await search_place_suggestions(query, max_results=5)
     return PlaceSuggestResponse(
         suggestions=[PlaceSuggestion(**r) for r in results]

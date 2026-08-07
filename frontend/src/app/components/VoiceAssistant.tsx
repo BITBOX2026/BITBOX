@@ -9,7 +9,6 @@ export function VoiceAssistant() {
   const {
     status,
     transcript,
-    audioChunks,
     destination,
     buses,
     message,
@@ -33,7 +32,6 @@ export function VoiceAssistant() {
         buses={buses}
         message={message}
         audio_base64={audioBase64}
-        audioChunks={audioChunks}
         onReset={() => void startRecording()}
         onGoHome={reset}
       />

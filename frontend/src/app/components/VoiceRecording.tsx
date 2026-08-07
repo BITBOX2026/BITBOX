@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from "react";
 import { uploadVoiceAudio } from "../../api/client";
-import { findRoute, type TransportMode } from "../../api/routeService";
+import { findRoute } from "../../api/routeService";
 import { BusOption } from "../../types/bus";
 
 type RecorderStatus = "idle" | "listening" | "loading" | "result";
@@ -19,7 +19,6 @@ function normalizeBuses(rawBuses: BusOption[]): BusOption[] {
 export function useVoiceRecorder() {
   const [status, setStatus] = useState<RecorderStatus>("idle");
   const [transcript, setTranscript] = useState("듣고 있습니다...");
-  const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [destination, setDestination] = useState("");
   const [buses, setBuses] = useState<BusOption[]>([]);
   const [message, setMessage] = useState("");
@@ -60,13 +59,13 @@ export function useVoiceRecorder() {
     }
   };
 
-  const submitTextRoute = async (value: string, mode: TransportMode) => {
+  const submitTextRoute = async (value: string) => {
     setStatus("loading");
     setError("");
     setMessage("");
     setAudioBase64("");
     try {
-      applyResult(await findRoute(value, undefined, mode));
+      applyResult(await findRoute(value));
     } catch (routeError) {
       console.error("Text route lookup failed:", routeError);
       setError(routeError instanceof Error ? routeError.message : "경로 조회에 실패했습니다.");
@@ -111,7 +110,6 @@ export function useVoiceRecorder() {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       audioChunks.current = [];
       isTimeoutRef.current = false;
-      setAudioUrl(null);
       hasDetectedSound.current = false;
       setMessage("");
       setAudioBase64("");
@@ -148,7 +146,6 @@ export function useVoiceRecorder() {
 
         if (audioChunks.current.length > 0) {
           const audioBlob = new Blob(audioChunks.current, { type: "audio/webm" });
-          setAudioUrl(URL.createObjectURL(audioBlob));
           await uploadAudioToServer(audioBlob);
         } else {
           setStatus("idle");
@@ -204,7 +201,6 @@ export function useVoiceRecorder() {
   return {
     status,
     transcript,
-    audioUrl,
     audioChunks,
     destination,
     buses,

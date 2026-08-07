@@ -28,6 +28,11 @@ def validate_parsed_intent(parsed: ParsedIntent) -> ValidationResult:
         )
 
     if parsed.intent == "route":
+        if parsed.transport_mode == "subway":
+            return ValidationResult(
+                is_valid=False,
+                message="BITBOX는 버스 경로만 안내합니다. 버스로 갈 목적지를 말씀해 주세요.",
+            )
         if not parsed.destination_text:
             return ValidationResult(is_valid=False, message="목적지를 말씀해 주세요.")
 

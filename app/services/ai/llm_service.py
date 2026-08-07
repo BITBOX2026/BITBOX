@@ -95,7 +95,7 @@ async def _call_llm(client: AsyncOpenAI, llm_model: str, transcript: str) -> Par
                         "stop_text": {"type": ["string", "null"]},
                         "transport_mode": {
                             "type": "string",
-                            "enum": ["bus", "subway", "transit", "unknown"],
+                            "enum": ["bus", "subway", "unknown"],
                         },
                         "bus_number": {"type": ["string", "null"]},
                         "confidence": {
@@ -269,9 +269,9 @@ def _extract_transport_mode(text: str, bus_number: str | None) -> str:
         return "subway"
 
     if "대중교통" in text:
-        return "transit"
+        return "bus"
 
-    return "transit"
+    return "bus"
 
 
 def _extract_bus_number(text: str) -> str | None:
@@ -364,7 +364,7 @@ def _safe_confidence(value: object) -> float:
 def _normalize_transport_mode(value: object) -> str:
     """LLM 응답의 transport_mode를 허용된 값으로 보정합니다."""
 
-    if value in {"bus", "subway", "transit", "unknown"}:
+    if value in {"bus", "subway", "unknown"}:
         return str(value)
 
     return "unknown"

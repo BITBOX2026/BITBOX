@@ -230,33 +230,18 @@ def _mock_transport_result(parsed: ParsedIntent) -> TransportResult:
     if parsed.intent == "route":
         origin = parsed.origin_text or "출발지"
         dest = parsed.destination_text or "목적지"
-        uses_bus = parsed.transport_mode == "bus"
-        uses_subway = parsed.transport_mode == "subway"
-
-        # 교통수단에 따라 mock 경로 구간 생성
-        if uses_bus:
-            mock_segments: list[RouteSegment] | None = [
-                RouteSegment(vehicle_type="버스", line="146번", start_name=origin, end_name=dest)
-            ]
-        elif uses_subway:
-            mock_segments = [
-                RouteSegment(vehicle_type="지하철", line="2호선", start_name=origin, end_name=dest)
-            ]
-        else:
-            mock_segments = [
-                RouteSegment(vehicle_type="버스", line="146번", start_name=origin, end_name="환승역"),
-                RouteSegment(vehicle_type="지하철", line="2호선", start_name="환승역", end_name=dest),
-            ]
+        mock_segments: list[RouteSegment] = [
+            RouteSegment(vehicle_type="버스", line="146번", start_name=origin, end_name=dest)
+        ]
 
         return TransportResult(
             origin=origin, destination=dest,
             stop_name=None, transport_mode=parsed.transport_mode,
-            bus_number="146" if uses_bus else None,
+            bus_number="146",
             arrival_time=None, total_time_min=24, payment=1500,
-            bus_transit_count=1 if uses_bus else 0,
-            subway_transit_count=1 if uses_subway else 0,
+            bus_transit_count=1,
             transfer_count=0,
-            path_type=2 if uses_bus else 1 if uses_subway else 3,
+            path_type=2,
             route_summary=f"{origin}에서 {dest}까지 가는 mock 경로입니다.",
             route_segments=mock_segments,
             source="mock",

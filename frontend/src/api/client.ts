@@ -16,6 +16,13 @@ export type TransitResponse = {
   request_id?: string | null;
 };
 
+export interface PlaceSuggestion {
+  name: string;
+  address: string;
+  x?: string | null;
+  y?: string | null;
+}
+
 export function getApiBaseUrl(): string {
   const configured = import.meta.env.VITE_API_BASE_URL?.trim() || "";
   if (
@@ -67,12 +74,19 @@ export async function uploadVoiceAudio(blob: Blob): Promise<TransitResponse> {
 export async function requestTextRoute(
   destination: string,
   origin?: string,
-  transportMode: "bus" | "subway" | "transit" = "bus",
 ): Promise<TransitResponse> {
   const response = await apiFetch("/api/route", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ destination, origin: origin || null, transport_mode: transportMode }),
+    body: JSON.stringify({ destination, origin: origin || null, transport_mode: "bus" }),
   });
   return parseTransitResponse(response);
+}
+
+export async function suggestPlaces(query: string, signal?: AbortSignal): Promise<PlaceSuggestion[]> {
+  const params = new URLSearchParams({ query: query.trim() });
+  const response = await apiFetch(`/api/places/suggest?${params}`, { signal });
+  if (!response.ok) return [];
+  const payload = await response.json().catch(() => null);
+  return Array.isArray(payload?.suggestions) ? payload.suggestions : [];
 }

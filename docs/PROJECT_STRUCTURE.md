@@ -9,7 +9,7 @@ Path: `app/`
 - `app/main.py`: FastAPI application setup, CORS, router registration, health check.
 - `app/api/`: voice upload gateway and API response schemas.
 - `app/routers/`: public REST routers such as bus, station, and place APIs.
-- `app/services/`: transit, AI, response building, and shared service helpers.
+- `app/services/`: bus routing, live arrivals, AI, response building, and shared helpers.
 - `app/schemas/`: router-specific Pydantic response models.
 - `tests/`: backend tests, including frontend contract checks.
 
@@ -64,5 +64,5 @@ Development requests use the Vite proxy target. Production should serve `/api` o
 Frontend-facing endpoints:
 
 - `GET /api/bus/default`: default stop arrival board
-- `POST /api/upload`: voice transit request
+- `POST /api/upload`: voice bus request
 - `POST /api/route`: typed destination request using the same response contract

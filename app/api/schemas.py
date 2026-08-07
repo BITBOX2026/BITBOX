@@ -15,6 +15,7 @@ class RouteSegmentResponse(BaseModel):
     start_y: float | None = None  # 탑승 정류장 위도
     end_x: float | None = None    # 하차 정류장 경도
     end_y: float | None = None    # 하차 정류장 위도
+    path_points: list[dict[str, float]] | None = None
 
 
 class ProcessDataResponse(BaseModel):
@@ -36,7 +37,6 @@ class ProcessDataResponse(BaseModel):
     total_time_min: int | None = None
     payment: int | None = None
     bus_transit_count: int | None = None
-    subway_transit_count: int | None = None
     transfer_count: int | None = None
     path_type: int | None = None
     route_segments: list[RouteSegmentResponse] | None = None
@@ -72,7 +72,7 @@ class UploadCompatResponse(BaseModel):
 class TextRouteRequest(BaseModel):
     destination: str = Field(min_length=1, max_length=100)
     origin: str | None = Field(default=None, max_length=100)
-    transport_mode: Literal["bus", "subway", "transit"] = "bus"
+    transport_mode: Literal["bus"] = "bus"
 
 
 class HealthResponse(BaseModel):

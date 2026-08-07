@@ -12,8 +12,8 @@ from typing import Literal
 # 허용된 intent 값 — LLM이 분류하는 사용자 요청 유형
 IntentType = Literal["route", "arrival", "unknown"]
 
-# 허용된 교통수단 값
-TransportMode = Literal["bus", "subway", "transit", "unknown"]
+# 버스 전용 서비스이지만 명시적인 비지원 요청을 판별하기 위해 subway를 유지합니다.
+TransportMode = Literal["bus", "subway", "unknown"]
 
 
 @dataclass
@@ -39,17 +39,18 @@ class ValidationResult:
 
 @dataclass
 class RouteSegment:
-    """경로의 한 구간(버스 1회 탑승 또는 지하철 1개 노선)을 나타냅니다."""
+    """버스 경로의 한 탑승 구간을 나타냅니다."""
 
-    vehicle_type: str       # "버스" | "지하철"
-    line: str               # 예: "740번" | "2호선" | "공항철도"
-    start_name: str         # 탑승 정류장/역 이름
-    end_name: str           # 하차 정류장/역 이름
+    vehicle_type: str       # "버스"
+    line: str               # 예: "740번"
+    start_name: str         # 탑승 정류장 이름
+    end_name: str           # 하차 정류장 이름
     time_min: int | None = None  # ODsay subPath.time — 해당 구간 소요 시간(분)
     start_x: float | None = None  # 탑승 정류장 경도 (Kakao 지도용)
     start_y: float | None = None  # 탑승 정류장 위도
     end_x: float | None = None    # 하차 정류장 경도
     end_y: float | None = None    # 하차 정류장 위도
+    path_points: list[dict[str, float]] | None = None  # 경유 정류장 좌표
 
 
 @dataclass
@@ -71,9 +72,8 @@ class TransportResult:
     total_time_min: int | None = None     # 예상 소요 시간 (분)
     payment: int | None = None            # 예상 요금 (원)
     bus_transit_count: int | None = None
-    subway_transit_count: int | None = None
     transfer_count: int | None = None     # 환승 횟수
-    path_type: int | None = None          # ODsay pathType (1=지하철, 2=버스, 3=복합)
+    path_type: int | None = None          # ODsay pathType (버스 경로는 2)
     route_summary: str | None = None      # 요약 안내 문구 (내부용)
     route_segments: list[RouteSegment] | None = None  # 구간별 탑승 정보
     source: str = "none"                  # 데이터 출처 ("odsay"|"public_data"|"mock"|"none")
