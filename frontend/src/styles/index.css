@@ -1,33 +1,46 @@
-@import './fonts.css';
 @import './tailwind.css';
-@import './theme.css';
 
-/* 마이크 및 음파 애니메이션 */
-@keyframes micPing {
-  0% { transform: scale(0.9); opacity: 0.7; }
-  100% { transform: scale(1.6); opacity: 0; }
+:root {
+  color: #171d23;
+  background: #dce3e6;
+  font-family: "Noto Sans KR", "Malgun Gothic", Arial, sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
 }
-@keyframes micPulse {
-  0%, 100% { transform: scale(1); opacity: 1; }
-  50% { transform: scale(1.07); opacity: 0.8; }
-}
+
+* { box-sizing: border-box; }
+html, body, #root { min-width: 320px; min-height: 100%; margin: 0; }
+body { background: #dce3e6; -webkit-font-smoothing: antialiased; }
+button, input { font: inherit; }
+button { cursor: pointer; }
+button:focus-visible, input:focus-visible { outline: 3px solid #f0c929; outline-offset: 2px; }
+
 @keyframes voiceWave {
   0%, 100% { transform: scaleY(1); opacity: 0.9; }
   50% { transform: scaleY(0.3); opacity: 0.5; }
 }
 
-/* 전역 커스텀 스크롤바 (모든 컴포넌트 적용) */
-.custom-scrollbar::-webkit-scrollbar {
-  width: 5px;
+@keyframes fadeEnter {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: translateY(0); }
 }
-.custom-scrollbar::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.15);
-  border-radius: 10px;
+
+@keyframes routeProgress {
+  from { width: 8%; }
+  to { width: 92%; }
 }
-.custom-scrollbar-light::-webkit-scrollbar {
-  width: 5px;
-}
-.custom-scrollbar-light::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.1);
-  border-radius: 10px;
+
+.fade-enter { animation: fadeEnter 220ms ease-out both; }
+.route-progress { animation: routeProgress 7s ease-out both; }
+.icon-command { display: grid; width: 36px; height: 36px; place-items: center; border: 1px solid rgb(255 255 255 / 20%); border-radius: 6px; background: rgb(255 255 255 / 10%); color: white; }
+.icon-command:hover { background: rgb(255 255 255 / 20%); }
+.route-tab { display: inline-flex; align-items: center; gap: 6px; border: 0; border-radius: 4px; padding: 6px 10px; background: transparent; color: #64748b; font-size: 13px; font-weight: 800; }
+.route-tab-active { background: white; color: #123e49; box-shadow: 0 1px 2px rgb(15 23 42 / 12%); }
+
+.custom-scrollbar::-webkit-scrollbar, .custom-scrollbar-light::-webkit-scrollbar { width: 5px; }
+.custom-scrollbar::-webkit-scrollbar-thumb { border-radius: 8px; background: rgb(255 255 255 / 18%); }
+.custom-scrollbar-light::-webkit-scrollbar-thumb { border-radius: 8px; background: rgb(15 23 42 / 18%); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
 }

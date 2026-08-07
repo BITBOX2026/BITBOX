@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     # -------------------------------------------------------------------------
     STT_MODEL: str = "gpt-4o-mini-transcribe"
     LLM_MODEL: str = "gpt-4o-mini"
+    INTENT_FAST_PATH_ENABLED: bool = True
     TTS_MODEL: str = "tts-1-hd"
     TTS_VOICE: str = "nova"
     TTS_SPEED: float = 0.85  # 노인 사용자 대상 — 기본보다 약간 느리게 (0.25~4.0)

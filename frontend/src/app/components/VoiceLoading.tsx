@@ -1,14 +1,10 @@
 export function VoiceLoading() {
   return (
-    // 페이드 인 효과를 주어 부드럽게 등장
-    <div className="flex flex-col items-center gap-4 animate-in fade-in">
-      {/* 텍스트에 drop-shadow-lg를 주어 가독성을 높임. */}
-      <p className="text-xl font-black text-white tracking-tight drop-shadow-lg">최적의 경로를 찾는 중입니다...</p>
-      {/* 점 세 개가 순차적으로 통통 튀는 애니메이션 영역 */}
-      <div className="flex gap-2">
-        <div className="size-2.5 bg-white rounded-full animate-bounce [animation-delay:-0.3s]" />
-        <div className="size-2.5 bg-white rounded-full animate-bounce [animation-delay:-0.15s]" />
-        <div className="size-2.5 bg-white rounded-full animate-bounce" />
+    <div className="fade-enter max-w-md">
+      <p className="mb-2 text-xs font-extrabold text-[#F0C929]">경로 계산 중</p>
+      <h2 className="text-[clamp(23px,4vw,34px)] font-black leading-tight">가장 알맞은 이동 경로를 찾고 있어요</h2>
+      <div className="mt-5 h-1.5 w-full overflow-hidden rounded-full bg-white/15">
+        <div className="route-progress h-full w-1/3 rounded-full bg-[#F0C929]" />
       </div>
     </div>
   );

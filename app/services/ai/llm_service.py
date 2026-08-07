@@ -11,7 +11,7 @@ from app.services.core.constants import DEFAULT_LLM_MODEL, TRANSIT_INTENT_SYSTEM
 from app.services.core.exceptions import LLMParsingError
 from app.services.core.openai_client import get_openai_client as _get_openai_client
 from app.services.core.service_types import ParsedIntent
-from app.services.core.settings_helper import get_setting, is_mock_mode
+from app.services.core.settings_helper import get_bool_setting, get_setting, is_mock_mode
 
 logger = get_logger(__name__)
 
@@ -149,8 +149,17 @@ async def parse_transit_intent(transcript: str, request_id: str = "") -> ParsedI
 
     logger.info("[%s] LLM 분석 시작: transcript=%s", request_id, transcript[:50])
 
+    deterministic = _mock_parse_transit_intent(transcript)
+    if get_bool_setting("INTENT_FAST_PATH_ENABLED", True) and _is_unambiguous(deterministic):
+        logger.info(
+            "[%s] 규칙 기반 의도 분석 사용: intent=%s",
+            request_id,
+            deterministic.intent,
+        )
+        return deterministic
+
     if is_mock_mode():
-        return _mock_parse_transit_intent(transcript)
+        return deterministic
 
     if not get_setting("OPENAI_API_KEY"):
         raise LLMParsingError("OPENAI_API_KEY가 설정되지 않았습니다.")
@@ -165,6 +174,14 @@ async def parse_transit_intent(transcript: str, request_id: str = "") -> ParsedI
 
     except Exception as exc:
         raise LLMParsingError(f"LLM 분석 중 오류가 발생했습니다: {exc}") from exc
+
+
+def _is_unambiguous(parsed: ParsedIntent) -> bool:
+    if parsed.intent == "route":
+        return bool(parsed.destination_text and parsed.confidence >= 0.8)
+    if parsed.intent == "arrival":
+        return bool(parsed.bus_number and parsed.confidence >= 0.8)
+    return False
 
 
 def _mock_parse_transit_intent(transcript: str) -> ParsedIntent:

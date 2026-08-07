@@ -6,6 +6,7 @@ from app.api.gateway import _build_upload_compat_response
 from app.api.schemas import ProcessResponse, UploadCompatResponse
 from app.routers.bus import router as bus_router
 from app.services import pipeline
+from app.services.ai import llm_service
 from app.services.core.constants import (
     SEOUL_BUS_ARRIVAL_URL,
     SEOUL_BUS_ROUTE_SEARCH_URL,
@@ -21,6 +22,19 @@ from app.services.core.service_types import (
 )
 from app.services.transit import transport_service
 from app.services.transit.odsay_service import _extract_route_segments
+
+
+def test_clear_destination_uses_fast_intent_path(monkeypatch) -> None:
+    async def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("clear route intent should not call the LLM")
+
+    monkeypatch.setattr(llm_service, "_call_llm", fail_if_called)
+
+    parsed = asyncio.run(llm_service.parse_transit_intent("강남역 가는 버스 알려줘"))
+
+    assert parsed.intent == "route"
+    assert parsed.destination_text == "강남역"
+    assert parsed.transport_mode == "bus"
 
 
 def test_process_schema_preserves_all_arrival_fields() -> None:

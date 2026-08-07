@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { BusOption as BusInfo } from "../../types/bus";
 import { getDefaultArrivals, getCongestionLabel, getCongestionColor } from "../../api/busService";
+import { BusFront, MapPin, RefreshCw, Wifi } from "lucide-react";
 
 const STATION_NAME = import.meta.env.VITE_STATION_NAME ?? "정류장";
 
@@ -57,7 +58,7 @@ function StopsDot({ remaining }: { remaining: number }) {
 
   return (
     <div className="flex items-center gap-0 mt-1.5">
-      <span className="text-[15px] mr-1">🚌</span>
+      <BusFront className="mr-1 size-4 shrink-0 text-[#2563EB]" aria-hidden="true" />
       <div className="h-[2px] w-2 bg-[#CBD5E1]" />
       {dots.map((n, i) => (
         <div key={n} className="flex items-center">
@@ -83,7 +84,7 @@ function SoonCard({ bus }: { bus: BusInfo }) {
   const congLabel = getCongestionLabel(bus.congetion);
   const congColor = getCongestionColor(bus.congetion);
   return (
-    <div className="flex-1 min-w-0 bg-[#1C1F26] rounded-xl flex flex-col items-center justify-center py-3 px-2 shadow-xl border border-[#374151] gap-2">
+    <div className="flex min-w-0 flex-1 flex-col items-center justify-center gap-2 rounded-md border border-[#303842] bg-[#1C2229] px-2 py-3 shadow-md">
       <div className={`rounded-full px-3 py-0.5 text-[12px] font-black border ${congColor}`}>
         {congLabel}
       </div>
@@ -196,17 +197,21 @@ export function BusInfoList() {
     : "";
 
   return (
-    <div className="w-full h-full flex flex-col bg-[#E5E7EB] overflow-hidden font-['Noto_Sans_KR']">
+    <div className="flex h-full w-full flex-col overflow-hidden bg-[#EDF1F3] font-['Noto_Sans_KR']">
 
       {/* ── 헤더 ─────────────────────────────────── */}
-      <div className="flex shrink-0 items-center justify-between border-b-4 border-[#374151] bg-[#1C1F26] px-3 py-2 sm:px-6 sm:py-4">
-        <div className="flex flex-col text-left">
-          <span className="text-[14px] text-blue-400 font-bold mb-0.5">서울특별시</span>
-          {/* 버스 정류장 이름 리턴 */}
-          <span className="max-w-[48vw] truncate text-[22px] font-black leading-tight text-white sm:text-[28px] md:text-[34px]">{liveStationName || STATION_NAME}</span>
+      <div className="flex shrink-0 items-center justify-between border-b-4 border-[#F0C929] bg-[#171D23] px-3 py-2 sm:px-6 sm:py-3">
+        <div className="flex min-w-0 items-center gap-3 text-left">
+          <div className="grid size-10 shrink-0 place-items-center rounded-md bg-[#F0C929] text-[#171D23] sm:size-12">
+            <MapPin className="size-5 sm:size-6" />
+          </div>
+          <div className="min-w-0">
+            <span className="mb-0.5 block text-[11px] font-bold text-white/50 sm:text-[13px]">서울특별시 · 실시간 버스정보</span>
+            <span className="block max-w-[44vw] truncate text-[21px] font-black leading-tight text-white sm:text-[28px] md:text-[32px]">{liveStationName || STATION_NAME}</span>
+          </div>
         </div>
         <div className="text-right text-white">
-          <div className="text-[14px] text-gray-400 mb-1">{yy}년 {mm}월 {dd}일 ({day})</div>
+          <div className="mb-1 text-[11px] text-white/45 sm:text-[13px]">{yy}년 {mm}월 {dd}일 ({day})</div>
           <div className="flex items-baseline gap-1 font-mono text-[26px] font-black leading-none text-white sm:text-[36px] md:gap-2 md:text-[44px]">
             <span className="text-[14px] text-yellow-400 sm:text-[20px] md:text-[24px]">{ampm}</span>
             {displayH}:{displayM}:{displayS}
@@ -217,17 +222,17 @@ export function BusInfoList() {
       {/* ── 오류 배너 ────────────────────────────── */}
       {error && (
         <div className="bg-red-600 text-white text-[13px] font-bold px-5 py-2 flex items-center justify-between shrink-0">
-          <span>⚠ {error}</span>
-          <button onClick={refetch} className="underline text-white/80 hover:text-white ml-4">다시 시도</button>
+          <span>{error}</span>
+          <button onClick={refetch} className="ml-4 inline-flex items-center gap-1 text-white/90 hover:text-white"><RefreshCw className="size-3.5" />다시 시도</button>
         </div>
       )}
 
       {/* ── 잠시 후 도착 (3분 미만, 시간 없음) ───── */}
-      <div className="bg-gradient-to-b from-[#FDE047] to-[#F59E0B] border-b-4 border-[#D97706] pt-3 px-5 pb-4 shrink-0">
+      <div className="shrink-0 border-b border-[#C99F11] bg-[#F0C929] px-3 pb-3 pt-2 sm:px-5 sm:pb-4 sm:pt-3">
         <div className="flex justify-between items-end mb-3">
           <div className="flex flex-col text-left">
-            <span className="text-[24px] font-black text-[#78350F] leading-tight">잠시 후 도착</span>
-            <span className="text-[13px] font-bold text-[#92400E]">Arrival Soon · 3분 미만</span>
+            <span className="text-[20px] font-black leading-tight text-[#2C2A1A] sm:text-[24px]">잠시 후 도착</span>
+            <span className="text-[12px] font-bold text-[#645716] sm:text-[13px]">3분 이내 도착 차량</span>
           </div>
           {lastUpdatedStr && <span className="text-[12px] text-[#92400E]">{lastUpdatedStr}</span>}
         </div>
@@ -235,18 +240,18 @@ export function BusInfoList() {
         {loading ? (
           <div className="flex gap-1 sm:gap-2">
             {Array.from({ length: SOON_PER_PAGE }).map((_, i) => (
-              <div key={i} className="flex-1 min-h-[100px] bg-[#1C1F26]/40 rounded-xl border border-[#374151] animate-pulse" />
+              <div key={i} className="min-h-[92px] flex-1 animate-pulse rounded-md border border-[#6F611E]/30 bg-[#1C2229]/35" />
             ))}
           </div>
         ) : arrivingSoon.length === 0 ? (
-          <div className="text-center text-[#78350F] font-bold text-[17px] py-5 bg-black/10 rounded-xl">
+          <div className="rounded-md bg-black/8 py-5 text-center text-[16px] font-bold text-[#504710]">
             3분 이내 도착 예정 버스가 없습니다
           </div>
         ) : (
           <div className="flex items-stretch gap-1 sm:gap-2">
             {currentSoon.map((bus) => <SoonCard key={bus.id} bus={bus} />)}
             {Array.from({ length: SOON_PER_PAGE - currentSoon.length }).map((_, i) => (
-              <div key={`es-${i}`} className="flex-1 min-h-[100px] bg-[#1C1F26]/20 rounded-xl border border-[#374151]/40" />
+              <div key={`es-${i}`} className="min-h-[92px] flex-1 rounded-md border border-[#6F611E]/20 bg-[#1C2229]/12" />
             ))}
           </div>
         )}
@@ -323,8 +328,10 @@ export function BusInfoList() {
         </div>
 
         {/* 푸터 */}
-        <div className="bg-[#F1F5F9] border-t border-[#CBD5E1] flex items-center justify-between py-2 px-5 shrink-0">
-          <span className="text-[13px] text-[#64748B]">도착 정보는 실시간으로 변경될 수 있습니다</span>
+        <div className="flex shrink-0 items-center justify-between border-t border-[#CBD5E1] bg-[#EDF1F3] px-3 py-2 sm:px-5">
+          <button type="button" onClick={refetch} className="inline-flex items-center gap-1.5 text-[12px] font-bold text-[#52616B] hover:text-[#1B2930]" title="도착 정보 새로고침">
+            <Wifi className="size-3.5 text-emerald-600" /> 실시간 · 15초마다 갱신
+          </button>
           <div className="flex gap-1.5 items-center">
             {Array.from({ length: mainTotalPages }).map((_, i) => (
               <div key={i} className={`h-2 rounded-full transition-all duration-300 ${i === curMainPage ? "w-6 bg-[#475569]" : "w-2 bg-[#CBD5E1]"}`} />

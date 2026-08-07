@@ -117,7 +117,9 @@ export function useVoiceRecorder() {
       setAudioBase64("");
       setError("");
 
-      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+      const AudioContextClass = window.AudioContext || (window as typeof window & {
+        webkitAudioContext?: typeof AudioContext;
+      }).webkitAudioContext;
       const audioContext = new AudioContextClass();
       if (audioContext.state === "suspended") {
         await audioContext.resume();
@@ -218,7 +220,7 @@ export function useVoiceRecorder() {
 
 export function VoiceRecording({ transcript }: { transcript: string }) {
   return (
-    <p className="text-4xl font-black text-white text-center drop-shadow-lg leading-tight animate-pulse">
+    <p className="mt-3 max-w-lg truncate text-base font-bold text-white/65">
       {transcript}
     </p>
   );

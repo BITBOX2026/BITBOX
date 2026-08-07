@@ -247,7 +247,7 @@ def _build_buses_from_route(data: dict) -> list[dict]:
         "isLastBus": False,
         "plainNo": "",
         "isSecond": False,
-        # useRouteSelection이 (bus as any)로 접근하는 추가 필드
+        # 경로 상세 화면에서 사용하는 추가 필드
         "totalMin": total_time_min,
         "steps": steps,
         "routeDetail": route_detail,

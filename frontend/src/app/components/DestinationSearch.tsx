@@ -35,9 +35,9 @@ export function DestinationSearch({
   };
 
   return (
-    <div className="w-full max-w-[460px] px-4">
+    <div className="w-full max-w-[520px]">
       <form
-        className="flex h-12 overflow-hidden rounded-lg border-2 border-white/35 bg-white shadow-lg"
+        className="flex h-12 overflow-hidden rounded-md border border-white/20 bg-white shadow-lg"
         onSubmit={(event) => {
           event.preventDefault();
           void submit();
@@ -48,7 +48,7 @@ export function DestinationSearch({
           onChange={(event) => setDestination(event.target.value)}
           placeholder="목적지를 입력하세요"
           aria-label="목적지"
-          className="min-w-0 flex-1 px-4 text-base font-bold text-slate-900 outline-none placeholder:text-slate-400"
+          className="min-w-0 flex-1 px-4 text-[15px] font-bold text-slate-900 outline-none placeholder:font-medium placeholder:text-slate-400"
           disabled={disabled}
         />
         <button
@@ -56,7 +56,7 @@ export function DestinationSearch({
           aria-label="경로 검색"
           title="경로 검색"
           disabled={!trimmedDestination || disabled}
-          className="grid w-12 shrink-0 place-items-center bg-[#F0E442] text-black disabled:cursor-not-allowed disabled:opacity-45"
+          className="grid w-12 shrink-0 place-items-center bg-[#F0C929] text-[#17343B] disabled:cursor-not-allowed disabled:opacity-45"
         >
           <Search className="size-5" />
         </button>
@@ -69,7 +69,8 @@ export function DestinationSearch({
             title="버스 우선"
             aria-label="버스 우선"
             onClick={() => setMode("bus")}
-            className={`grid size-8 place-items-center rounded ${mode === "bus" ? "bg-white text-blue-700" : "text-white"}`}
+            aria-pressed={mode === "bus"}
+            className={`grid size-8 place-items-center rounded ${mode === "bus" ? "bg-white text-[#145466]" : "text-white/70"}`}
           >
             <Bus className="size-4" />
           </button>
@@ -78,7 +79,8 @@ export function DestinationSearch({
             title="대중교통 전체"
             aria-label="대중교통 전체"
             onClick={() => setMode("transit")}
-            className={`grid size-8 place-items-center rounded ${mode === "transit" ? "bg-white text-blue-700" : "text-white"}`}
+            aria-pressed={mode === "transit"}
+            className={`grid size-8 place-items-center rounded ${mode === "transit" ? "bg-white text-[#145466]" : "text-white/70"}`}
           >
             <TrainFront className="size-4" />
           </button>
@@ -95,7 +97,7 @@ export function DestinationSearch({
                   setDestination(item);
                   void submit(item);
                 }}
-                className="max-w-24 truncate rounded bg-white/12 px-2 py-1 text-xs font-bold text-white hover:bg-white/20"
+                className="max-w-24 truncate rounded bg-white/10 px-2 py-1 text-xs font-bold text-white/85 hover:bg-white/20"
               >
                 {item}
               </button>

@@ -73,61 +73,17 @@ async def run_text_route(
         confidence=1.0,
     )
 
-    validation = validate_parsed_intent(parsed)
-    if not validation.is_valid:
+    try:
+        result = await _run_parsed_pipeline(parsed, destination, request_id)
+    except (CoordinateResolveError, TransportAPIError) as exc:
+        logger.warning("[%s] text route lookup failed: %s", request_id, exc)
         result = _error_response(
-            message=validation.message,
+            message=exc.user_message,
             transcript=destination,
-            intent=parsed.intent,
-            origin=parsed.origin_text,
-            destination=parsed.destination_text,
-            stop_text=None,
             stop_name=None,
-            transport_mode=parsed.transport_mode,
-            bus_number=None,
-            confidence=parsed.confidence,
             needs_confirmation=True,
+            **_parsed_fields(parsed),
         )
-    else:
-        try:
-            transport_result = await search_transport_info(parsed, request_id=request_id)
-            result = _success_response(
-                message=build_user_message(parsed=parsed, transport_result=transport_result),
-                transcript=destination,
-                intent=parsed.intent,
-                origin=transport_result.origin,
-                origin_x=transport_result.origin_x,
-                origin_y=transport_result.origin_y,
-                destination=transport_result.destination,
-                destination_x=transport_result.destination_x,
-                destination_y=transport_result.destination_y,
-                stop_text=None,
-                stop_name=transport_result.stop_name,
-                transport_mode=transport_result.transport_mode,
-                bus_number=transport_result.bus_number,
-                arrival_time=transport_result.arrival_time,
-                arrival_time_2=transport_result.arrival_time_2,
-                first_bus_time=transport_result.first_bus_time,
-                total_time_min=transport_result.total_time_min,
-                payment=transport_result.payment,
-                bus_transit_count=transport_result.bus_transit_count,
-                subway_transit_count=transport_result.subway_transit_count,
-                transfer_count=transport_result.transfer_count,
-                path_type=transport_result.path_type,
-                route_segments=transport_result.route_segments,
-                confidence=parsed.confidence,
-                source=transport_result.source,
-                needs_confirmation=False,
-            )
-        except (CoordinateResolveError, TransportAPIError) as exc:
-            logger.warning("[%s] text route lookup failed: %s", request_id, exc)
-            result = _error_response(
-                message=exc.user_message,
-                transcript=destination,
-                stop_name=None,
-                needs_confirmation=True,
-                **_parsed_fields(parsed),
-            )
 
     result["audio_base64"] = await _generate_tts_audio_safely(
         result.get("message", ""),
@@ -142,6 +98,7 @@ async def _generate_tts_audio_safely(text: str, request_id: str) -> str | None:
     if not text or not text.strip():
         return None
 
+    started_at = time.monotonic()
     try:
         return await asyncio.wait_for(
             generate_tts_audio(text),
@@ -150,6 +107,8 @@ async def _generate_tts_audio_safely(text: str, request_id: str) -> str | None:
     except asyncio.TimeoutError:
         logger.warning("[%s] TTS 타임아웃", request_id)
         return None
+    finally:
+        logger.info("[%s] TTS %.2fs", request_id, time.monotonic() - started_at)
 
 
 async def _run_pipeline_core(
@@ -176,68 +135,7 @@ async def _run_pipeline_core(
             request_id, time.monotonic() - t1, parsed.intent, parsed.confidence,
         )
 
-        # 3단계: 검증 — intent가 조회 가능한 요청인지 확인
-        validation = validate_parsed_intent(parsed)
-        if not validation.is_valid:
-            return _error_response(
-                message=validation.message,
-                transcript=transcript,
-                intent=parsed.intent,
-                origin=parsed.origin_text,
-                destination=parsed.destination_text,
-                stop_text=parsed.stop_text,
-                stop_name=None,
-                transport_mode=parsed.transport_mode,
-                bus_number=parsed.bus_number,
-                confidence=parsed.confidence,
-                needs_confirmation=True,
-            )
-
-        # 4단계: 교통 API — ODsay 경로 또는 서울버스 도착 정보 조회
-        t2 = time.monotonic()
-        transport_result = await search_transport_info(parsed, request_id=request_id)
-        logger.info(
-            "[%s] Transport %.2fs — source=%s",
-            request_id, time.monotonic() - t2, transport_result.source,
-        )
-
-        # 5단계: 응답 생성 — 교통 데이터를 자연어 안내 문장으로 변환
-        message = build_user_message(parsed=parsed, transport_result=transport_result)
-
-        return _success_response(
-            message=message,
-            transcript=transcript,
-            intent=parsed.intent,
-            origin=transport_result.origin,
-            origin_x=transport_result.origin_x,
-            origin_y=transport_result.origin_y,
-            # arrival intent에는 이동 목적지가 없지만, 프론트 결과 화면은
-            # destination을 표시 제목으로 사용하므로 조회 정류장명을 제공합니다.
-            destination=(
-                transport_result.stop_name
-                if parsed.intent == "arrival"
-                else transport_result.destination
-            ),
-            destination_x=transport_result.destination_x,
-            destination_y=transport_result.destination_y,
-            stop_text=parsed.stop_text,
-            stop_name=transport_result.stop_name,
-            transport_mode=transport_result.transport_mode,
-            bus_number=transport_result.bus_number,
-            arrival_time=transport_result.arrival_time,
-            arrival_time_2=transport_result.arrival_time_2,
-            first_bus_time=transport_result.first_bus_time,
-            total_time_min=transport_result.total_time_min,
-            payment=transport_result.payment,
-            bus_transit_count=transport_result.bus_transit_count,
-            subway_transit_count=transport_result.subway_transit_count,
-            transfer_count=transport_result.transfer_count,
-            path_type=transport_result.path_type,
-            route_segments=transport_result.route_segments,
-            confidence=parsed.confidence,
-            source=transport_result.source,
-            needs_confirmation=False,
-        )
+        return await _run_parsed_pipeline(parsed, transcript, request_id)
 
     except CoordinateResolveError as exc:
         # 장소명 → 좌표 변환 실패 — 사용자가 더 정확한 이름을 말해야 함
@@ -271,6 +169,71 @@ async def _run_pipeline_core(
             needs_confirmation=True,
             **_parsed_fields(parsed),
         )
+
+
+async def _run_parsed_pipeline(
+    parsed: ParsedIntent,
+    transcript: str,
+    request_id: str,
+) -> dict:
+    """Validate one intent and build the shared transport response."""
+    validation = validate_parsed_intent(parsed)
+    if not validation.is_valid:
+        return _error_response(
+            message=validation.message,
+            transcript=transcript,
+            intent=parsed.intent,
+            origin=parsed.origin_text,
+            destination=parsed.destination_text,
+            stop_text=parsed.stop_text,
+            stop_name=None,
+            transport_mode=parsed.transport_mode,
+            bus_number=parsed.bus_number,
+            confidence=parsed.confidence,
+            needs_confirmation=True,
+        )
+
+    started_at = time.monotonic()
+    transport_result = await search_transport_info(parsed, request_id=request_id)
+    logger.info(
+        "[%s] Transport %.2fs — source=%s",
+        request_id,
+        time.monotonic() - started_at,
+        transport_result.source,
+    )
+
+    return _success_response(
+        message=build_user_message(parsed=parsed, transport_result=transport_result),
+        transcript=transcript,
+        intent=parsed.intent,
+        origin=transport_result.origin,
+        origin_x=transport_result.origin_x,
+        origin_y=transport_result.origin_y,
+        destination=(
+            transport_result.stop_name
+            if parsed.intent == "arrival"
+            else transport_result.destination
+        ),
+        destination_x=transport_result.destination_x,
+        destination_y=transport_result.destination_y,
+        stop_text=parsed.stop_text,
+        stop_name=transport_result.stop_name,
+        transport_mode=transport_result.transport_mode,
+        bus_number=transport_result.bus_number,
+        arrival_time=transport_result.arrival_time,
+        arrival_time_2=transport_result.arrival_time_2,
+        first_bus_time=transport_result.first_bus_time,
+        total_time_min=transport_result.total_time_min,
+        payment=transport_result.payment,
+        bus_transit_count=transport_result.bus_transit_count,
+        subway_transit_count=transport_result.subway_transit_count,
+        transfer_count=transport_result.transfer_count,
+        path_type=transport_result.path_type,
+        route_segments=transport_result.route_segments,
+        confidence=parsed.confidence,
+        source=transport_result.source,
+        needs_confirmation=False,
+    )
 
 
 def build_timeout_error_response() -> dict:
