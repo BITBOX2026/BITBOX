@@ -76,6 +76,7 @@ jobs:
       - name: Prepare EC2
         uses: appleboy/ssh-action@v1.0.3
         env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
           BITBOX_SERVER_NAME: ${{ secrets.BITBOX_SERVER_NAME }}
           BITBOX_TLS_CERT_PATH: ${{ secrets.BITBOX_TLS_CERT_PATH }}
           BITBOX_TLS_KEY_PATH: ${{ secrets.BITBOX_TLS_KEY_PATH }}
@@ -83,7 +84,7 @@ jobs:
           host: ${{ secrets.EC2_HOST }}
           username: ubuntu
           key: ${{ secrets.EC2_SSH_KEY }}
-          envs: BITBOX_SERVER_NAME,BITBOX_TLS_CERT_PATH,BITBOX_TLS_KEY_PATH
+          envs: EC2_HOST,BITBOX_SERVER_NAME,BITBOX_TLS_CERT_PATH,BITBOX_TLS_KEY_PATH
           script: |
             set -euo pipefail
             cd /home/ubuntu/BITBOX
@@ -95,48 +96,8 @@ jobs:
               sudo apt-get update -qq
               sudo apt-get install -y nginx gettext-base certbot
             fi
-            if command -v aws >/dev/null 2>&1; then
-              AWS_CLI=$(command -v aws)
-            else
-              .venv/bin/pip install awscli -q
-              AWS_CLI=.venv/bin/aws
-            fi
-
             if [[ ! -f "$BITBOX_TLS_CERT_PATH" || ! -f "$BITBOX_TLS_KEY_PATH" ]]; then
-              IMDS_TOKEN=$(curl --fail --silent --show-error --max-time 3 \
-                -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 300' \
-                http://169.254.169.254/latest/api/token)
-              METADATA_HEADER="X-aws-ec2-metadata-token: $IMDS_TOKEN"
-              REGION=$(curl --fail --silent --show-error --max-time 3 -H "$METADATA_HEADER" \
-                http://169.254.169.254/latest/meta-data/placement/region)
-              PUBLIC_IP=$(curl --fail --silent --show-error --max-time 3 -H "$METADATA_HEADER" \
-                http://169.254.169.254/latest/meta-data/public-ipv4)
-              MAC=$(curl --fail --silent --show-error --max-time 3 -H "$METADATA_HEADER" \
-                http://169.254.169.254/latest/meta-data/network/interfaces/macs/ | head -n 1)
-              SECURITY_GROUP=$(curl --fail --silent --show-error --max-time 3 -H "$METADATA_HEADER" \
-                "http://169.254.169.254/latest/meta-data/network/interfaces/macs/${MAC}security-group-ids" | head -n 1)
-
-              if ! "$AWS_CLI" sts get-caller-identity --region "$REGION" >/dev/null 2>&1; then
-                echo 'EC2 instance IAM role is missing or cannot call AWS APIs.' >&2
-                exit 1
-              fi
-
-              open_port() {
-                local port="$1"
-                local error_output
-                if ! error_output=$("$AWS_CLI" ec2 authorize-security-group-ingress \
-                  --region "$REGION" --group-id "$SECURITY_GROUP" \
-                  --protocol tcp --port "$port" --cidr 0.0.0.0/0 2>&1); then
-                  if ! grep -q 'InvalidPermission.Duplicate' <<<"$error_output"; then
-                    echo "Unable to open TCP $port on $SECURITY_GROUP: $error_output" >&2
-                    exit 1
-                  fi
-                fi
-              }
-              open_port 80
-              open_port 443
-
-              if ! getent ahostsv4 "$BITBOX_SERVER_NAME" | awk '{print $1}' | grep -qx "$PUBLIC_IP"; then
+              if ! getent ahostsv4 "$BITBOX_SERVER_NAME" | awk '{print $1}' | grep -qx "$EC2_HOST"; then
                 echo 'BITBOX_SERVER_NAME does not resolve to EC2_HOST.' >&2
                 exit 1
               fi
