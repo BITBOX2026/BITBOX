@@ -96,7 +96,7 @@ jobs:
               sudo apt-get update -qq
               sudo apt-get install -y nginx gettext-base certbot
             fi
-            if [[ ! -f "$BITBOX_TLS_CERT_PATH" || ! -f "$BITBOX_TLS_KEY_PATH" ]]; then
+            if ! sudo test -f "$BITBOX_TLS_CERT_PATH" || ! sudo test -f "$BITBOX_TLS_KEY_PATH"; then
               if ! getent ahostsv4 "$BITBOX_SERVER_NAME" | awk '{print $1}' | grep -qx "$EC2_HOST"; then
                 echo 'BITBOX_SERVER_NAME does not resolve to EC2_HOST.' >&2
                 exit 1
@@ -145,8 +145,8 @@ jobs:
             [[ "$BITBOX_SERVER_NAME" =~ ^[A-Za-z0-9.-]+$ ]]
             [[ "$BITBOX_TLS_CERT_PATH" =~ ^/[A-Za-z0-9_./-]+$ ]]
             [[ "$BITBOX_TLS_KEY_PATH" =~ ^/[A-Za-z0-9_./-]+$ ]]
-            test -f "$BITBOX_TLS_CERT_PATH"
-            test -f "$BITBOX_TLS_KEY_PATH"
+            sudo test -f "$BITBOX_TLS_CERT_PATH"
+            sudo test -f "$BITBOX_TLS_KEY_PATH"
 
             sudo install -d -m 700 /etc/bitbox
             printf 'APP_ENV=prod\nUSE_MOCK_EXTERNALS=false\nCORS_ALLOWED_ORIGINS=\nAPI_AUTH_TOKEN=%s\nOPENAI_API_KEY=%s\nKAKAO_REST_API_KEY=%s\nODSAY_API_KEY=%s\nPUBLIC_DATA_SERVICE_KEY=%s\nDEFAULT_ORIGIN_NAME=올림픽공원역\nDEFAULT_BUS_STOP_NAME=올림픽공원역\nDEFAULT_BUS_STATION_ID=24245\n' \
