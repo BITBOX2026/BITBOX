@@ -7,10 +7,11 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 from starlette.requests import Request
 
-from app.api.gateway import _build_upload_compat_response
+from app.api.gateway import _build_upload_compat_response, _looks_like_supported_audio
 from app.api.schemas import ProcessResponse, TextRouteRequest, UploadCompatResponse
 from app.routers.bus import router as bus_router
 from app.services import pipeline
+from app.services.response_builder import build_user_message
 from app.services.ai import llm_service
 from app.services.core.constants import (
     SEOUL_BUS_ARRIVAL_URL,
@@ -68,6 +69,42 @@ def test_text_route_contract_only_accepts_bus_mode() -> None:
     assert TextRouteRequest(destination="강남역").transport_mode == "bus"
     with pytest.raises(ValidationError):
         TextRouteRequest(destination="강남역", transport_mode="subway")
+
+
+def test_text_route_coordinates_must_be_a_valid_pair() -> None:
+    request = TextRouteRequest(
+        destination="강남역 2호선",
+        destination_x=127.0276,
+        destination_y=37.4979,
+    )
+    assert request.destination_x == 127.0276
+    with pytest.raises(ValidationError):
+        TextRouteRequest(destination="강남역", destination_x=127.0276)
+
+
+def test_text_route_preserves_selected_destination_coordinates(monkeypatch) -> None:
+    captured: ParsedIntent | None = None
+
+    async def search(parsed: ParsedIntent, request_id: str = ""):
+        nonlocal captured
+        captured = parsed
+        return TransportResult(
+            origin="올림픽공원역",
+            destination=parsed.destination_text,
+            destination_x=parsed.destination_x,
+            destination_y=parsed.destination_y,
+            transport_mode="bus",
+            bus_number="3412",
+            total_time_min=20,
+            route_segments=[RouteSegment("버스", "3412번", "올림픽공원역", "강남역")],
+        )
+
+    monkeypatch.setattr(pipeline, "search_transport_info", search)
+    asyncio.run(pipeline.run_text_route("강남역 2호선", 127.0276, 37.4979))
+
+    assert captured is not None
+    assert captured.destination_x == 127.0276
+    assert captured.destination_y == 37.4979
 
 
 def test_explicit_subway_voice_request_is_rejected() -> None:
@@ -166,6 +203,61 @@ def test_upload_compat_route_exposes_route_detail_for_frontend() -> None:
     assert bus["routeDetail"]["route_segments"][0]["line"] == "146번"
 
 
+def test_upload_compat_route_preserves_walk_steps() -> None:
+    response = _build_upload_compat_response({
+        "status": "success",
+        "message": "도보 이동 후 3412번을 타세요.",
+        "data": {
+            "intent": "route",
+            "origin": "올림픽공원역",
+            "destination": "강남역",
+            "bus_number": "3412",
+            "total_time_min": 30,
+            "route_segments": [
+                {
+                    "vehicle_type": "도보", "line": "도보 180m",
+                    "start_name": "올림픽공원역", "end_name": "올림픽공원역 정류장",
+                    "time_min": 3,
+                },
+                {
+                    "vehicle_type": "버스", "line": "3412번",
+                    "start_name": "올림픽공원역 정류장", "end_name": "강남역",
+                    "time_min": 27,
+                },
+            ],
+        },
+    })
+
+    steps = response["buses"][0]["routeDetail"]["steps"]
+    assert [step["type"] for step in steps] == ["walk", "bus"]
+    assert steps[0]["description"] == "도보 180m"
+
+
+def test_ogg_audio_header_is_supported() -> None:
+    assert _looks_like_supported_audio("audio/ogg", b"OggS\x00\x02payload") is True
+    assert _looks_like_supported_audio("audio/ogg", b"not-ogg") is False
+
+
+def test_route_message_includes_each_walk_and_bus_segment() -> None:
+    message = build_user_message(
+        ParsedIntent(intent="route", destination_text="강남역", transport_mode="bus"),
+        TransportResult(
+            origin="올림픽공원역",
+            destination="강남역",
+            total_time_min=30,
+            route_segments=[
+                RouteSegment("도보", "도보 180m", "출발지", "올림픽공원역 정류장", 3),
+                RouteSegment("버스", "3412번", "올림픽공원역 정류장", "강남역 정류장", 24),
+                RouteSegment("도보", "도보 120m", "강남역 정류장", "강남역", 3),
+            ],
+        ),
+    )
+
+    assert "올림픽공원역 정류장까지 약 3분 걸어가세요" in message
+    assert "3412번 버스를 타고" in message
+    assert "강남역까지 약 3분 걸어가세요" in message
+
+
 def test_typed_route_uses_same_frontend_contract(monkeypatch) -> None:
     async def search(_parsed: ParsedIntent, request_id: str = ""):
         return TransportResult(
@@ -220,7 +312,7 @@ def test_seoul_bus_urls_use_reachable_http_endpoint() -> None:
     assert all(url.startswith("http://ws.bus.go.kr/api/rest/") for url in urls)
 
 
-def test_odsay_segments_exclude_walks_rendered_by_frontend() -> None:
+def test_odsay_segments_preserve_walk_and_bus_order() -> None:
     segments = _extract_route_segments(
         [
             {
@@ -251,9 +343,10 @@ def test_odsay_segments_exclude_walks_rendered_by_frontend() -> None:
 
     assert segments is not None
     assert [(segment.vehicle_type, segment.line) for segment in segments] == [
-        ("버스", "3214번")
+        ("도보", "도보 120m"),
+        ("버스", "3214번"),
     ]
-    assert segments[0].path_points == [
+    assert segments[1].path_points == [
         {"x": 127.10, "y": 37.51},
         {"x": 127.11, "y": 37.52},
         {"x": 127.12, "y": 37.53},

@@ -2,7 +2,7 @@
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class RouteSegmentResponse(BaseModel):
@@ -71,12 +71,23 @@ class UploadCompatResponse(BaseModel):
 
 class TextRouteRequest(BaseModel):
     destination: str = Field(min_length=1, max_length=100)
+    destination_address: str | None = Field(default=None, max_length=200)
+    destination_x: float | None = Field(default=None, ge=124.0, le=132.0)
+    destination_y: float | None = Field(default=None, ge=33.0, le=39.5)
     origin: str | None = Field(default=None, max_length=100)
     transport_mode: Literal["bus"] = "bus"
+
+    @model_validator(mode="after")
+    def validate_destination_coordinates(self) -> "TextRouteRequest":
+        if (self.destination_x is None) != (self.destination_y is None):
+            raise ValueError("destination_x와 destination_y는 함께 전달해야 합니다.")
+        return self
 
 
 class HealthResponse(BaseModel):
     status: Literal["ok"]
     env: str
     mock_mode: bool
+    version: str
+    capabilities: list[str]
     api_keys_configured: dict[str, bool] | None = None

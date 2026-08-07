@@ -20,6 +20,8 @@ interface DefaultBackendItem {
   raw_is_full_flag2: string;
   raw_station_nm1: string;
   raw_station_nm2: string;
+  raw_veh_id1?: string;
+  raw_veh_id2?: string;
 }
 
 interface DefaultApiResponse {
@@ -43,10 +45,10 @@ function toCongestion(val: string): BusCongetion {
 /**
  * 문자열에서 남은 정류장 수 파싱
  */
-function parseRemainingStops(arrmsg: string): number {
+export function parseRemainingStops(arrmsg: string): number {
   if (!arrmsg) return -1;
   if (arrmsg.includes("곧 도착")) return 0;
-  const match = arrmsg.match(/\[(\d+)번째 전\]/);
+  const match = arrmsg.match(/(?:\[)?(\d+)\s*(?:번째|정거장)\s*전(?:\])?/);
   return match ? parseInt(match[1], 10) : -1;
 }
 
@@ -78,7 +80,7 @@ export async function getDefaultArrivals(): Promise<{ stationName: string; buses
     // 1번째 도착 예정 버스 객체화
     if (item.first_arrival_min >= 0) {
       result.push({
-        id: `${item.bus_number}-1`,
+        id: item.raw_veh_id1 || `${item.bus_number}-1`,
         busNumber: cleanNum, 
         arrivalMin: item.first_arrival_min,
         traTimeSec: item.first_arrival_min * 60, 
@@ -89,7 +91,7 @@ export async function getDefaultArrivals(): Promise<{ stationName: string; buses
         congetion: toCongestion(item.raw_congestion1),
         isFullFlag: item.raw_is_full_flag1 === "1",
         isLastBus: item.raw_is_last1 === "1",
-        plainNo: "",
+        plainNo: item.raw_veh_id1 || "",
         isSecond: false,
       });
     }
@@ -97,7 +99,7 @@ export async function getDefaultArrivals(): Promise<{ stationName: string; buses
     // 2번째 도착 예정 버스 객체화
     if (item.second_arrival_min >= 0) {
       result.push({
-        id: `${item.bus_number}-2`,
+        id: item.raw_veh_id2 || `${item.bus_number}-2`,
         busNumber: cleanNum, 
         arrivalMin: item.second_arrival_min,
         traTimeSec: item.second_arrival_min * 60,
@@ -108,7 +110,7 @@ export async function getDefaultArrivals(): Promise<{ stationName: string; buses
         congetion: toCongestion(item.raw_congestion2),
         isFullFlag: item.raw_is_full_flag2 === "1",
         isLastBus: item.raw_is_last2 === "1",
-        plainNo: "",
+        plainNo: item.raw_veh_id2 || "",
         isSecond: true,
       });
     }
@@ -120,14 +122,9 @@ export async function getDefaultArrivals(): Promise<{ stationName: string; buses
   // 2. [필터링] 현재 위치 명칭(currentStationName)이 유실된 불완전 버스 데이터 전격 제거
   const withLocationBuses = sortedBuses.filter((bus) => bus.currentStationName !== "");
 
-  // 3. [중복 제거] 가장 빨리 오는 버스 카드만 남기고 후속 중복 노선 차단
-  const uniqueBuses = withLocationBuses.filter(
-    (bus, index, self) => self.findIndex((b) => b.busNumber === bus.busNumber) === index
-  );
-
   return {
     stationName,
-    buses: uniqueBuses 
+    buses: withLocationBuses,
   };
 }
 

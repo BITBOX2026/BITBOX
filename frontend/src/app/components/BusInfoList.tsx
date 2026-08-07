@@ -13,11 +13,17 @@ const REFRESH_MS    = 15_000;
 const MAX_MIN       = 30;
 const DAY_KR = ["일", "월", "화", "수", "목", "금", "토"];
 
-function accessibilityScore(bus: BusInfo): number {
+export function accessibilityScore(bus: BusInfo): number {
   const fullPenalty = bus.isFullFlag ? 100 : 0;
   const lowFloorBonus = bus.busType === 1 ? -20 : 0;
   const congestionPenalty = bus.congetion === 5 ? 15 : bus.congetion === 4 ? 5 : 0;
   return fullPenalty + lowFloorBonus + congestionPenalty + bus.arrivalMin;
+}
+
+export function getApproachThreshold(previous: number | null, current: number): number | null {
+  return [0, 1, 3].find(
+    (threshold) => current <= threshold && (previous === null || previous > threshold),
+  ) ?? null;
 }
 
 // ─── 원형 프로그레스 ─────────────────────────────────────────
@@ -171,41 +177,47 @@ export function BusInfoList() {
   const [mainPage, setMainPage] = useState(0);
   const [soonPage, setSoonPage] = useState(0);
   const [accessibleMode, setAccessibleMode] = useState(false);
-  const [trackedBusNumber, setTrackedBusNumber] = useState<string | null>(null);
-  const lastApproachAlertRef = useRef("");
+  const [trackedBusId, setTrackedBusId] = useState<string | null>(null);
+  const lastRemainingStopsRef = useRef<number | null>(null);
   const now = useLiveClock();
   const { buses, liveStationName, loading, error, lastUpdated, refetch } = useBusArrivals();
 
   useEffect(() => {
-    if (!trackedBusNumber) {
-      lastApproachAlertRef.current = "";
+    if (!trackedBusId) {
+      lastRemainingStopsRef.current = null;
       return;
     }
-    const tracked = buses.find((bus) => bus.busNumber === trackedBusNumber && !bus.isSecond)
-      ?? buses.find((bus) => bus.busNumber === trackedBusNumber);
-    if (!tracked || ![3, 1, 0].includes(tracked.remainingStops)) return;
+    const tracked = buses.find((bus) => bus.id === trackedBusId || bus.plainNo === trackedBusId);
+    if (!tracked || tracked.remainingStops < 0) return;
 
-    const alertKey = `${trackedBusNumber}-${tracked.remainingStops}`;
-    if (lastApproachAlertRef.current === alertKey) return;
-    lastApproachAlertRef.current = alertKey;
-
-    const message = tracked.remainingStops === 0
-      ? `${trackedBusNumber}번 버스가 곧 도착합니다. 승차를 준비해 주세요.`
-      : tracked.remainingStops === 1
-        ? `${trackedBusNumber}번 버스가 한 정거장 전입니다.`
-        : `${trackedBusNumber}번 버스가 세 정거장 전입니다.`;
-    if ("speechSynthesis" in window) {
-      window.speechSynthesis.cancel();
-      const utterance = new SpeechSynthesisUtterance(message);
-      utterance.lang = "ko-KR";
-      utterance.rate = 0.9;
-      window.speechSynthesis.speak(utterance);
+    const previous = lastRemainingStopsRef.current;
+    const crossed = getApproachThreshold(previous, tracked.remainingStops);
+    if (crossed === null) {
+      lastRemainingStopsRef.current = tracked.remainingStops;
+      return;
     }
-  }, [buses, trackedBusNumber]);
+    if (!("speechSynthesis" in window)) {
+      lastRemainingStopsRef.current = tracked.remainingStops;
+      return;
+    }
+    if (window.speechSynthesis.speaking) return;
+    lastRemainingStopsRef.current = tracked.remainingStops;
 
-  const toggleTracking = (busNumber: string) => {
-    setTrackedBusNumber((current) => current === busNumber ? null : busNumber);
-    lastApproachAlertRef.current = "";
+    const message = crossed === 0
+      ? `${tracked.busNumber}번 버스가 곧 도착합니다. 승차를 준비해 주세요.`
+      : crossed === 1
+        ? `${tracked.busNumber}번 버스가 한 정거장 전입니다.`
+        : `${tracked.busNumber}번 버스가 세 정거장 이내로 접근했습니다.`;
+    const utterance = new SpeechSynthesisUtterance(message);
+    utterance.lang = "ko-KR";
+    utterance.rate = 0.9;
+    window.speechSynthesis.speak(utterance);
+  }, [buses, trackedBusId]);
+
+  const toggleTracking = (bus: BusInfo) => {
+    const trackingId = bus.plainNo || bus.id;
+    setTrackedBusId((current) => current === trackingId ? null : trackingId);
+    lastRemainingStopsRef.current = null;
   };
 
   const rankedBuses = useMemo(
@@ -222,16 +234,16 @@ export function BusInfoList() {
   const mainTotalPages = Math.max(1, Math.ceil(rankedBuses.length / MAIN_PER_PAGE));
 
   useEffect(() => {
-    if (soonTotalPages <= 1) return;
+    if (soonTotalPages <= 1 || trackedBusId) return;
     const id = setInterval(() => setSoonPage((p) => (p + 1) % soonTotalPages), 5000);
     return () => clearInterval(id);
-  }, [soonTotalPages]);
+  }, [soonTotalPages, trackedBusId]);
 
   useEffect(() => {
-    if (mainTotalPages <= 1) return;
+    if (mainTotalPages <= 1 || trackedBusId) return;
     const id = setInterval(() => setMainPage((p) => (p + 1) % mainTotalPages), 5000);
     return () => clearInterval(id);
-  }, [mainTotalPages]);
+  }, [mainTotalPages, trackedBusId]);
 
   const curSoonPage = Math.min(soonPage, soonTotalPages - 1);
   const curMainPage = Math.min(mainPage, mainTotalPages - 1);
@@ -254,29 +266,29 @@ export function BusInfoList() {
 
       {/* ── 헤더 ─────────────────────────────────── */}
       <div className="flex shrink-0 items-center justify-between border-b-4 border-[#F0C929] bg-[#171D23] px-3 py-2 sm:px-6 sm:py-3">
-        <div className="flex min-w-0 items-center gap-3 text-left">
-          <div className="grid size-10 shrink-0 place-items-center rounded-md bg-[#F0C929] text-[#171D23] sm:size-12">
+        <div className="flex min-w-0 items-center gap-2 text-left sm:gap-3">
+          <div className="grid size-9 shrink-0 place-items-center rounded-md bg-[#F0C929] text-[#171D23] sm:size-12">
             <MapPin className="size-5 sm:size-6" />
           </div>
           <div className="min-w-0">
-            <span className="mb-0.5 block text-[11px] font-bold text-white/50 sm:text-[13px]">서울특별시 · 실시간 버스정보</span>
-            <span className="block max-w-[44vw] truncate text-[21px] font-black leading-tight text-white sm:text-[28px] md:text-[32px]">{liveStationName || STATION_NAME}</span>
+            <span className="mb-0.5 hidden text-[13px] font-bold text-white/50 sm:block">서울특별시 · 실시간 버스정보</span>
+            <span className="block max-w-[36vw] truncate text-[18px] font-black leading-tight text-white sm:max-w-[44vw] sm:text-[28px] md:text-[32px]">{liveStationName || STATION_NAME}</span>
           </div>
         </div>
-        <div className="flex shrink-0 items-center gap-3">
+        <div className="flex shrink-0 items-center gap-2 sm:gap-3">
           <button
             type="button"
             onClick={() => { setAccessibleMode((enabled) => !enabled); setMainPage(0); setSoonPage(0); }}
             aria-pressed={accessibleMode}
             className={`inline-flex items-center gap-2 rounded-md border p-2 text-xs font-black sm:px-3 ${accessibleMode ? "border-[#F0C929] bg-[#F0C929] text-[#171D23]" : "border-white/20 bg-white/10 text-white"}`}
-            title="저상·비혼잡 버스를 우선 표시"
+            title="저상·비혼잡 도착 차량 우선 표시"
           >
-            <Accessibility className="size-4" /><span className="hidden sm:inline">안심 승차</span>
+            <Accessibility className="size-4" /><span className="hidden sm:inline">저상·여유 우선</span>
           </button>
           <div className="text-right text-white">
-          <div className="mb-1 text-[11px] text-white/45 sm:text-[13px]">{yy}년 {mm}월 {dd}일 ({day})</div>
-          <div className="flex items-baseline gap-1 font-mono text-[26px] font-black leading-none text-white sm:text-[36px] md:gap-2 md:text-[44px]">
-            <span className="text-[14px] text-yellow-400 sm:text-[20px] md:text-[24px]">{ampm}</span>
+          <div className="mb-1 hidden text-[13px] text-white/45 sm:block">{yy}년 {mm}월 {dd}일 ({day})</div>
+          <div className="flex items-baseline gap-1 font-mono text-[22px] font-black leading-none text-white sm:text-[36px] md:gap-2 md:text-[44px]">
+            <span className="text-[12px] text-yellow-400 sm:text-[20px] md:text-[24px]">{ampm}</span>
             {displayH}:{displayM}:{displayS}
           </div>
           </div>
@@ -313,7 +325,7 @@ export function BusInfoList() {
           </div>
         ) : (
           <div className="flex items-stretch gap-1 sm:gap-2">
-            {currentSoon.map((bus) => <SoonCard key={bus.id} bus={bus} isTracked={trackedBusNumber === bus.busNumber} onTrack={() => toggleTracking(bus.busNumber)} />)}
+            {currentSoon.map((bus) => <SoonCard key={bus.id} bus={bus} isTracked={trackedBusId === (bus.plainNo || bus.id)} onTrack={() => toggleTracking(bus)} />)}
             {Array.from({ length: SOON_PER_PAGE - currentSoon.length }).map((_, i) => (
               <div key={`es-${i}`} className="min-h-[92px] flex-1 rounded-md border border-[#6F611E]/20 bg-[#1C2229]/12" />
             ))}
@@ -343,8 +355,8 @@ export function BusInfoList() {
                   const isArriving = bus.traTimeSec < SOON_ARRIVE;
 
                   return (
-                    <button type="button" onClick={() => toggleTracking(bus.busNumber)} aria-pressed={trackedBusNumber === bus.busNumber} key={bus.id} className={`grid min-h-0 flex-1 grid-cols-[minmax(78px,1fr)_82px_minmax(120px,2fr)] items-center border-b border-[#E2E8F0] text-left md:grid-cols-[150px_110px_1fr]
-                      ${trackedBusNumber === bus.busNumber ? "bg-amber-50 ring-2 ring-inset ring-[#F0C929]" : idx % 2 === 0 ? "bg-white" : "bg-[#F8FAFC]"}`}>
+                    <button type="button" onClick={() => toggleTracking(bus)} aria-pressed={trackedBusId === (bus.plainNo || bus.id)} key={bus.id} className={`grid min-h-0 flex-1 grid-cols-[minmax(78px,1fr)_82px_minmax(120px,2fr)] items-center border-b border-[#E2E8F0] text-left md:grid-cols-[150px_110px_1fr]
+                      ${trackedBusId === (bus.plainNo || bus.id) ? "bg-amber-50 ring-2 ring-inset ring-[#F0C929]" : idx % 2 === 0 ? "bg-white" : "bg-[#F8FAFC]"}`}>
 
                       {/* 노선번호 */}
                       <div className="flex items-center justify-center px-4 border-r border-[#E2E8F0] h-full">
@@ -401,7 +413,7 @@ export function BusInfoList() {
             <button type="button" onClick={refetch} className="inline-flex items-center gap-1.5 text-[12px] font-bold text-[#52616B] hover:text-[#1B2930]" title="도착 정보 새로고침">
               <Wifi className="size-3.5 text-emerald-600" /> 실시간 · 15초마다 갱신
             </button>
-            {trackedBusNumber && <span className="hidden items-center gap-1 truncate text-[12px] font-black text-[#145466] sm:inline-flex"><Volume2 className="size-3.5" /> {trackedBusNumber}번 접근 알림 중</span>}
+            {trackedBusId && <span className="hidden items-center gap-1 truncate text-[12px] font-black text-[#145466] sm:inline-flex"><Volume2 className="size-3.5" /> 선택 차량 도착 알림 중</span>}
           </div>
           <div className="flex gap-1.5 items-center">
             {Array.from({ length: mainTotalPages }).map((_, i) => (

@@ -60,8 +60,19 @@ async def search_transport_info(parsed: ParsedIntent, request_id: str = "") -> T
 # 캐시 내부 함수
 # ---------------------------------------------------------------------------
 
-def _make_cache_key(origin_name: str, destination_text: str, transport_mode: str) -> str:
-    return f"{origin_name}|{destination_text.strip()}|{transport_mode}"
+def _make_cache_key(
+    origin_name: str,
+    destination_text: str,
+    transport_mode: str,
+    destination_x: float | None = None,
+    destination_y: float | None = None,
+) -> str:
+    coordinates = (
+        f"|{destination_x:.6f}|{destination_y:.6f}"
+        if destination_x is not None and destination_y is not None
+        else ""
+    )
+    return f"{origin_name}|{destination_text.strip()}|{transport_mode}{coordinates}"
 
 
 def _get_cached_route(key: str) -> TransportResult | None:
@@ -183,7 +194,16 @@ async def _search_route_with_odsay(parsed: ParsedIntent) -> TransportResult:
         origin_name, ox, oy = await resolve_origin(None)
         origin_coords = (ox, oy)
 
-    cache_key = _make_cache_key(origin_name, parsed.destination_text, parsed.transport_mode)
+    has_destination_coordinates = (
+        parsed.destination_x is not None and parsed.destination_y is not None
+    )
+    cache_key = _make_cache_key(
+        origin_name,
+        parsed.destination_text,
+        parsed.transport_mode,
+        parsed.destination_x,
+        parsed.destination_y,
+    )
 
     # 1차 캐시 확인 (lock 없이)
     cached = _get_cached_route(cache_key)
@@ -197,7 +217,14 @@ async def _search_route_with_odsay(parsed: ParsedIntent) -> TransportResult:
         if cached is not None:
             return cached
 
-        if origin_coords is None:
+        if has_destination_coordinates:
+            destination_x = float(parsed.destination_x)
+            destination_y = float(parsed.destination_y)
+            if origin_coords is None:
+                origin_x, origin_y = await resolve_place_coordinates(origin_name, "출발지")
+            else:
+                origin_x, origin_y = origin_coords
+        elif origin_coords is None:
             # 출발지·목적지 좌표를 병렬 조회
             (origin_x, origin_y), (destination_x, destination_y) = await asyncio.gather(
                 resolve_place_coordinates(origin_name, "출발지"),

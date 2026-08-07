@@ -23,6 +23,8 @@ class ParsedIntent:
     intent: IntentType = "unknown"
     origin_text: str | None = None        # 사용자가 말한 출발지 (없으면 기기 기본 출발지 사용)
     destination_text: str | None = None   # 사용자가 말한 목적지
+    destination_x: float | None = None    # 자동완성에서 확정한 목적지 경도
+    destination_y: float | None = None    # 자동완성에서 확정한 목적지 위도
     stop_text: str | None = None          # 버스 도착 조회 시 기준 정류장
     transport_mode: TransportMode = "unknown"
     bus_number: str | None = None         # 사용자가 말한 버스 번호

@@ -31,6 +31,7 @@ ALLOWED_CONTENT_TYPES = {
     "audio/mp3",
     "audio/webm",
     "audio/mp4",
+    "audio/ogg",
 }
 
 
@@ -122,6 +123,8 @@ async def process_text_route(request: Request, body: TextRouteRequest) -> dict:
         result = await asyncio.wait_for(
             run_text_route(
                 destination=body.destination.strip(),
+                destination_x=body.destination_x,
+                destination_y=body.destination_y,
                 origin=body.origin.strip() if body.origin else None,
                 transport_mode=body.transport_mode,
                 request_id=request_id,
@@ -194,13 +197,14 @@ def _build_buses_from_route(data: dict) -> list[dict]:
         seg_bus_number = line.replace("번", "").strip()
         seg_time = seg.get("time_min")
         duration = seg_time if seg_time is not None else round(total_time_min / n_segs)
+        is_walk = seg.get("vehicle_type") == "도보"
         steps.append({
-            "type": "bus",  # RouteStep은 "walk" | "bus"만 지원
+            "type": "walk" if is_walk else "bus",
             "durationMin": duration,
-            "busNumber": seg_bus_number,
+            "busNumber": None if is_walk else seg_bus_number,
             "fromStop": seg.get("start_name") or "",
             "toStop": seg.get("end_name") or "",
-            "description": f"{line} 탑승",
+            "description": line if is_walk else f"{line} 탑승",
         })
 
     # 대표 버스 번호: bus_number 우선, 없으면 노선명에서 추출
@@ -212,7 +216,8 @@ def _build_buses_from_route(data: dict) -> list[dict]:
     else:
         display_bus = ""
 
-    origin_stop = steps[0]["fromStop"] if steps else (data.get("origin") or "")
+    first_bus_step = next((step for step in steps if step["type"] == "bus"), None)
+    origin_stop = first_bus_step["fromStop"] if first_bus_step else (data.get("origin") or "")
 
     arrival_time = data.get("arrival_time") or ""
     m = re.search(r"(\d+)\s*분", arrival_time)
@@ -349,5 +354,8 @@ def _looks_like_supported_audio(content_type: str, audio_bytes: bytes) -> bool:
 
     if content_type == "audio/mp4":
         return len(audio_bytes) >= 12 and audio_bytes[4:8] == b"ftyp"
+
+    if content_type == "audio/ogg":
+        return audio_bytes.startswith(b"OggS")
 
     return False

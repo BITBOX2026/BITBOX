@@ -70,38 +70,21 @@ def _build_segment_guidance(segments: list[RouteSegment]) -> list[str]:
     if not segments:
         return []
 
-    transit = [s for s in segments if s.vehicle_type != "도보"]
-    last_walk = segments[-1] if segments[-1].vehicle_type == "도보" else None
+    guidance: list[str] = []
+    for segment in segments:
+        if segment.vehicle_type == "도보":
+            duration = f"약 {segment.time_min}분 " if segment.time_min else ""
+            target = segment.end_name or "다음 탑승 지점"
+            guidance.append(f"{target}까지 {duration}걸어가세요.")
+            continue
 
-    if not transit:
-        # 도보만 있는 경로
-        total_min = sum(s.time_min or 0 for s in segments)
-        return [f"목적지까지 도보로 약 {total_min}분 소요됩니다."]
+        label = _vehicle_label(segment)
+        guidance.append(
+            f"{segment.start_name}에서 {label}{_josa_reul(label)} 타고 "
+            f"{segment.end_name}에 내리세요."
+        )
 
-    if len(transit) == 1:
-        seg = transit[0]
-        label = _vehicle_label(seg)
-        parts = [
-            f"{seg.start_name}에서 {label}{_josa_reul(label)} 타시면 "
-            f"{seg.end_name}에 내리세요."
-        ]
-    else:
-        # 환승이 있는 경로 — 첫 탑승 수단과 최종 하차역만 안내
-        # 중간 환승 안내는 TTS가 너무 길어져 노인 사용자가 기억하기 어렵기 때문
-        first = transit[0]
-        last_transit = transit[-1]
-        label = _vehicle_label(first)
-        transfer_count = len(transit) - 1
-        transfer_text = f"{transfer_count}번 환승 후 " if transfer_count > 1 else "환승 후 "
-        parts = [
-            f"{first.start_name}에서 {label}{_josa_reul(label)} 타세요. "
-            f"{transfer_text}{last_transit.end_name}에 내리세요."
-        ]
-
-    if last_walk and last_walk.time_min:
-        parts.append(f"이후 약 {last_walk.time_min}분 걸어가시면 됩니다.")
-
-    return parts
+    return guidance
 
 
 def _build_fallback_guidance(result: TransportResult) -> str:
@@ -192,7 +175,7 @@ def _vehicle_label(seg: RouteSegment) -> str:
         if _is_night_bus(seg.line):
             return f"{seg.line} 야간버스"
         return f"{seg.line} 버스"
-    return seg.line  # 지하철은 노선명 그대로 (예: "2호선")
+    return seg.line
 
 
 def _josa_reul(word: str) -> str:

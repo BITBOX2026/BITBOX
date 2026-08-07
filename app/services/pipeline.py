@@ -60,6 +60,8 @@ async def run_pipeline(
 
 async def run_text_route(
     destination: str,
+    destination_x: float | None = None,
+    destination_y: float | None = None,
     origin: str | None = None,
     transport_mode: TransportMode = "bus",
     request_id: str = "",
@@ -69,6 +71,8 @@ async def run_text_route(
         intent="route",
         origin_text=origin,
         destination_text=destination,
+        destination_x=destination_x,
+        destination_y=destination_y,
         transport_mode=transport_mode,
         confidence=1.0,
     )

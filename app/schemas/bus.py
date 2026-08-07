@@ -22,6 +22,8 @@ class DefaultBusArrivalItem(BaseModel):
     raw_is_full_flag2: str | None = None
     raw_station_nm1: str | None = None   # 현재 버스 위치 정류소명
     raw_station_nm2: str | None = None
+    raw_veh_id1: str | None = None       # 차량 고유 ID
+    raw_veh_id2: str | None = None
 
 
 class DefaultBusArrivalResponse(BaseModel):

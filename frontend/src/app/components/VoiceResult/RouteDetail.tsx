@@ -15,6 +15,7 @@ interface MapLine {
   path: Array<{ lat: number; lng: number }>;
   color: string;
   busNumber?: string;
+  isWalk?: boolean;
 }
 
 function hasCoordinates(segment: RouteSegment): boolean {
@@ -41,7 +42,13 @@ export function RouteDetailOverlay({ route, destination, viewMode, onToggleView 
     const stationPath = (segment.path_points ?? [])
       .filter((point) => Number.isFinite(Number(point.x)) && Number.isFinite(Number(point.y)))
       .map((point) => ({ lat: Number(point.y), lng: Number(point.x) }));
-    mapLines.push({ path: stationPath.length >= 2 ? stationPath : [start, end], color: ROUTE_COLORS[index % ROUTE_COLORS.length], busNumber: segment.line || route.busNumber });
+    const isWalk = segment.vehicle_type === "도보";
+    mapLines.push({
+      path: stationPath.length >= 2 ? stationPath : [start, end],
+      color: isWalk ? "#64748B" : ROUTE_COLORS[index % ROUTE_COLORS.length],
+      busNumber: isWalk ? undefined : segment.line || route.busNumber,
+      isWalk,
+    });
     mapMarkers.push({ ...start, name: segment.start_name || "탑승 정류장" });
     if (index === segments.length - 1) mapMarkers.push({ ...end, name: segment.end_name || destination });
 
@@ -78,10 +85,11 @@ export function RouteDetailOverlay({ route, destination, viewMode, onToggleView 
       <div className="custom-scrollbar-light min-h-0 flex-1 overflow-y-auto bg-[#F5F7F8] p-3 sm:p-5">
         {viewMode === "map" ? (
           mapMarkers.length > 0 ? (
-            <div className="fade-enter h-full min-h-[260px] overflow-hidden rounded-md border border-slate-300 bg-white">
+            <div className="fade-enter relative h-full min-h-[260px] overflow-hidden rounded-md border border-slate-300 bg-white">
+              <span className="absolute left-2 top-2 z-10 rounded bg-white/95 px-2 py-1 text-[11px] font-bold text-slate-600 shadow">정류장 기준 예상 경로</span>
               <Map center={mapMarkers[0]} style={{ width: "100%", height: "100%", minHeight: "260px" }} level={5}>
                 {mapMarkers.map((marker, index) => <MapMarker key={`${marker.name}-${index}`} position={marker} title={marker.name} />)}
-                {mapLines.map((line, index) => <Polyline key={index} path={line.path} strokeWeight={6} strokeColor={line.color} strokeOpacity={0.85} />)}
+                {mapLines.map((line, index) => <Polyline key={index} path={line.path} strokeWeight={line.isWalk ? 4 : 6} strokeColor={line.color} strokeOpacity={0.85} strokeStyle={line.isWalk ? "shortdash" : "solid"} />)}
                 {mapLines.map((line, index) => {
                   if (!line.busNumber) return null;
                   const [start, end] = line.path;
@@ -111,7 +119,12 @@ export function RouteDetailOverlay({ route, destination, viewMode, onToggleView 
                       <strong className="text-base">{isWalk ? step.description || "도보 이동" : `${step.busNumber || route.busNumber}번 탑승`}</strong>
                       <span className="shrink-0 font-mono text-sm font-black">{formatDuration(step.durationMin)}</span>
                     </div>
-                    {step.fromStop && <p className="mt-2 text-sm font-medium leading-relaxed text-slate-600">{step.fromStop} 승차<br />{step.toStop} 하차</p>}
+                    {step.fromStop && (
+                      <p className="mt-2 text-sm font-medium leading-relaxed text-slate-600">
+                        {step.fromStop} {isWalk ? "출발" : "승차"}<br />
+                        {step.toStop} {isWalk ? "도착" : "하차"}
+                      </p>
+                    )}
                   </div>
                 </article>
               );

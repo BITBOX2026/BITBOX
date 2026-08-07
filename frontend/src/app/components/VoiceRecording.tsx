@@ -1,9 +1,19 @@
-import { useCallback, useRef, useState } from "react";
-import { uploadVoiceAudio } from "../../api/client";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { uploadVoiceAudio, type RouteDestination } from "../../api/client";
 import { findRoute } from "../../api/routeService";
 import { BusOption } from "../../types/bus";
 
 type RecorderStatus = "idle" | "listening" | "loading" | "result";
+const NO_SPEECH_TIMEOUT_MS = 8_000;
+const MAX_RECORDING_MS = 20_000;
+const REQUEST_TIMEOUT_MS = 25_000;
+
+export function selectRecordingMimeType(
+  isSupported: (mimeType: string) => boolean = MediaRecorder.isTypeSupported,
+): string | undefined {
+  return ["audio/webm;codecs=opus", "audio/mp4", "audio/ogg;codecs=opus"]
+    .find((type) => isSupported(type));
+}
 
 function normalizeBuses(rawBuses: BusOption[]): BusOption[] {
   return (rawBuses || []).map((bus) => ({
@@ -28,7 +38,9 @@ export function useVoiceRecorder() {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const maxDurationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const requestControllerRef = useRef<AbortController | null>(null);
   const audioChunks = useRef<Blob[]>([]);
   const hasDetectedSound = useRef(false);
   const isTimeoutRef = useRef(false);
@@ -36,6 +48,11 @@ export function useVoiceRecorder() {
   const applyResult = (result: Awaited<ReturnType<typeof uploadVoiceAudio>>) => {
     if (!result.success) {
       setError(result.message || "경로를 찾지 못했습니다.");
+      setStatus("idle");
+      return;
+    }
+    if (!result.buses?.length) {
+      setError(result.message || "표시할 수 있는 버스 경로가 없습니다.");
       setStatus("idle");
       return;
     }
@@ -48,35 +65,58 @@ export function useVoiceRecorder() {
     setStatus("result");
   };
 
+  const beginRequest = () => {
+    requestControllerRef.current?.abort();
+    const controller = new AbortController();
+    requestControllerRef.current = controller;
+    const timeoutId = window.setTimeout(() => controller.abort("timeout"), REQUEST_TIMEOUT_MS);
+    return { controller, timeoutId };
+  };
+
   const uploadAudioToServer = async (blob: Blob) => {
+    const { controller, timeoutId } = beginRequest();
     try {
-      const result = await uploadVoiceAudio(blob);
+      const result = await uploadVoiceAudio(blob, controller.signal);
+      if (requestControllerRef.current !== controller) return;
       applyResult(result);
     } catch (error) {
+      if (requestControllerRef.current !== controller) return;
       console.error("Audio upload failed:", error);
-      setError(error instanceof Error ? error.message : "음성 인식 처리 중 오류가 발생했습니다.");
+      setError(controller.signal.aborted ? "음성 요청 시간이 초과되었습니다. 다시 시도해 주세요." : error instanceof Error ? error.message : "음성 인식 처리 중 오류가 발생했습니다.");
       setStatus("idle");
+    } finally {
+      window.clearTimeout(timeoutId);
+      if (requestControllerRef.current === controller) requestControllerRef.current = null;
     }
   };
 
-  const submitTextRoute = async (value: string) => {
+  const submitTextRoute = async (value: RouteDestination) => {
+    const { controller, timeoutId } = beginRequest();
     setStatus("loading");
     setError("");
     setMessage("");
     setAudioBase64("");
     try {
-      applyResult(await findRoute(value));
+      const result = await findRoute(value, undefined, controller.signal);
+      if (requestControllerRef.current !== controller) return;
+      applyResult(result);
     } catch (routeError) {
+      if (requestControllerRef.current !== controller) return;
       console.error("Text route lookup failed:", routeError);
-      setError(routeError instanceof Error ? routeError.message : "경로 조회에 실패했습니다.");
+      setError(controller.signal.aborted ? "경로 조회 시간이 초과되었습니다. 다시 시도해 주세요." : routeError instanceof Error ? routeError.message : "경로 조회에 실패했습니다.");
       setStatus("idle");
+    } finally {
+      window.clearTimeout(timeoutId);
+      if (requestControllerRef.current === controller) requestControllerRef.current = null;
     }
   };
 
   const clearTimers = () => {
     if (timerRef.current) clearTimeout(timerRef.current);
+    if (maxDurationTimerRef.current) clearTimeout(maxDurationTimerRef.current);
     if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
     timerRef.current = null;
+    maxDurationTimerRef.current = null;
     silenceTimerRef.current = null;
   };
 
@@ -102,12 +142,19 @@ export function useVoiceRecorder() {
   }, []);
 
   const startRecording = async () => {
+    let stream: MediaStream | null = null;
     try {
-      if (window.speechSynthesis.speaking) {
+      if (!window.isSecureContext && window.location.hostname !== "localhost" && window.location.hostname !== "127.0.0.1") {
+        throw new Error("음성 기능은 HTTPS 연결에서만 사용할 수 있습니다. 목적지를 직접 입력해 주세요.");
+      }
+      if ("speechSynthesis" in window && window.speechSynthesis.speaking) {
         window.speechSynthesis.cancel();
       }
 
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (!("MediaRecorder" in window)) {
+        throw new Error("이 브라우저는 음성 녹음을 지원하지 않습니다.");
+      }
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       audioChunks.current = [];
       isTimeoutRef.current = false;
       hasDetectedSound.current = false;
@@ -118,6 +165,7 @@ export function useVoiceRecorder() {
       const AudioContextClass = window.AudioContext || (window as typeof window & {
         webkitAudioContext?: typeof AudioContext;
       }).webkitAudioContext;
+      if (!AudioContextClass) throw new Error("이 브라우저는 음성 분석을 지원하지 않습니다.");
       const audioContext = new AudioContextClass();
       if (audioContext.state === "suspended") {
         await audioContext.resume();
@@ -129,10 +177,10 @@ export function useVoiceRecorder() {
       source.connect(analyser);
       const dataArray = new Uint8Array(analyser.fftSize);
 
-      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-        ? "audio/webm;codecs=opus"
-        : "audio/webm";
-      const mediaRecorder = new MediaRecorder(stream, { mimeType });
+      const mimeType = selectRecordingMimeType();
+      const mediaRecorder = mimeType
+        ? new MediaRecorder(stream, { mimeType })
+        : new MediaRecorder(stream);
       mediaRecorderRef.current = mediaRecorder;
 
       mediaRecorder.ondataavailable = (event) => {
@@ -145,7 +193,7 @@ export function useVoiceRecorder() {
         if (isTimeoutRef.current) return;
 
         if (audioChunks.current.length > 0) {
-          const audioBlob = new Blob(audioChunks.current, { type: "audio/webm" });
+          const audioBlob = new Blob(audioChunks.current, { type: mediaRecorder.mimeType || mimeType || "application/octet-stream" });
           await uploadAudioToServer(audioBlob);
         } else {
           setStatus("idle");
@@ -155,7 +203,8 @@ export function useVoiceRecorder() {
       mediaRecorder.start(200);
       setStatus("listening");
       setTranscript("듣고 있습니다...");
-      timerRef.current = setTimeout(() => stopRecording(true), 8000);
+      timerRef.current = setTimeout(() => stopRecording(true), NO_SPEECH_TIMEOUT_MS);
+      maxDurationTimerRef.current = setTimeout(() => stopRecording(false), MAX_RECORDING_MS);
 
       const checkVolume = () => {
         if (mediaRecorder.state === "inactive") return;
@@ -180,6 +229,8 @@ export function useVoiceRecorder() {
 
       checkVolume();
     } catch (err: unknown) {
+      stream?.getTracks().forEach((track) => track.stop());
+      if (audioContextRef.current?.state !== "closed") void audioContextRef.current?.close();
       console.error("Recording failed:", err);
       const message = err instanceof Error ? err.message : "마이크를 시작하지 못했습니다.";
       setError(`마이크를 사용할 수 없습니다. ${message}`);
@@ -189,6 +240,13 @@ export function useVoiceRecorder() {
 
   const reset = () => {
     clearTimers();
+    isTimeoutRef.current = true;
+    requestControllerRef.current?.abort("reset");
+    requestControllerRef.current = null;
+    if (mediaRecorderRef.current?.state !== "inactive") {
+      mediaRecorderRef.current?.stop();
+      mediaRecorderRef.current?.stream.getTracks().forEach((track) => track.stop());
+    }
     window.speechSynthesis?.cancel();
     setStatus("idle");
     setDestination("");
@@ -197,6 +255,17 @@ export function useVoiceRecorder() {
     setAudioBase64("");
     setError("");
   };
+
+  useEffect(() => () => {
+    clearTimers();
+    isTimeoutRef.current = true;
+    requestControllerRef.current?.abort("unmount");
+    if (mediaRecorderRef.current?.state !== "inactive") {
+      mediaRecorderRef.current?.stop();
+    }
+    mediaRecorderRef.current?.stream.getTracks().forEach((track) => track.stop());
+    if (audioContextRef.current?.state !== "closed") void audioContextRef.current?.close();
+  }, []);
 
   return {
     status,

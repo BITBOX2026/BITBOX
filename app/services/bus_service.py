@@ -29,6 +29,7 @@ from app.services.transit.seoul_bus_parser import (
 )
 
 CACHE_TTL_SECONDS = 15.0
+STATION_CACHE_MAX_SIZE = 100
 
 _default_cache: tuple[float, DefaultBusArrivalResponse] | None = None
 _default_cache_lock = asyncio.Lock()
@@ -250,6 +251,8 @@ def _build_arrival_item(item: dict[str, str]) -> DefaultBusArrivalItem:
         raw_is_full_flag2=first_item_value(item, ["isFullFlag2"]) or None,
         raw_station_nm1=first_item_value(item, ["stationNm1"]) or None,
         raw_station_nm2=first_item_value(item, ["stationNm2"]) or None,
+        raw_veh_id1=first_item_value(item, ["vehId1", "vehicleId1"]) or None,
+        raw_veh_id2=first_item_value(item, ["vehId2", "vehicleId2"]) or None,
     )
 
 
@@ -429,9 +432,16 @@ def _get_station_cached(ars_id: str) -> DefaultBusArrivalResponse | None:
     cached_at, response = entry
     if _is_stale(cached_at):
         del _station_cache[ars_id]  # 만료 항목 즉시 삭제
+        lock = _station_locks.get(ars_id)
+        if lock is not None and not lock.locked():
+            _station_locks.pop(ars_id, None)
         return None
     return response.model_copy(deep=True)
 
 
 def _set_station_cached(ars_id: str, response: DefaultBusArrivalResponse) -> None:
+    if ars_id not in _station_cache and len(_station_cache) >= STATION_CACHE_MAX_SIZE:
+        oldest_key = min(_station_cache, key=lambda key: _station_cache[key][0])
+        _station_cache.pop(oldest_key, None)
+        _station_locks.pop(oldest_key, None)
     _station_cache[ars_id] = (time.monotonic(), response)

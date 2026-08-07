@@ -71,7 +71,7 @@ _cors_origins = (
 app = FastAPI(
     title="BITBOX Voice Transit Assistant Backend",
     description="음성 기반 버스/교통 안내 시스템 백엔드 API",
-    version="1.0.0",
+    version="1.1.0",
     lifespan=lifespan,
 )
 
@@ -105,6 +105,13 @@ def health_check() -> HealthResponse:
         "status": "ok",
         "env": settings.APP_ENV,
         "mock_mode": is_mock_mode(),
+        "version": app.version,
+        "capabilities": [
+            "bus_arrivals",
+            "bus_only_routes",
+            "place_suggestions",
+            "voice_processing",
+        ],
         "api_keys_configured": None,
     }
 

@@ -224,8 +224,7 @@ def _extract_bus_numbers(sub_paths: list[dict[str, Any]]) -> list[str]:
 
 def _extract_route_segments(sub_paths: list[dict[str, Any]]) -> list[RouteSegment] | None:
     """
-    ODsay subPath 목록에서 버스 탑승 구간만 추출합니다.
-    trafficType 3(도보)은 제외합니다.
+    ODsay subPath 목록에서 버스와 도보 이동 구간을 순서대로 추출합니다.
     """
     segments: list[RouteSegment] = []
 
@@ -242,7 +241,27 @@ def _extract_route_segments(sub_paths: list[dict[str, Any]]) -> list[RouteSegmen
         end_x = _safe_float(sp.get("endX"))
         end_y = _safe_float(sp.get("endY"))
 
-        if traffic_type == 3:  # 도보는 프론트가 출발지/환승지 좌표로 별도 구성
+        if traffic_type == 3:  # 도보
+            distance = safe_int(sp.get("distance"))
+            description = f"도보 {distance}m" if distance is not None else "도보 이동"
+            segments.append(RouteSegment(
+                vehicle_type="도보",
+                line=description,
+                start_name=start_name,
+                end_name=end_name,
+                time_min=seg_time,
+                start_x=start_x,
+                start_y=start_y,
+                end_x=end_x,
+                end_y=end_y,
+                path_points=_extract_path_points(
+                    sp,
+                    start_x=start_x,
+                    start_y=start_y,
+                    end_x=end_x,
+                    end_y=end_y,
+                ),
+            ))
             continue
 
         if traffic_type == 2:  # 버스

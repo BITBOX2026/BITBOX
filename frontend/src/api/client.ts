@@ -23,6 +23,13 @@ export interface PlaceSuggestion {
   y?: string | null;
 }
 
+export interface RouteDestination {
+  name: string;
+  address?: string | null;
+  x?: number | null;
+  y?: number | null;
+}
+
 export function getApiBaseUrl(): string {
   const configured = import.meta.env.VITE_API_BASE_URL?.trim() || "";
   if (
@@ -35,18 +42,9 @@ export function getApiBaseUrl(): string {
   return configured.replace(/\/+$/, "");
 }
 
-function getAuthHeaders(): HeadersInit {
-  const token = import.meta.env.VITE_API_AUTH_TOKEN;
-  return token ? { "x-bitbox-token": token } : {};
-}
-
 export async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
-  const headers = new Headers(init.headers);
-  Object.entries(getAuthHeaders()).forEach(([key, value]) => headers.set(key, value));
-
   return fetch(`${getApiBaseUrl()}${path}`, {
     ...init,
-    headers,
   });
 }
 
@@ -59,26 +57,37 @@ async function parseTransitResponse(response: Response): Promise<TransitResponse
   return payload as TransitResponse;
 }
 
-export async function uploadVoiceAudio(blob: Blob): Promise<TransitResponse> {
+export async function uploadVoiceAudio(blob: Blob, signal?: AbortSignal): Promise<TransitResponse> {
   const formData = new FormData();
-  formData.append("file", blob, "recording.webm");
+  const extension = blob.type.includes("mp4") ? "mp4" : blob.type.includes("ogg") ? "ogg" : "webm";
+  formData.append("file", blob, `recording.${extension}`);
 
   const response = await apiFetch("/api/upload", {
     method: "POST",
     body: formData,
+    signal,
   });
 
   return parseTransitResponse(response);
 }
 
 export async function requestTextRoute(
-  destination: string,
+  destination: RouteDestination,
   origin?: string,
+  signal?: AbortSignal,
 ): Promise<TransitResponse> {
   const response = await apiFetch("/api/route", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ destination, origin: origin || null, transport_mode: "bus" }),
+    body: JSON.stringify({
+      destination: destination.name,
+      destination_address: destination.address || null,
+      destination_x: destination.x ?? null,
+      destination_y: destination.y ?? null,
+      origin: origin || null,
+      transport_mode: "bus",
+    }),
+    signal,
   });
   return parseTransitResponse(response);
 }
@@ -86,7 +95,9 @@ export async function requestTextRoute(
 export async function suggestPlaces(query: string, signal?: AbortSignal): Promise<PlaceSuggestion[]> {
   const params = new URLSearchParams({ query: query.trim() });
   const response = await apiFetch(`/api/places/suggest?${params}`, { signal });
-  if (!response.ok) return [];
   const payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(payload?.detail || payload?.message || `장소 검색에 실패했습니다. (${response.status})`);
+  }
   return Array.isArray(payload?.suggestions) ? payload.suggestions : [];
 }

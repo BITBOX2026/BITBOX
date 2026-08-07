@@ -1,8 +1,13 @@
-import { requestTextRoute, type TransitResponse } from "./client";
+import { requestTextRoute, type RouteDestination, type TransitResponse } from "./client";
 
 export function findRoute(
-  destination: string,
+  destination: RouteDestination,
   origin?: string,
+  signal?: AbortSignal,
 ): Promise<TransitResponse> {
-  return requestTextRoute(destination.trim(), origin?.trim());
+  return requestTextRoute(
+    { ...destination, name: destination.name.trim() },
+    origin?.trim(),
+    signal,
+  );
 }
