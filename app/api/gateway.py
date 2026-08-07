@@ -14,12 +14,12 @@ import uuid
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 
-from app.api.schemas import ProcessResponse, UploadCompatResponse
+from app.api.schemas import ProcessResponse, TextRouteRequest, UploadCompatResponse
 from app.core.config import settings
 from app.core.logger import get_logger
 from app.core.rate_limiter import limiter
 from app.services.core.settings_helper import get_setting
-from app.services.pipeline import build_timeout_error_response, run_pipeline
+from app.services.pipeline import build_timeout_error_response, run_pipeline, run_text_route
 
 router = APIRouter()
 logger = get_logger(__name__)
@@ -109,6 +109,30 @@ async def process_audio(request: Request, file: UploadFile = File(...)) -> dict:
 async def upload_audio(request: Request, file: UploadFile = File(...)) -> dict:
     """Compatibility alias for the existing React frontend."""
     result = await process_audio(request, file)
+    return _build_upload_compat_response(result)
+
+
+@router.post("/route", response_model=UploadCompatResponse)
+@limiter.limit("20/minute")
+async def process_text_route(request: Request, body: TextRouteRequest) -> dict:
+    """Return the same frontend contract as voice upload for a typed destination."""
+    _verify_api_token(request)
+    request_id = uuid.uuid4().hex[:8]
+
+    try:
+        result = await asyncio.wait_for(
+            run_text_route(
+                destination=body.destination.strip(),
+                origin=body.origin.strip() if body.origin else None,
+                transport_mode=body.transport_mode,
+                request_id=request_id,
+            ),
+            timeout=settings.REQUEST_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        result = build_timeout_error_response()
+        result["request_id"] = request_id
+
     return _build_upload_compat_response(result)
 
 

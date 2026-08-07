@@ -12,14 +12,4 @@ export const VoiceIdle = {
       <div className="absolute bottom-[-12px] left-1/2 -translate-x-1/2 w-0 h-0 border-l-[13px] border-l-transparent border-r-[13px] border-r-transparent border-t-[13px] border-t-white" />
     </div>
   ),
-
-  // 하단 예시 문장: 사용자가 말할 수 있는 예시를 보여주는 반투명 박스
-  Example: () => (
-    // bg-black/25와 backdrop-blur-sm를 사용하여 배경이 살짝 비치는 효과
-    <div className="bg-black/25 backdrop-blur-sm px-5 py-2.5 rounded-full shadow-lg">
-      <p className="text-[15px] font-medium text-white/90 m-0">
-        예) "강남역"
-      </p>
-    </div>
-  )
 };

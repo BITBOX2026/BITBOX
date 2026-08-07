@@ -106,6 +106,43 @@ def test_upload_compat_route_exposes_route_detail_for_frontend() -> None:
     assert bus["routeDetail"]["route_segments"][0]["line"] == "146번"
 
 
+def test_typed_route_uses_same_frontend_contract(monkeypatch) -> None:
+    async def search(_parsed: ParsedIntent, request_id: str = ""):
+        return TransportResult(
+            origin="서울시청",
+            destination="강남역",
+            transport_mode="bus",
+            bus_number="402",
+            total_time_min=28,
+            route_segments=[
+                RouteSegment(
+                    vehicle_type="버스",
+                    line="402번",
+                    start_name="시청앞",
+                    end_name="강남역",
+                    time_min=28,
+                )
+            ],
+            source="odsay",
+        )
+
+    async def no_tts(_text: str, request_id: str):
+        return None
+
+    monkeypatch.setattr(pipeline, "search_transport_info", search)
+    monkeypatch.setattr(pipeline, "_generate_tts_audio_safely", no_tts)
+
+    result = asyncio.run(
+        pipeline.run_text_route("강남역", origin="서울시청", request_id="typed-route")
+    )
+    compat = _build_upload_compat_response(result)
+
+    assert compat["success"] is True
+    assert compat["destination"] == "강남역"
+    assert compat["buses"][0]["busNumber"] == "402"
+    assert compat["buses"][0]["routeDetail"]["totalMin"] == 28
+
+
 def test_default_bus_route_omits_none_fields_for_javascript_comparison() -> None:
     route = next(route for route in bus_router.routes if route.path == "/default")
     assert route.response_model_exclude_none is True

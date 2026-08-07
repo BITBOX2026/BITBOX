@@ -121,11 +121,11 @@ export function RouteDetailOverlay({ route, destination, viewMode, onToggleView 
   return (
     <div className="absolute inset-0 z-[100] bg-white text-gray-900 overflow-hidden font-['Noto_Sans_KR'] flex flex-col w-full h-full">
       {/* ── [우측 뷰어 전용 헤더 영역 (줄바꿈 및 가시성 개선)] ── */}
-      <div className="flex items-center justify-between w-full py-3 px-6 bg-white shrink-0 border-b border-gray-100 shadow-sm">
+      <div className="flex w-full shrink-0 flex-wrap items-center justify-between gap-2 border-b border-gray-100 bg-white px-3 py-2 shadow-sm md:px-6 md:py-3">
         
         {/* 버스 번호 배지 */}
         <div className="flex items-center gap-3 shrink-0">
-          <span className="bg-blue-600 text-white px-4 py-2 rounded-xl font-mono text-2xl font-black whitespace-nowrap shrink-0 shadow-sm flex items-center justify-center">
+          <span className="flex shrink-0 items-center justify-center whitespace-nowrap rounded-md bg-blue-600 px-3 py-2 font-mono text-lg font-black text-white shadow-sm md:px-4 md:text-2xl">
             {route.busNumber}번
           </span>
         </div>
@@ -163,7 +163,7 @@ export function RouteDetailOverlay({ route, destination, viewMode, onToggleView 
           </div>
 
           {/* 소요 시간 박스 */}
-          <div className="bg-amber-50 border border-amber-200/80 px-4 py-2 rounded-xl flex items-center gap-2 shadow-sm whitespace-nowrap shrink-0">
+          <div className="hidden shrink-0 items-center gap-2 whitespace-nowrap rounded-md border border-amber-200/80 bg-amber-50 px-4 py-2 shadow-sm sm:flex">
             <span className="text-amber-800 text-xs font-extrabold whitespace-nowrap shrink-0">총</span>
             {route.totalMin >= 60 ? (
               <div className="flex items-baseline gap-0.5 whitespace-nowrap shrink-0">
@@ -188,7 +188,7 @@ export function RouteDetailOverlay({ route, destination, viewMode, onToggleView 
       </div>
 
       {/* ── 하단 가변 콘텐츠 구역 ── */}
-      <div className="flex-1 overflow-y-auto px-8 pt-5 pb-6 custom-scrollbar-light bg-white flex flex-col">
+      <div className="flex flex-1 flex-col overflow-y-auto bg-white px-3 pb-6 pt-4 custom-scrollbar-light md:px-8 md:pt-5">
         {viewMode === 'map' ? (
           // [지도 모드]
           mapMarkers && mapMarkers.length > 0 && mapMarkers[0]?.lat ? (

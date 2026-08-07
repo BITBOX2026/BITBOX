@@ -1,16 +1,11 @@
 import { useCallback, useRef, useState } from "react";
 import { uploadVoiceAudio } from "../../api/client";
+import { findRoute, type TransportMode } from "../../api/routeService";
 import { BusOption } from "../../types/bus";
 
 type RecorderStatus = "idle" | "listening" | "loading" | "result";
 
-type BusWithRoute = BusOption & {
-  totalMin?: number;
-  steps?: unknown[];
-  routeDetail?: Record<string, unknown>;
-};
-
-function normalizeBuses(rawBuses: BusWithRoute[]): BusOption[] {
+function normalizeBuses(rawBuses: BusOption[]): BusOption[] {
   return (rawBuses || []).map((bus) => ({
     ...bus,
     routeDetail: bus.routeDetail || {
@@ -18,7 +13,7 @@ function normalizeBuses(rawBuses: BusWithRoute[]): BusOption[] {
       totalMin: bus.totalMin || bus.arrivalMin || 0,
       steps: bus.steps || [],
     },
-  })) as BusOption[];
+  }));
 }
 
 export function useVoiceRecorder() {
@@ -29,6 +24,7 @@ export function useVoiceRecorder() {
   const [buses, setBuses] = useState<BusOption[]>([]);
   const [message, setMessage] = useState("");
   const [audioBase64, setAudioBase64] = useState("");
+  const [error, setError] = useState("");
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -38,18 +34,42 @@ export function useVoiceRecorder() {
   const hasDetectedSound = useRef(false);
   const isTimeoutRef = useRef(false);
 
+  const applyResult = (result: Awaited<ReturnType<typeof uploadVoiceAudio>>) => {
+    if (!result.success) {
+      setError(result.message || "경로를 찾지 못했습니다.");
+      setStatus("idle");
+      return;
+    }
+
+    setError("");
+    setMessage(result.message || "");
+    setAudioBase64(result.audio_base64 || "");
+    setDestination(result.destination || result.destination_text || "");
+    setBuses(normalizeBuses(result.buses));
+    setStatus("result");
+  };
+
   const uploadAudioToServer = async (blob: Blob) => {
     try {
       const result = await uploadVoiceAudio(blob);
-
-      setMessage(result.message || "");
-      setAudioBase64(result.audio_base64 || "");
-      setDestination(result.destination || result.destination_text || "");
-      setBuses(normalizeBuses(result.buses));
-      setStatus("result");
+      applyResult(result);
     } catch (error) {
       console.error("Audio upload failed:", error);
-      alert("음성 인식 처리 중 오류가 발생했습니다.");
+      setError(error instanceof Error ? error.message : "음성 인식 처리 중 오류가 발생했습니다.");
+      setStatus("idle");
+    }
+  };
+
+  const submitTextRoute = async (value: string, mode: TransportMode) => {
+    setStatus("loading");
+    setError("");
+    setMessage("");
+    setAudioBase64("");
+    try {
+      applyResult(await findRoute(value, undefined, mode));
+    } catch (routeError) {
+      console.error("Text route lookup failed:", routeError);
+      setError(routeError instanceof Error ? routeError.message : "경로 조회에 실패했습니다.");
       setStatus("idle");
     }
   };
@@ -75,7 +95,7 @@ export function useVoiceRecorder() {
     }
 
     if (isTimeout) {
-      alert("음성이 감지되지 않았습니다. 처음부터 다시 시도해주세요.");
+      setError("음성이 감지되지 않았습니다. 다시 시도해 주세요.");
       setStatus("idle");
     } else {
       setStatus("loading");
@@ -95,6 +115,7 @@ export function useVoiceRecorder() {
       hasDetectedSound.current = false;
       setMessage("");
       setAudioBase64("");
+      setError("");
 
       const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
       const audioContext = new AudioContextClass();
@@ -159,11 +180,23 @@ export function useVoiceRecorder() {
       };
 
       checkVolume();
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Recording failed:", err);
-      alert(`마이크 시작 실패: ${err.name} - ${err.message}`);
+      const message = err instanceof Error ? err.message : "마이크를 시작하지 못했습니다.";
+      setError(`마이크를 사용할 수 없습니다. ${message}`);
       setStatus("idle");
     }
+  };
+
+  const reset = () => {
+    clearTimers();
+    window.speechSynthesis?.cancel();
+    setStatus("idle");
+    setDestination("");
+    setBuses([]);
+    setMessage("");
+    setAudioBase64("");
+    setError("");
   };
 
   return {
@@ -175,8 +208,11 @@ export function useVoiceRecorder() {
     buses,
     message,
     audioBase64,
+    error,
     startRecording,
     stopRecording,
+    submitTextRoute,
+    reset,
   };
 }
 

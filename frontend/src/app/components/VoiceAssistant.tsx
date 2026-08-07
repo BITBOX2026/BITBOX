@@ -7,6 +7,7 @@ import { VoiceRecording, useVoiceRecorder } from "./VoiceRecording";
 import { VoiceLoading } from "./VoiceLoading";
 import { VoiceResult } from "./VoiceResult"; 
 import { ImageWithFallback } from "./figma/ImageWithFallback";
+import { DestinationSearch } from "./DestinationSearch";
 
 // 음성 비서의 4가지 상태를 정의
 export type VoiceStatus = "idle" | "listening" | "loading" | "result";
@@ -14,7 +15,7 @@ export type VoiceStatus = "idle" | "listening" | "loading" | "result";
 export function VoiceAssistant() {
   // 훅에서 제공하는 로직들을 가져옵니다.
   // EC2 서버 API 통신 결과로 받아온 실제 목적지(destination)와 추천 버스 리스트(buses)를 훅에서 구조 분해 할당으로 추가 수집합니다.
-  const { status: hookStatus, transcript, audioChunks, destination: serverDestination, buses: serverBuses, message, audioBase64, startRecording, stopRecording } = useVoiceRecorder();
+  const { status: hookStatus, transcript, audioChunks, destination: serverDestination, buses: serverBuses, message, audioBase64, error, startRecording, stopRecording, submitTextRoute, reset } = useVoiceRecorder();
   
   // 현재 상태, 인식된 텍스트, 목적지를 상태로 관리
   const [status, setStatus] = useState<VoiceStatus>("idle"); 
@@ -38,7 +39,7 @@ export function VoiceAssistant() {
   const handleReset = () => { startRecording(); };
   
   // '처음으로' 버튼 클릭 시 초기화
-  const handleGoHome = () => { setStatus("idle"); };
+  const handleGoHome = () => { reset(); };
 
   return (
     <div className="w-full h-full relative overflow-hidden font-['Noto_Sans_KR']" style={{ background: "#1A66CC" }}>
@@ -56,6 +57,12 @@ export function VoiceAssistant() {
       ) : (
         /* 2. 대기/인식/로딩 화면 레이아웃 */
         <div className="w-full h-full relative">
+          {error && (
+            <div role="alert" className="absolute left-4 right-4 top-3 z-40 flex items-center justify-between gap-3 rounded-md border border-red-200 bg-red-50 px-4 py-2 text-sm font-bold text-red-800 shadow">
+              <span>{error}</span>
+              <button type="button" onClick={reset} className="shrink-0 underline">닫기</button>
+            </div>
+          )}
           {/* 캐릭터 이미지 (idle 상태에서만 배경으로 등장) */}
           {status === "idle" && (
             <div className="absolute left-0 bottom-0 pointer-events-none z-10" style={{ height: "105%", width: "59%" }}>
@@ -63,9 +70,9 @@ export function VoiceAssistant() {
             </div>
           )}
           {/* 중앙 콘텐츠 영역 (정중앙 배치) */}
-          <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex flex-col items-center z-20 gap-[20px] w-full max-w-[400px]">
+          <div className="absolute left-1/2 top-1/2 flex w-full max-w-[500px] -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-3 z-20">
             {/* 상단: 말풍선 또는 텍스트 안내 */}
-            <div className="h-24 flex items-end justify-center">
+            <div className="flex h-20 items-end justify-center md:h-24">
               {status === "idle" && <VoiceIdle.SpeechBubble />}
               {status === "listening" && <p className="text-4xl font-black text-white text-center drop-shadow-lg leading-tight">말씀해 주세요</p>}
               {status === "loading" && <p className="text-2xl font-bold text-white animate-pulse">경로 찾는 중...</p>}
@@ -75,11 +82,13 @@ export function VoiceAssistant() {
               <VoiceMicButton status={status} onClick={handleToggle} />
             </div>
             {/* 하단: 예시 문구, 인식 중인 텍스트, 로딩바 */}
-            <div className="h-24 flex items-start justify-center">
-              {status === "idle" && <VoiceIdle.Example />}
+            <div className="flex h-12 items-start justify-center md:h-24">
               {status === "listening" && <VoiceRecording transcript={transcript} />}
               {status === "loading" && <VoiceLoading />}
             </div>
+            {status === "idle" && (
+              <DestinationSearch onSubmit={submitTextRoute} />
+            )}
           </div>
         </div>
       )}

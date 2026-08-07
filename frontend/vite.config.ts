@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite'
+import { defineConfig, loadEnv } from 'vite'
 import path from 'path'
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
@@ -15,7 +15,10 @@ function figmaAssetResolver() {
   }
 }
 
-export default defineConfig(() => {
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, '.', '')
+  const proxyTarget = env.VITE_DEV_PROXY_TARGET || 'http://127.0.0.1:8000'
+
   return {
     plugins: [
       figmaAssetResolver(),
@@ -27,7 +30,12 @@ export default defineConfig(() => {
         '@': path.resolve(__dirname, './src'),
       },
     },
-    // 기존의 server.proxy 및 loadEnv 설정 제거 및 EC2 직접 통신
+    server: {
+      proxy: {
+        '/api': { target: proxyTarget, changeOrigin: true },
+        '/health': { target: proxyTarget, changeOrigin: true },
+      },
+    },
     assetsInclude: ['**/*.svg', '**/*.csv'],
   };
 });

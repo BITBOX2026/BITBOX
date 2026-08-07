@@ -69,6 +69,12 @@ class UploadCompatResponse(BaseModel):
     request_id: str | None = None
 
 
+class TextRouteRequest(BaseModel):
+    destination: str = Field(min_length=1, max_length=100)
+    origin: str | None = Field(default=None, max_length=100)
+    transport_mode: Literal["bus", "subway", "transit"] = "bus"
+
+
 class HealthResponse(BaseModel):
     status: Literal["ok"]
     env: str

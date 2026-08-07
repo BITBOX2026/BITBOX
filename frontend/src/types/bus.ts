@@ -16,6 +16,9 @@ export interface BusOption {
   isLastBus: boolean;
   plainNo: string;
   isSecond: boolean;
+  totalMin?: number;
+  steps?: RouteStep[];
+  routeDetail?: RouteDetail;
 }
 
 export interface RouteStep {
@@ -31,4 +34,22 @@ export interface RouteDetail {
   busNumber: string;
   totalMin: number;
   steps: RouteStep[];
+  origin?: string;
+  origin_x?: number | string | null;
+  origin_y?: number | string | null;
+  destination_x?: number | string | null;
+  destination_y?: number | string | null;
+  route_segments?: RouteSegment[];
+}
+
+export interface RouteSegment {
+  vehicle_type: string;
+  line: string;
+  start_name: string;
+  end_name: string;
+  time_min?: number | null;
+  start_x?: number | null;
+  start_y?: number | null;
+  end_x?: number | null;
+  end_y?: number | null;
 }

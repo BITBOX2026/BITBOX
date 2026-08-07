@@ -30,7 +30,7 @@ from app.services.core.exceptions import (
     STTProcessingError,
     TransportAPIError,
 )
-from app.services.core.service_types import ParsedIntent, RouteSegment
+from app.services.core.service_types import ParsedIntent, RouteSegment, TransportMode
 from app.services.response_builder import build_user_message
 from app.services.transit.transport_service import search_transport_info
 from app.services.transit.validate_service import validate_parsed_intent
@@ -50,6 +50,85 @@ async def run_pipeline(
     result = await _run_pipeline_core(audio_bytes, filename, request_id)
 
     # TTS는 파이프라인 핵심 로직과 분리 — 실패해도 텍스트 응답은 반환
+    result["audio_base64"] = await _generate_tts_audio_safely(
+        result.get("message", ""),
+        request_id=request_id,
+    )
+    result["request_id"] = request_id
+    return result
+
+
+async def run_text_route(
+    destination: str,
+    origin: str | None = None,
+    transport_mode: TransportMode = "bus",
+    request_id: str = "",
+) -> dict:
+    """Run the transport pipeline for a typed destination without STT or LLM."""
+    parsed = ParsedIntent(
+        intent="route",
+        origin_text=origin,
+        destination_text=destination,
+        transport_mode=transport_mode,
+        confidence=1.0,
+    )
+
+    validation = validate_parsed_intent(parsed)
+    if not validation.is_valid:
+        result = _error_response(
+            message=validation.message,
+            transcript=destination,
+            intent=parsed.intent,
+            origin=parsed.origin_text,
+            destination=parsed.destination_text,
+            stop_text=None,
+            stop_name=None,
+            transport_mode=parsed.transport_mode,
+            bus_number=None,
+            confidence=parsed.confidence,
+            needs_confirmation=True,
+        )
+    else:
+        try:
+            transport_result = await search_transport_info(parsed, request_id=request_id)
+            result = _success_response(
+                message=build_user_message(parsed=parsed, transport_result=transport_result),
+                transcript=destination,
+                intent=parsed.intent,
+                origin=transport_result.origin,
+                origin_x=transport_result.origin_x,
+                origin_y=transport_result.origin_y,
+                destination=transport_result.destination,
+                destination_x=transport_result.destination_x,
+                destination_y=transport_result.destination_y,
+                stop_text=None,
+                stop_name=transport_result.stop_name,
+                transport_mode=transport_result.transport_mode,
+                bus_number=transport_result.bus_number,
+                arrival_time=transport_result.arrival_time,
+                arrival_time_2=transport_result.arrival_time_2,
+                first_bus_time=transport_result.first_bus_time,
+                total_time_min=transport_result.total_time_min,
+                payment=transport_result.payment,
+                bus_transit_count=transport_result.bus_transit_count,
+                subway_transit_count=transport_result.subway_transit_count,
+                transfer_count=transport_result.transfer_count,
+                path_type=transport_result.path_type,
+                route_segments=transport_result.route_segments,
+                confidence=parsed.confidence,
+                source=transport_result.source,
+                needs_confirmation=False,
+            )
+        except (CoordinateResolveError, TransportAPIError) as exc:
+            logger.warning("[%s] text route lookup failed: %s", request_id, exc)
+            result = _error_response(
+                message=exc.user_message,
+                transcript=destination,
+                stop_name=None,
+                needs_confirmation=True,
+                **_parsed_fields(parsed),
+            )
+
     result["audio_base64"] = await _generate_tts_audio_safely(
         result.get("message", ""),
         request_id=request_id,

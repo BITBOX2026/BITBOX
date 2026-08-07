@@ -87,7 +87,7 @@ function SoonCard({ bus }: { bus: BusInfo }) {
       <div className={`rounded-full px-3 py-0.5 text-[12px] font-black border ${congColor}`}>
         {congLabel}
       </div>
-      <div className="text-[44px] font-black text-[#FACC15] tracking-tight font-mono leading-none">
+      <div className="max-w-full truncate text-[28px] font-black text-[#FACC15] font-mono leading-none sm:text-[36px] md:text-[44px]">
         {bus.busNumber}
       </div>
       {bus.isLastBus && (
@@ -100,7 +100,7 @@ function SoonCard({ bus }: { bus: BusInfo }) {
 // ─── 로딩 스켈레톤 ───────────────────────────────────────────
 function SkeletonRow({ idx }: { idx: number }) {
   return (
-    <div className={`flex-1 grid grid-cols-[150px_110px_1fr] border-b border-[#E2E8F0] items-center min-h-0 ${idx % 2 === 0 ? "bg-white" : "bg-[#F8FAFC]"}`}>
+    <div className={`grid min-h-0 flex-1 grid-cols-[minmax(78px,1fr)_82px_minmax(120px,2fr)] items-center border-b border-[#E2E8F0] md:grid-cols-[150px_110px_1fr] ${idx % 2 === 0 ? "bg-white" : "bg-[#F8FAFC]"}`}>
       <div className="flex justify-center px-4 border-r border-[#E2E8F0] h-full items-center">
         <div className="h-9 w-20 bg-gray-200 rounded animate-pulse" />
       </div>
@@ -199,16 +199,16 @@ export function BusInfoList() {
     <div className="w-full h-full flex flex-col bg-[#E5E7EB] overflow-hidden font-['Noto_Sans_KR']">
 
       {/* ── 헤더 ─────────────────────────────────── */}
-      <div className="bg-[#1C1F26] border-b-4 border-[#374151] px-6 py-4 flex items-center justify-between shrink-0">
+      <div className="flex shrink-0 items-center justify-between border-b-4 border-[#374151] bg-[#1C1F26] px-3 py-2 sm:px-6 sm:py-4">
         <div className="flex flex-col text-left">
           <span className="text-[14px] text-blue-400 font-bold mb-0.5">서울특별시</span>
           {/* 버스 정류장 이름 리턴 */}
-          <span className="text-[34px] font-black text-white leading-tight">{liveStationName || STATION_NAME}</span>
+          <span className="max-w-[48vw] truncate text-[22px] font-black leading-tight text-white sm:text-[28px] md:text-[34px]">{liveStationName || STATION_NAME}</span>
         </div>
         <div className="text-right text-white">
           <div className="text-[14px] text-gray-400 mb-1">{yy}년 {mm}월 {dd}일 ({day})</div>
-          <div className="text-[44px] font-black font-mono leading-none flex items-baseline gap-2">
-            <span className="text-[24px] text-yellow-400">{ampm}</span>
+          <div className="flex items-baseline gap-1 font-mono text-[26px] font-black leading-none text-white sm:text-[36px] md:gap-2 md:text-[44px]">
+            <span className="text-[14px] text-yellow-400 sm:text-[20px] md:text-[24px]">{ampm}</span>
             {displayH}:{displayM}:{displayS}
           </div>
         </div>
@@ -233,7 +233,7 @@ export function BusInfoList() {
         </div>
 
         {loading ? (
-          <div className="flex gap-2">
+          <div className="flex gap-1 sm:gap-2">
             {Array.from({ length: SOON_PER_PAGE }).map((_, i) => (
               <div key={i} className="flex-1 min-h-[100px] bg-[#1C1F26]/40 rounded-xl border border-[#374151] animate-pulse" />
             ))}
@@ -243,7 +243,7 @@ export function BusInfoList() {
             3분 이내 도착 예정 버스가 없습니다
           </div>
         ) : (
-          <div className="flex gap-2 items-stretch">
+          <div className="flex items-stretch gap-1 sm:gap-2">
             {currentSoon.map((bus) => <SoonCard key={bus.id} bus={bus} />)}
             {Array.from({ length: SOON_PER_PAGE - currentSoon.length }).map((_, i) => (
               <div key={`es-${i}`} className="flex-1 min-h-[100px] bg-[#1C1F26]/20 rounded-xl border border-[#374151]/40" />
@@ -255,7 +255,7 @@ export function BusInfoList() {
       {/* ── 메인 버스 목록 ───────────────────────── */}
       <div className="flex-1 flex flex-col min-h-0 bg-white">
         {/* 테이블 헤더 */}
-        <div className="bg-[#1C1F26] grid grid-cols-[150px_110px_1fr] shrink-0 border-b border-[#374151]">
+        <div className="grid shrink-0 grid-cols-[minmax(78px,1fr)_82px_minmax(120px,2fr)] border-b border-[#374151] bg-[#1C1F26] md:grid-cols-[150px_110px_1fr]">
           {["노선번호", "예정시간", "버스 현재 위치"].map((label, i) => (
             <div key={i} className={`py-3 px-4 text-[14px] font-black text-white tracking-wider ${i === 2 ? "text-left" : "text-center"} ${i < 2 ? "border-r border-[#374151]" : ""}`}>
               {label}
@@ -274,12 +274,12 @@ export function BusInfoList() {
                   const isArriving = bus.traTimeSec < SOON_ARRIVE;
 
                   return (
-                    <div key={bus.id} className={`flex-1 grid grid-cols-[150px_110px_1fr] border-b border-[#E2E8F0] items-center min-h-0
+                    <div key={bus.id} className={`grid min-h-0 flex-1 grid-cols-[minmax(78px,1fr)_82px_minmax(120px,2fr)] items-center border-b border-[#E2E8F0] md:grid-cols-[150px_110px_1fr]
                       ${idx % 2 === 0 ? "bg-white" : "bg-[#F8FAFC]"}`}>
 
                       {/* 노선번호 */}
                       <div className="flex items-center justify-center px-4 border-r border-[#E2E8F0] h-full">
-                        <span className="font-black text-[32px] text-[#1E293B] tracking-tight leading-none">
+                        <span className="max-w-full truncate text-[22px] font-black leading-none text-[#1E293B] sm:text-[27px] md:text-[32px]">
                           {bus.busNumber}
                         </span>
                       </div>
@@ -302,7 +302,7 @@ export function BusInfoList() {
                           <span className="text-[12px] font-black">{congLabel}</span>
                         </div>
                         <div className="flex flex-col min-w-0">
-                          <span className="text-[20px] font-black text-[#1E293B] truncate leading-tight">
+                          <span className="truncate text-[14px] font-black leading-tight text-[#1E293B] sm:text-[17px] md:text-[20px]">
                             {bus.currentStationName}
                           </span>
                           <StopsDot remaining={bus.remainingStops} />
@@ -317,7 +317,7 @@ export function BusInfoList() {
                 })}
 
             {!loading && Array.from({ length: Math.max(0, MAIN_PER_PAGE - currentMain.length) }).map((_, i) => (
-              <div key={`em-${i}`} className={`flex-1 grid grid-cols-[150px_110px_1fr] border-b border-[#E2E8F0] min-h-0 ${(currentMain.length + i) % 2 === 0 ? "bg-white" : "bg-[#F8FAFC]"}`} />
+              <div key={`em-${i}`} className={`grid min-h-0 flex-1 grid-cols-[minmax(78px,1fr)_82px_minmax(120px,2fr)] border-b border-[#E2E8F0] md:grid-cols-[150px_110px_1fr] ${(currentMain.length + i) % 2 === 0 ? "bg-white" : "bg-[#F8FAFC]"}`} />
             ))}
           </div>
         </div>

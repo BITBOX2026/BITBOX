@@ -96,20 +96,20 @@ export function VoiceResult({
     return (
         <div className="w-full h-full flex flex-col font-['Noto_Sans_KR'] overflow-hidden relative" style={{ background: "#1A66CC" }}>
             {/* 1. 글로벌 헤더 영역 */}
-            <div className="h-14 flex items-center justify-between px-6 border-b border-white/10 shrink-0 z-10">
-                <div className="flex items-center gap-4">
+            <div className="z-10 flex min-h-14 shrink-0 items-center justify-between gap-2 border-b border-white/10 px-2 py-2 sm:px-4 md:px-6">
+                <div className="flex min-w-0 items-center gap-2 md:gap-4">
                     <button 
                         type="button"
                         onClick={onGoHome} 
                         className="flex flex-row items-center gap-1.5 px-3 py-1.5 bg-white/10 border border-white/20 rounded-lg text-white font-bold text-sm hover:bg-white/20 transition-all shrink-0"
                     >
                         <Home className="w-4 h-4 shrink-0" />
-                        <span className="whitespace-nowrap">처음으로</span>
+                        <span className="hidden whitespace-nowrap sm:inline">처음으로</span>
                     </button>
 
                     <div className="flex items-center gap-2">
                         <MapPin className="w-5 h-5 text-green-300 shrink-0" />
-                        <span className="text-xl font-black text-white whitespace-nowrap">{destination || "목적지"} 가는 버스</span>
+                        <span className="truncate text-base font-black text-white md:text-xl">{destination || "목적지"} 가는 버스</span>
                     </div>
                 </div>
                 
@@ -120,7 +120,7 @@ export function VoiceResult({
                         className="flex flex-row items-center gap-1.5 px-3 py-1.5 bg-blue-50/10 border border-blue-100/20 rounded-lg text-white font-bold text-sm hover:bg-blue-50/20 transition-all"
                     >
                         <Mic className="w-4 h-4 shrink-0" />
-                        <span className="whitespace-nowrap">다시 말하기</span>
+                        <span className="hidden whitespace-nowrap sm:inline">다시 말하기</span>
                     </button>
                 </div>
             </div>
@@ -148,7 +148,7 @@ export function VoiceResult({
 
             {/* 3. 하단 실시간 자막 배너 */}
             {isSpeaking && message && (
-                <div className="absolute bottom-8 left-1/2 -translate-x-1/2 z-[999] max-w-[85%] w-auto bg-gray-900/95 text-white px-6 py-4 rounded-2xl shadow-2xl border-2 border-yellow-400/50 backdrop-blur-md flex items-center gap-4 transition-all duration-300">
+                <div className="absolute bottom-4 left-1/2 z-[999] flex w-[calc(100%-2rem)] max-w-[680px] -translate-x-1/2 items-center gap-3 rounded-lg border-2 border-yellow-400/50 bg-gray-900/95 px-4 py-3 text-white shadow-2xl backdrop-blur-md transition-all duration-300 md:bottom-8 md:w-auto md:px-6 md:py-4">
                     <div className="relative flex h-3.5 w-3.5 shrink-0">
                         <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
                         <span className="relative inline-flex rounded-full h-3.5 w-3.5 bg-green-500"></span>

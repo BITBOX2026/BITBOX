@@ -58,7 +58,7 @@ class Settings(BaseSettings):
     # -------------------------------------------------------------------------
     MAX_AUDIO_SIZE_MB: int = 10       # 업로드 허용 최대 오디오 파일 크기 (MB)
     REQUEST_TIMEOUT_SECONDS: int = 30  # 파이프라인 전체 타임아웃 (초)
-    CORS_ALLOWED_ORIGINS: str = "*"    # 허용 출처 (* = 전체)
+    CORS_ALLOWED_ORIGINS: str = "http://localhost:5173,http://127.0.0.1:5173"
     RATE_LIMIT_ENABLED: bool = True
     API_AUTH_TOKEN: str | None = None   # 설정 시 /api/process 호출에 토큰 필요
     TTS_TIMEOUT_SECONDS: int = 8        # TTS 단독 타임아웃 (초)
@@ -98,6 +98,12 @@ def validate_required_settings() -> None:
         raise RuntimeError(
             f"USE_MOCK_EXTERNALS=false 일 때 다음 환경변수가 필요합니다: {', '.join(missing)}"
         )
+
+    if settings.APP_ENV == "prod":
+        if not settings.API_AUTH_TOKEN:
+            raise RuntimeError("APP_ENV=prod에서는 API_AUTH_TOKEN 설정이 필요합니다.")
+        if settings.CORS_ALLOWED_ORIGINS.strip() == "*":
+            raise RuntimeError("APP_ENV=prod에서는 CORS_ALLOWED_ORIGINS='*'를 사용할 수 없습니다.")
 
     # 좌표값이 있으면 숫자 형식인지 확인
     for name in ("DEFAULT_ORIGIN_X", "DEFAULT_ORIGIN_Y", "ORIGIN_X", "ORIGIN_Y"):
