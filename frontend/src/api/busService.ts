@@ -1,6 +1,5 @@
 import type { BusOption, BusCongetion } from "../types/bus";
-
-const EC2_SERVER_URL = import.meta.env['VITE_API_BASE_URL'] || "http://3.144.238.75:8000";
+import { apiFetch } from "./client";
 
 // ─── 기본 전광판(/api/bus/default) 전용 인터페이스 ───
 interface DefaultBackendItem {
@@ -63,9 +62,7 @@ function cleanBusNumber(name: string): string {
  * 📺 메인 화면 상시 표시 기본 버스 정보 조회 (Default 전용)
  */
 export async function getDefaultArrivals(): Promise<{ stationName: string; buses: BusOption[] }> {
-  const url = `${EC2_SERVER_URL}/api/bus/default`;
-
-  const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+  const res = await apiFetch("/api/bus/default", { signal: AbortSignal.timeout(5000) });
   if (!res.ok) throw new Error(`HTTP 오류: ${res.status}`);
 
   const data: DefaultApiResponse = await res.json();

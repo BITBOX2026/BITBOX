@@ -197,6 +197,18 @@ def _build_buses_from_route(data: dict) -> list[dict]:
     m = re.search(r"(\d+)\s*분", arrival_time)
     arrival_min = int(m.group(1)) if m else 0
 
+    route_detail = {
+        "busNumber": display_bus,
+        "totalMin": total_time_min,
+        "steps": steps,
+        "origin_x": data.get("origin_x"),
+        "origin_y": data.get("origin_y"),
+        "destination_x": data.get("destination_x"),
+        "destination_y": data.get("destination_y"),
+        "origin": data.get("origin"),
+        "route_segments": route_segments,
+    }
+
     return [{
         "id": f"route-{display_bus}-0",
         "busNumber": display_bus,
@@ -214,6 +226,7 @@ def _build_buses_from_route(data: dict) -> list[dict]:
         # useRouteSelection이 (bus as any)로 접근하는 추가 필드
         "totalMin": total_time_min,
         "steps": steps,
+        "routeDetail": route_detail,
     }]
 
 

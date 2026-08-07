@@ -65,6 +65,47 @@ def test_upload_compat_response_exposes_arrival_fields() -> None:
     assert serialized["buses"][0]["arrivalMin"] == 3
 
 
+def test_upload_compat_route_exposes_route_detail_for_frontend() -> None:
+    response = _build_upload_compat_response(
+        {
+            "status": "success",
+            "message": "146번을 타세요.",
+            "data": {
+                "intent": "route",
+                "origin": "서울역",
+                "origin_x": 126.972,
+                "origin_y": 37.556,
+                "destination": "강남역",
+                "destination_x": 127.027,
+                "destination_y": 37.498,
+                "bus_number": "146",
+                "arrival_time": "3분후",
+                "total_time_min": 35,
+                "route_segments": [
+                    {
+                        "vehicle_type": "버스",
+                        "line": "146번",
+                        "start_name": "서울역",
+                        "end_name": "강남역",
+                        "time_min": 35,
+                        "start_x": 126.972,
+                        "start_y": 37.556,
+                        "end_x": 127.027,
+                        "end_y": 37.498,
+                    }
+                ],
+            },
+        }
+    )
+
+    bus = response["buses"][0]
+    assert bus["busNumber"] == "146"
+    assert bus["arrivalMin"] == 3
+    assert bus["routeDetail"]["totalMin"] == 35
+    assert bus["routeDetail"]["origin_x"] == 126.972
+    assert bus["routeDetail"]["route_segments"][0]["line"] == "146번"
+
+
 def test_default_bus_route_omits_none_fields_for_javascript_comparison() -> None:
     route = next(route for route in bus_router.routes if route.path == "/default")
     assert route.response_model_exclude_none is True
