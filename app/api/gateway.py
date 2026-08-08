@@ -34,6 +34,16 @@ ALLOWED_CONTENT_TYPES = {
     "audio/ogg",
 }
 
+AUDIO_FILENAME_BY_CONTENT_TYPE = {
+    "audio/wav": "recording.wav",
+    "audio/x-wav": "recording.wav",
+    "audio/mpeg": "recording.mp3",
+    "audio/mp3": "recording.mp3",
+    "audio/webm": "recording.webm",
+    "audio/mp4": "recording.m4a",
+    "audio/ogg": "recording.ogg",
+}
+
 
 @router.post("/process", response_model=ProcessResponse)
 @limiter.limit("10/minute")  # IP당 분당 최대 10회 요청 허용
@@ -87,7 +97,7 @@ async def process_audio(request: Request, file: UploadFile = File(...)) -> dict:
         result = await asyncio.wait_for(
             run_pipeline(
                 audio_bytes=audio_bytes,
-                filename=file.filename or "audio.wav",
+                filename=_safe_audio_filename(content_type),
                 request_id=request_id,
             ),
             timeout=settings.REQUEST_TIMEOUT_SECONDS,
@@ -358,3 +368,8 @@ def _looks_like_supported_audio(content_type: str, audio_bytes: bytes) -> bool:
         return audio_bytes.startswith(b"OggS")
 
     return False
+
+
+def _safe_audio_filename(content_type: str) -> str:
+    """Return a server-controlled filename for the already validated MIME type."""
+    return AUDIO_FILENAME_BY_CONTENT_TYPE.get(content_type, "recording.bin")

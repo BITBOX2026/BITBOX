@@ -12,7 +12,6 @@
 
 from typing import Any
 from urllib.parse import unquote
-from xml.etree import ElementTree
 
 import httpx
 
@@ -21,11 +20,17 @@ from app.services.core.exceptions import TransportAPIError
 from app.services.core.http_client import get_http_client
 from app.services.core.http_utils import http_retry as _http_retry
 from app.services.core.settings_helper import get_setting
+from app.services.transit.xml_utils import (
+    XML_ELEMENT_TYPE,
+    XML_PARSE_ERRORS,
+    parse_untrusted_xml,
+)
 
 logger = get_logger(__name__)
 
 # 서울시 버스 API가 성공으로 반환하는 결과 코드 목록
 SUCCESS_CODES = {"0", "00", "NORMAL_CODE", "INFO-000", "SUCCESS"}
+MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 
 
 @_http_retry
@@ -115,14 +120,17 @@ def _get_first_service_key(setting_names: tuple[str, ...]) -> str:
 
 def _parse_response_payload(response: httpx.Response, stage: str) -> Any:
     """응답을 JSON 우선으로 파싱합니다. JSON 실패 시 XML을 시도합니다."""
+    if len(response.content) > MAX_RESPONSE_BYTES:
+        raise TransportAPIError(f"공공데이터 API 응답 크기 초과({stage})")
+
     try:
         return response.json()
     except ValueError:
         pass
 
     try:
-        return ElementTree.fromstring(response.text)
-    except ElementTree.ParseError as exc:
+        return parse_untrusted_xml(response.text)
+    except XML_PARSE_ERRORS as exc:
         raise TransportAPIError(f"공공데이터 API 응답 해석 오류({stage})") from exc
 
 
@@ -138,7 +146,7 @@ def _normalize_service_key(service_key: object) -> str:
 
 def extract_result_code_message(payload: Any) -> tuple[str | None, str | None]:
     """응답(JSON dict 또는 XML Element)에서 결과 코드와 메시지를 추출합니다."""
-    if isinstance(payload, ElementTree.Element):
+    if isinstance(payload, XML_ELEMENT_TYPE):
         return (
             _find_first_xml_text(payload, ["headerCd", "resultCode", "returnReasonCode"]),
             _find_first_xml_text(payload, ["headerMsg", "resultMsg", "returnAuthMsg", "errMsg"]),
@@ -175,7 +183,7 @@ def _find_nested_value(value: Any, names: list[str]) -> str | None:
     return None
 
 
-def _find_first_xml_text(root: ElementTree.Element, tag_names: list[str]) -> str | None:
+def _find_first_xml_text(root: Any, tag_names: list[str]) -> str | None:
     """XML 트리에서 주어진 태그 이름 목록 순서대로 첫 번째 텍스트 값을 찾습니다."""
     for tag_name in tag_names:
         for element in root.iter(tag_name):

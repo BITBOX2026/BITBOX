@@ -4,17 +4,25 @@ import argparse
 import json
 import statistics
 import time
-import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from urllib.parse import urlsplit
+
+import httpx
+
+
+def validate_url(url: str) -> str:
+    parsed = urlsplit(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError("url must use http or https and include a host")
+    return url
 
 
 def request_once(url: str, timeout: float) -> tuple[bool, float]:
     started_at = time.perf_counter()
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as response:
-            response.read()
-            success = 200 <= response.status < 300
-    except Exception:
+        response = httpx.get(url, timeout=timeout, follow_redirects=False)
+        success = 200 <= response.status_code < 300
+    except httpx.HTTPError:
         success = False
     return success, (time.perf_counter() - started_at) * 1000
 
@@ -39,6 +47,10 @@ def main() -> int:
 
     if args.requests < 1 or args.concurrency < 1:
         parser.error("requests and concurrency must be positive")
+    try:
+        args.url = validate_url(args.url)
+    except ValueError as exc:
+        parser.error(str(exc))
 
     results: list[tuple[bool, float]] = []
     started_at = time.perf_counter()

@@ -21,8 +21,9 @@ jobs:
 
       - name: Test backend
         run: |
-          python -m pip install -r requirements-backend.txt pytest pip-audit
+          python -m pip install -r requirements-backend.txt pytest pip-audit bandit
           python -m pip_audit -r requirements-backend.txt
+          python -m bandit -r app scripts -x tests
           python -m pytest -q
           APP_ENV=test USE_MOCK_EXTERNALS=true RATE_LIMIT_ENABLED=false \
             python -m uvicorn app.main:app --host 127.0.0.1 --port 8090 >/tmp/bitbox-ci.log 2>&1 &

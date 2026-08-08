@@ -8,12 +8,13 @@ API 버전이나 응답 형식에 따라 필드명이 다를 수 있어 여러 �
 import re
 from collections.abc import Callable
 from typing import Any
-from xml.etree import ElementTree
+
+from app.services.transit.xml_utils import XML_ELEMENT_TYPE
 
 
 def extract_items(payload: Any) -> list[dict[str, str]]:
     """서울시 API 응답에서 itemList / StationList 항목을 dict 목록으로 정규화합니다."""
-    if isinstance(payload, ElementTree.Element):
+    if isinstance(payload, XML_ELEMENT_TYPE):
         return _extract_xml_items(payload)
 
     if isinstance(payload, dict):
@@ -22,7 +23,7 @@ def extract_items(payload: Any) -> list[dict[str, str]]:
     return []
 
 
-def _extract_xml_items(root: ElementTree.Element) -> list[dict[str, str]]:
+def _extract_xml_items(root: Any) -> list[dict[str, str]]:
     items: list[dict[str, str]] = []
     for item in list(root.iter("itemList")) + list(root.iter("StationList")):
         values: dict[str, str] = {}

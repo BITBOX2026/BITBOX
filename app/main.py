@@ -87,7 +87,7 @@ app.add_middleware(
     allow_origins=_cors_origins,
     allow_credentials=False,
     allow_methods=["POST", "GET"],
-    allow_headers=["*"],
+    allow_headers=["Authorization", "Content-Type", "X-BITBOX-Token", "X-Request-ID"],
 )
 
 # API 라우터 등록 — /api/process 엔드포인트

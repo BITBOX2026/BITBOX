@@ -1,5 +1,9 @@
 limit_req_zone $binary_remote_addr zone=bitbox_api_per_ip:10m rate=30r/m;
 limit_conn_zone $binary_remote_addr zone=bitbox_connections_per_ip:10m;
+map $http_sec_fetch_site $bitbox_cross_site {
+    default 0;
+    cross-site 1;
+}
 log_format bitbox_json escape=json '{"time":"$time_iso8601","request_id":"$request_id",'
     '"remote_addr":"$remote_addr","method":"$request_method","uri":"$uri",'
     '"status":$status,"bytes":$body_bytes_sent,"request_time":$request_time,'
@@ -8,6 +12,7 @@ log_format bitbox_json escape=json '{"time":"$time_iso8601","request_id":"$reque
 server {
     listen 80;
     server_name ${BITBOX_SERVER_NAME};
+    if ($host != ${BITBOX_SERVER_NAME}) { return 444; }
     return 301 https://$host$request_uri;
 }
 
@@ -15,6 +20,7 @@ server {
     listen 443 ssl;
     listen 8000 ssl;
     server_name ${BITBOX_SERVER_NAME};
+    if ($host != ${BITBOX_SERVER_NAME}) { return 444; }
 
     ssl_certificate ${BITBOX_TLS_CERT_PATH};
     ssl_certificate_key ${BITBOX_TLS_KEY_PATH};
@@ -40,6 +46,7 @@ server {
     index index.html;
 
     location /api/ {
+        if ($bitbox_cross_site) { return 403; }
         limit_req zone=bitbox_api_per_ip burst=15 nodelay;
         limit_req_status 429;
         limit_conn bitbox_connections_per_ip 5;

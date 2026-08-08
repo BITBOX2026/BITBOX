@@ -1,0 +1,47 @@
+"""Regression tests for security-sensitive input and deployment boundaries."""
+
+from pathlib import Path
+
+import httpx
+import pytest
+
+from app.api.gateway import _safe_audio_filename
+from app.services.core.exceptions import TransportAPIError
+from app.services.transit.seoul_bus_client import _parse_response_payload
+from scripts.load_smoke import validate_url
+
+
+def test_client_filename_is_never_forwarded_to_stt() -> None:
+    assert _safe_audio_filename("audio/webm") == "recording.webm"
+    assert _safe_audio_filename("audio/mpeg") == "recording.mp3"
+    assert _safe_audio_filename("../../secret.txt") == "recording.bin"
+
+
+def test_external_xml_rejects_entity_expansion() -> None:
+    response = httpx.Response(
+        200,
+        text='<!DOCTYPE x [<!ENTITY attack "expanded">]><root>&attack;</root>',
+    )
+
+    with pytest.raises(TransportAPIError):
+        _parse_response_payload(response, "security-test")
+
+
+def test_external_payload_size_is_bounded() -> None:
+    response = httpx.Response(200, content=b"x" * (2 * 1024 * 1024 + 1))
+
+    with pytest.raises(TransportAPIError, match="크기 초과"):
+        _parse_response_payload(response, "security-test")
+
+
+@pytest.mark.parametrize("url", ["file:///etc/passwd", "ftp://example.com/a", "javascript:alert(1)"])
+def test_load_smoke_rejects_non_http_urls(url: str) -> None:
+    with pytest.raises(ValueError):
+        validate_url(url)
+
+
+def test_nginx_blocks_cross_site_api_and_unknown_hosts() -> None:
+    config = Path("deploy/nginx-bitbox.conf.example").read_text(encoding="utf-8")
+    assert "map $http_sec_fetch_site $bitbox_cross_site" in config
+    assert "if ($bitbox_cross_site) { return 403; }" in config
+    assert "if ($host != ${BITBOX_SERVER_NAME}) { return 444; }" in config
