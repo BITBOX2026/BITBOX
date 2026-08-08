@@ -3,11 +3,15 @@
 import argparse
 import json
 import statistics
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlsplit
 
 import httpx
+
+
+_thread_local = threading.local()
 
 
 def validate_url(url: str) -> str:
@@ -17,10 +21,18 @@ def validate_url(url: str) -> str:
     return url
 
 
+def get_http_client() -> httpx.Client:
+    client = getattr(_thread_local, "http_client", None)
+    if client is None:
+        client = httpx.Client(follow_redirects=False)
+        _thread_local.http_client = client
+    return client
+
+
 def request_once(url: str, timeout: float) -> tuple[bool, float]:
     started_at = time.perf_counter()
     try:
-        response = httpx.get(url, timeout=timeout, follow_redirects=False)
+        response = get_http_client().get(url, timeout=timeout)
         success = 200 <= response.status_code < 300
     except httpx.HTTPError:
         success = False
@@ -52,9 +64,15 @@ def main() -> int:
     except ValueError as exc:
         parser.error(str(exc))
 
-    results: list[tuple[bool, float]] = []
-    started_at = time.perf_counter()
     with ThreadPoolExecutor(max_workers=args.concurrency) as executor:
+        warmup_futures = [
+            executor.submit(request_once, args.url, args.timeout)
+            for _ in range(args.concurrency)
+        ]
+        warmup_errors = sum(not future.result()[0] for future in as_completed(warmup_futures))
+
+        results: list[tuple[bool, float]] = []
+        started_at = time.perf_counter()
         futures = [executor.submit(request_once, args.url, args.timeout) for _ in range(args.requests)]
         for future in as_completed(futures):
             results.append(future.result())
@@ -66,6 +84,7 @@ def main() -> int:
         "url": args.url,
         "requests": len(results),
         "concurrency": args.concurrency,
+        "warmup_errors": warmup_errors,
         "errors": errors,
         "error_rate": round(error_rate, 4),
         "mean_ms": round(statistics.fmean(durations), 2),
@@ -74,7 +93,7 @@ def main() -> int:
     }
     print(json.dumps(report, ensure_ascii=False))
 
-    return 1 if error_rate > args.max_error_rate or report["p95_ms"] > args.max_p95_ms else 0
+    return 1 if warmup_errors or error_rate > args.max_error_rate or report["p95_ms"] > args.max_p95_ms else 0
 
 
 if __name__ == "__main__":
