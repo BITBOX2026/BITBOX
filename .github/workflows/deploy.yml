@@ -141,6 +141,7 @@ jobs:
           KAKAO_REST_API_KEY: ${{ secrets.KAKAO_REST_API_KEY }}
           ODSAY_API_KEY: ${{ secrets.ODSAY_API_KEY }}
           PUBLIC_DATA_SERVICE_KEY: ${{ secrets.PUBLIC_DATA_SERVICE_KEY }}
+          RELEASE_SHA: ${{ github.sha }}
           BITBOX_SERVER_NAME: ${{ secrets.BITBOX_SERVER_NAME }}
           BITBOX_TLS_CERT_PATH: ${{ secrets.BITBOX_TLS_CERT_PATH }}
           BITBOX_TLS_KEY_PATH: ${{ secrets.BITBOX_TLS_KEY_PATH }}
