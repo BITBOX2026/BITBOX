@@ -146,18 +146,16 @@ async def _enrich_arrival_time(
         raise
     except asyncio.TimeoutError:
         logger.warning(
-            "[%s] 실시간 도착 보강 시간 초과: bus=%s stop=%s",
+            "[%s] 실시간 도착 보강 시간 초과: bus=%s",
             request_id,
             bus_number,
-            first_bus.start_name,
         )
     except Exception as exc:
         logger.warning(
-            "[%s] 실시간 도착 보강 실패: bus=%s stop=%s error=%s",
+            "[%s] 실시간 도착 보강 실패: bus=%s error_type=%s",
             request_id,
             bus_number,
-            first_bus.start_name,
-            exc,
+            type(exc).__name__,
         )
 
     return result
@@ -208,7 +206,7 @@ async def _search_route_with_odsay(parsed: ParsedIntent) -> TransportResult:
     # 1차 캐시 확인 (lock 없이)
     cached = _get_cached_route(cache_key)
     if cached is not None:
-        logger.debug("경로 캐시 히트: %s → %s", origin_name, parsed.destination_text)
+        logger.debug("경로 캐시 히트")
         return cached
 
     # 캐시 미스 — per-key lock으로 동일 경로 요청 직렬화 (캐시 스탬피드 방지)

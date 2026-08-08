@@ -147,7 +147,7 @@ async def parse_transit_intent(transcript: str, request_id: str = "") -> ParsedI
     if not transcript or not transcript.strip():
         return ParsedIntent()
 
-    logger.info("[%s] LLM 분석 시작: transcript=%s", request_id, transcript[:50])
+    logger.info("[%s] LLM 분석 시작: transcript_length=%d", request_id, len(transcript))
 
     deterministic = _mock_parse_transit_intent(transcript)
     if get_bool_setting("INTENT_FAST_PATH_ENABLED", True) and _is_unambiguous(deterministic):

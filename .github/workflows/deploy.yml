@@ -21,8 +21,19 @@ jobs:
 
       - name: Test backend
         run: |
-          python -m pip install -r requirements-backend.txt pytest
+          python -m pip install -r requirements-backend.txt pytest pip-audit
+          python -m pip_audit -r requirements-backend.txt
           python -m pytest -q
+          APP_ENV=test USE_MOCK_EXTERNALS=true RATE_LIMIT_ENABLED=false \
+            python -m uvicorn app.main:app --host 127.0.0.1 --port 8090 >/tmp/bitbox-ci.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid"' EXIT
+          for i in $(seq 1 20); do
+            curl --fail --silent http://127.0.0.1:8090/ready && break
+            sleep 0.5
+          done
+          python scripts/load_smoke.py --url http://127.0.0.1:8090/health \
+            --requests 100 --concurrency 20 --max-p95-ms 1000
 
       - uses: actions/setup-node@v6
         with:
@@ -38,6 +49,7 @@ jobs:
           KAKAO_REST_API_KEY: ${{ secrets.KAKAO_REST_API_KEY }}
           ODSAY_API_KEY: ${{ secrets.ODSAY_API_KEY }}
           PUBLIC_DATA_SERVICE_KEY: ${{ secrets.PUBLIC_DATA_SERVICE_KEY }}
+          RELEASE_SHA: ${{ github.sha }}
           BITBOX_SERVER_NAME: ${{ secrets.BITBOX_SERVER_NAME }}
           BITBOX_TLS_CERT_PATH: ${{ secrets.BITBOX_TLS_CERT_PATH }}
           BITBOX_TLS_KEY_PATH: ${{ secrets.BITBOX_TLS_KEY_PATH }}
@@ -67,6 +79,7 @@ jobs:
           VITE_KAKAO_MAP_APPKEY: ${{ secrets.KAKAO_MAP_APPKEY }}
         run: |
           npm ci
+          npm audit --audit-level=high
           npm run test
           npm run typecheck
           npm run build
@@ -135,7 +148,7 @@ jobs:
           host: ${{ secrets.EC2_HOST }}
           username: ubuntu
           key: ${{ secrets.EC2_SSH_KEY }}
-          envs: API_AUTH_TOKEN,OPENAI_API_KEY,KAKAO_REST_API_KEY,ODSAY_API_KEY,PUBLIC_DATA_SERVICE_KEY,BITBOX_SERVER_NAME,BITBOX_TLS_CERT_PATH,BITBOX_TLS_KEY_PATH
+          envs: API_AUTH_TOKEN,OPENAI_API_KEY,KAKAO_REST_API_KEY,ODSAY_API_KEY,PUBLIC_DATA_SERVICE_KEY,RELEASE_SHA,BITBOX_SERVER_NAME,BITBOX_TLS_CERT_PATH,BITBOX_TLS_KEY_PATH
           script: |
             set -euo pipefail
             cd /home/ubuntu/BITBOX
@@ -144,15 +157,19 @@ jobs:
             [[ -n "$KAKAO_REST_API_KEY" && "$KAKAO_REST_API_KEY" != *[[:space:]]* ]]
             [[ -n "$ODSAY_API_KEY" && "$ODSAY_API_KEY" != *[[:space:]]* ]]
             [[ -n "$PUBLIC_DATA_SERVICE_KEY" && "$PUBLIC_DATA_SERVICE_KEY" != *[[:space:]]* ]]
+            [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
             [[ "$BITBOX_SERVER_NAME" =~ ^[A-Za-z0-9.-]+$ ]]
             [[ "$BITBOX_TLS_CERT_PATH" =~ ^/[A-Za-z0-9_./-]+$ ]]
             [[ "$BITBOX_TLS_KEY_PATH" =~ ^/[A-Za-z0-9_./-]+$ ]]
             sudo test -f "$BITBOX_TLS_CERT_PATH"
             sudo test -f "$BITBOX_TLS_KEY_PATH"
 
-            sudo install -d -o root -g root -m 755 /var/www/bitbox
-            sudo rsync --archive --delete frontend/dist/ /var/www/bitbox/
-            sudo chmod -R a+rX /var/www/bitbox
+            release_dir="/var/www/bitbox-releases/$RELEASE_SHA"
+            sudo install -d -o root -g root -m 755 "$release_dir"
+            sudo rsync --archive --delete frontend/dist/ "$release_dir/"
+            sudo chmod -R a+rX "$release_dir"
+            sudo ln -sfn "$release_dir" /var/www/bitbox-current.next
+            sudo mv -Tf /var/www/bitbox-current.next /var/www/bitbox-current
 
             sudo install -d -m 700 /etc/bitbox
             printf 'APP_ENV=prod\nUSE_MOCK_EXTERNALS=false\nCORS_ALLOWED_ORIGINS=\nAPI_AUTH_TOKEN=%s\nOPENAI_API_KEY=%s\nKAKAO_REST_API_KEY=%s\nODSAY_API_KEY=%s\nPUBLIC_DATA_SERVICE_KEY=%s\nDEFAULT_ORIGIN_NAME=올림픽공원역\nDEFAULT_BUS_STOP_NAME=올림픽공원역\nDEFAULT_BUS_STATION_ID=24245\n' \
@@ -164,6 +181,8 @@ jobs:
               '$BITBOX_API_AUTH_TOKEN $BITBOX_SERVER_NAME $BITBOX_TLS_CERT_PATH $BITBOX_TLS_KEY_PATH' \
               < deploy/nginx-bitbox.conf.example > /tmp/bitbox-nginx.conf
             sudo cp /tmp/bitbox-nginx.conf /etc/nginx/sites-available/bitbox
+            sudo cp deploy/logrotate-bitbox /etc/logrotate.d/bitbox
+            sudo chmod 644 /etc/logrotate.d/bitbox
             sudo ln -sfn /etc/nginx/sites-available/bitbox /etc/nginx/sites-enabled/bitbox
             sudo rm -f /etc/nginx/sites-enabled/default
             sudo nginx -t
@@ -174,9 +193,13 @@ jobs:
             .venv/bin/python -c 'from app.core.config import validate_required_settings; validate_required_settings()'
 
             sudo cp deploy/bitbox-backend.service /etc/systemd/system/bitbox-backend.service
+            sudo cp deploy/bitbox-healthcheck.service /etc/systemd/system/bitbox-healthcheck.service
+            sudo cp deploy/bitbox-healthcheck.timer /etc/systemd/system/bitbox-healthcheck.timer
+            sudo install -o root -g root -m 755 deploy/bitbox-healthcheck.sh /usr/local/sbin/bitbox-healthcheck
             sudo systemctl daemon-reload
-            sudo systemctl enable bitbox-backend.service nginx
+            sudo systemctl enable bitbox-backend.service bitbox-healthcheck.timer nginx
             sudo systemctl restart bitbox-backend.service
+            sudo systemctl restart bitbox-healthcheck.timer
 
             legacy_uvicorn_stopped=0
             for pid in $(sudo fuser 8000/tcp 2>/dev/null || true); do
@@ -192,18 +215,28 @@ jobs:
             if [[ "$legacy_uvicorn_stopped" == 1 ]]; then
               sleep 2
             fi
-            sudo systemctl restart nginx
+            sudo systemctl reload-or-restart nginx
 
+            deployment_healthy=0
             for i in $(seq 1 20); do
               if curl --fail --silent --show-error \
                 --resolve "$BITBOX_SERVER_NAME:443:127.0.0.1" \
-                "https://$BITBOX_SERVER_NAME/health" | grep -q '"status":"ok"' \
+                "https://$BITBOX_SERVER_NAME/ready" | grep -q '"status":"ready"' \
                 && curl --fail --silent --show-error \
                   --resolve "$BITBOX_SERVER_NAME:443:127.0.0.1" \
                   "https://$BITBOX_SERVER_NAME/" | grep -q 'id="root"'; then
-                exit 0
+                deployment_healthy=1
+                break
               fi
               sleep 1
             done
+            if [[ "$deployment_healthy" == 1 ]]; then
+              while IFS= read -r stale_release; do
+                [[ -n "$stale_release" && "$stale_release" != "$release_dir" ]] || continue
+                sudo rm -rf -- "$stale_release"
+              done < <(sudo find /var/www/bitbox-releases -mindepth 1 -maxdepth 1 -type d -mtime +14 -print)
+              sudo systemctl is-active --quiet bitbox-backend.service bitbox-healthcheck.timer nginx certbot.timer
+              exit 0
+            fi
             sudo systemctl status bitbox-backend.service nginx --no-pager
             exit 1

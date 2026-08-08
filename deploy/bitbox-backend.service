@@ -9,10 +9,27 @@ User=ubuntu
 Group=ubuntu
 WorkingDirectory=/home/ubuntu/BITBOX
 Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
 EnvironmentFile=-/etc/bitbox/bitbox.env
-ExecStart=/home/ubuntu/BITBOX/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8001
+ExecStart=/home/ubuntu/BITBOX/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8001 --proxy-headers --forwarded-allow-ips 127.0.0.1 --limit-concurrency 200 --backlog 512 --timeout-keep-alive 5
 Restart=always
 RestartSec=3
+TimeoutStopSec=30
+KillSignal=SIGINT
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=full
+ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LimitNOFILE=65536
+TasksMax=256
 StandardOutput=journal
 StandardError=journal
 

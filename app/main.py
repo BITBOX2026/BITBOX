@@ -12,11 +12,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
-from app.api.schemas import HealthResponse
+from app.api.schemas import HealthResponse, ReadinessResponse
 from app.api.gateway import router as gateway_router
 from app.core.config import settings, validate_required_settings
 from app.core.logger import get_logger
 from app.core.rate_limiter import limiter
+from app.core.request_context import request_context_middleware
 from app.routers.bus import router as bus_router
 from app.routers.place import router as place_router
 from app.routers.station import router as station_router
@@ -74,6 +75,7 @@ app = FastAPI(
     version="1.1.0",
     lifespan=lifespan,
 )
+app.middleware("http")(request_context_middleware)
 
 # IP 기반 Rate Limiting (slowapi) — 분당 최대 요청 수를 gateway에서 제한
 app.state.limiter = limiter
@@ -125,3 +127,9 @@ def health_check() -> HealthResponse:
         }
 
     return HealthResponse(**body)
+
+
+@app.get("/ready", response_model=ReadinessResponse)
+def readiness_check() -> ReadinessResponse:
+    """Report readiness after startup validation has completed."""
+    return ReadinessResponse(status="ready", version=app.version)

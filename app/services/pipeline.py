@@ -80,7 +80,7 @@ async def run_text_route(
     try:
         result = await _run_parsed_pipeline(parsed, destination, request_id)
     except (CoordinateResolveError, TransportAPIError) as exc:
-        logger.warning("[%s] text route lookup failed: %s", request_id, exc)
+        logger.warning("[%s] text route lookup failed: error_type=%s", request_id, type(exc).__name__)
         result = _error_response(
             message=exc.user_message,
             transcript=destination,
@@ -141,7 +141,7 @@ async def _run_pipeline_core(
 
     except CoordinateResolveError as exc:
         # 장소명 → 좌표 변환 실패 — 사용자가 더 정확한 이름을 말해야 함
-        logger.warning("장소 좌표 변환 오류: %s", exc)
+        logger.warning("[%s] 장소 좌표 변환 오류: error_type=%s", request_id, type(exc).__name__)
         return _error_response(
             message=exc.user_message,
             transcript=transcript,
@@ -152,7 +152,7 @@ async def _run_pipeline_core(
 
     except (STTProcessingError, LLMParsingError, TransportAPIError) as exc:
         # 외부 API 오류 — 기술적 메시지 대신 user_message 반환
-        logger.exception("외부 서비스 오류: %s", exc)
+        logger.exception("[%s] 외부 서비스 오류: error_type=%s", request_id, type(exc).__name__)
         return _error_response(
             message=exc.user_message,
             transcript=transcript,
@@ -163,7 +163,7 @@ async def _run_pipeline_core(
 
     except Exception as exc:
         # 예상치 못한 시스템 오류 — 상세 메시지를 로그에만 남기고 범용 안내 반환
-        logger.exception("예상치 못한 오류: %s", exc)
+        logger.exception("[%s] 예상치 못한 오류: error_type=%s", request_id, type(exc).__name__)
         return _error_response(
             message="요청을 처리하지 못했습니다. 다시 말씀해 주세요.",
             transcript=transcript,

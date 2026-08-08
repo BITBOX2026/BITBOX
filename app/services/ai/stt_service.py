@@ -31,7 +31,7 @@ async def transcribe_audio(
     if not audio_bytes:
         raise STTProcessingError("음성 파일이 비어 있습니다.")
 
-    logger.info("[%s] STT 변환 시작: filename=%s", request_id, filename)
+    logger.info("[%s] STT 변환 시작: audio_bytes=%d", request_id, len(audio_bytes))
 
     if is_mock_mode():
         return "서울역에서 강남역 가는 버스 알려줘"

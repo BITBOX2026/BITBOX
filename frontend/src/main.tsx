@@ -1,6 +1,14 @@
 
-  import { createRoot } from "react-dom/client";
-  import App from "./app/App";
-  import "./styles/index.css";
+import { createRoot } from "react-dom/client";
+import App from "./app/App";
+import { AppErrorBoundary } from "./app/components/AppErrorBoundary";
+import "./styles/index.css";
 
-  createRoot(document.getElementById("root")!).render(<App />);
+const root = document.getElementById("root");
+if (!root) throw new Error("Application root element is missing.");
+
+createRoot(root).render(
+  <AppErrorBoundary>
+    <App />
+  </AppErrorBoundary>,
+);

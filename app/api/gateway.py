@@ -9,7 +9,6 @@ API Gateway — 음성 파일 수신 및 파이프라인 실행
 
 import asyncio
 import re
-import uuid
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 
@@ -18,6 +17,7 @@ from app.core.auth import verify_api_token
 from app.core.config import settings
 from app.core.logger import get_logger
 from app.core.rate_limiter import limiter
+from app.core.request_context import request_id_for
 from app.services.pipeline import build_timeout_error_response, run_pipeline, run_text_route
 
 router = APIRouter()
@@ -76,11 +76,10 @@ async def process_audio(request: Request, file: UploadFile = File(...)) -> dict:
             detail="오디오 파일 형식을 확인하지 못했습니다.",
         )
 
-    # 요청별 고유 ID 생성 — 로그 추적에 사용
-    request_id = uuid.uuid4().hex[:8]
+    request_id = request_id_for(request)[:12]
     logger.info(
-        "[%s] 요청 시작: file=%s size=%d bytes",
-        request_id, file.filename, len(audio_bytes),
+        "[%s] 음성 요청 시작: content_type=%s size=%d bytes",
+        request_id, content_type, len(audio_bytes),
     )
 
     try:
@@ -117,7 +116,7 @@ async def upload_audio(request: Request, file: UploadFile = File(...)) -> dict:
 async def process_text_route(request: Request, body: TextRouteRequest) -> dict:
     """Return the same frontend contract as voice upload for a typed destination."""
     verify_api_token(request)
-    request_id = uuid.uuid4().hex[:8]
+    request_id = request_id_for(request)[:12]
 
     try:
         result = await asyncio.wait_for(

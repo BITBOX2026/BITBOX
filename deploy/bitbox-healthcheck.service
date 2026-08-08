@@ -1,0 +1,7 @@
+[Unit]
+Description=BITBOX backend readiness check
+After=network-online.target bitbox-backend.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/bitbox-healthcheck

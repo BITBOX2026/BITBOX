@@ -91,3 +91,8 @@ class HealthResponse(BaseModel):
     version: str
     capabilities: list[str]
     api_keys_configured: dict[str, bool] | None = None
+
+
+class ReadinessResponse(BaseModel):
+    status: Literal["ready"]
+    version: str
