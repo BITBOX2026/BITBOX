@@ -51,6 +51,7 @@ jobs:
           KAKAO_REST_API_KEY: ${{ secrets.KAKAO_REST_API_KEY }}
           ODSAY_API_KEY: ${{ secrets.ODSAY_API_KEY }}
           PUBLIC_DATA_SERVICE_KEY: ${{ secrets.PUBLIC_DATA_SERVICE_KEY }}
+          BITBOX_ALERT_WEBHOOK_URL: ${{ secrets.BITBOX_ALERT_WEBHOOK_URL }}
           RELEASE_SHA: ${{ github.sha }}
           BITBOX_SERVER_NAME: ${{ secrets.BITBOX_SERVER_NAME }}
           BITBOX_TLS_CERT_PATH: ${{ secrets.BITBOX_TLS_CERT_PATH }}
@@ -151,7 +152,7 @@ jobs:
           host: ${{ secrets.EC2_HOST }}
           username: ubuntu
           key: ${{ secrets.EC2_SSH_KEY }}
-          envs: API_AUTH_TOKEN,OPENAI_API_KEY,KAKAO_REST_API_KEY,ODSAY_API_KEY,PUBLIC_DATA_SERVICE_KEY,RELEASE_SHA,BITBOX_SERVER_NAME,BITBOX_TLS_CERT_PATH,BITBOX_TLS_KEY_PATH
+          envs: API_AUTH_TOKEN,OPENAI_API_KEY,KAKAO_REST_API_KEY,ODSAY_API_KEY,PUBLIC_DATA_SERVICE_KEY,BITBOX_ALERT_WEBHOOK_URL,RELEASE_SHA,BITBOX_SERVER_NAME,BITBOX_TLS_CERT_PATH,BITBOX_TLS_KEY_PATH
           script: |
             set -euo pipefail
             cd /home/ubuntu/BITBOX
@@ -179,6 +180,14 @@ jobs:
               "$API_AUTH_TOKEN" "$OPENAI_API_KEY" "$KAKAO_REST_API_KEY" "$ODSAY_API_KEY" "$PUBLIC_DATA_SERVICE_KEY" \
               | sudo tee /etc/bitbox/bitbox.env >/dev/null
             sudo chmod 600 /etc/bitbox/bitbox.env
+
+            if [[ -n "${BITBOX_ALERT_WEBHOOK_URL:-}" ]]; then
+              [[ "$BITBOX_ALERT_WEBHOOK_URL" == https://* ]]
+              [[ "$BITBOX_ALERT_WEBHOOK_URL" != *$'\n'* ]]
+              printf 'BITBOX_ALERT_WEBHOOK_URL=%s\n' "$BITBOX_ALERT_WEBHOOK_URL" \
+                | sudo tee /etc/bitbox/monitoring.env >/dev/null
+              sudo chmod 600 /etc/bitbox/monitoring.env
+            fi
 
             BITBOX_API_AUTH_TOKEN="$API_AUTH_TOKEN" envsubst \
               '$BITBOX_API_AUTH_TOKEN $BITBOX_SERVER_NAME $BITBOX_TLS_CERT_PATH $BITBOX_TLS_KEY_PATH' \
@@ -243,3 +252,8 @@ jobs:
             fi
             sudo systemctl status bitbox-backend.service nginx --no-pager
             exit 1
+
+      - name: Verify public production boundary
+        env:
+          BITBOX_SERVER_NAME: ${{ secrets.BITBOX_SERVER_NAME }}
+        run: python scripts/production_smoke.py --url "https://$BITBOX_SERVER_NAME"

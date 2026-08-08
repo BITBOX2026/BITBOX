@@ -25,10 +25,11 @@ consecutive failures restart the backend and write an event to the system log.
 This is self-recovery, not external uptime monitoring; an independent monitor
 must still alert when the whole instance or network is unavailable.
 
-For a Slack-compatible alert webhook, create `/etc/bitbox/monitoring.env` with
-`BITBOX_ALERT_WEBHOOK_URL=<secret URL>` and mode `600`. The local healthcheck
-sends an alert after three failures before restarting the backend. Keep this
-file outside Git and rotate the webhook if it is exposed.
+For a Slack-compatible alert webhook, add the HTTPS URL as the repository
+Actions secret `BITBOX_ALERT_WEBHOOK_URL`. The deployment writes it to
+`/etc/bitbox/monitoring.env` with mode `600`. The local healthcheck sends an
+alert after three failures before restarting the backend. Keep this value out
+of Git and rotate the webhook if it is exposed.
 
 Local runtime counters, paid-request usage and external circuit states are
 available only from EC2 with `curl http://127.0.0.1:8001/internal/status`.
@@ -54,6 +55,11 @@ Only `merge-frontend-backend` triggers deployment. CI must pass backend tests,
 frontend tests, type checking, build, E2E, and a concurrent health smoke test.
 Frontend assets are written to a commit-specific release directory and switched
 through `/var/www/bitbox-current` atomically.
+
+After activation, CI also checks the public HTTPS path, `/health`, `/ready`,
+required security headers, external blocking of `/internal/status`, and at
+least 14 days of TLS certificate validity. A failed public-boundary check fails
+the deployment run even when the EC2-local check passed.
 
 Direct backend dependencies and frontend packages are pinned to tested versions.
 Dependabot proposes reviewed upgrades; do not loosen production version pins

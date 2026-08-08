@@ -22,8 +22,9 @@ information or real users. They cannot be truthfully completed by a code change.
   Redis-backed rate limits/cache, or formally accept single-instance availability.
 - Store and rotate provider keys with AWS Secrets Manager or Parameter Store and
   use a least-privilege instance/deployment role.
-- Configure `/etc/bitbox/monitoring.env` with the real alert webhook and add an
-  external uptime check for `/ready`, certificate expiry, 5xx rate and latency.
+- Add the real alert webhook as the GitHub Actions secret
+  `BITBOX_ALERT_WEBHOOK_URL`; deployment installs it on EC2 automatically. Add
+  an independent uptime check for `/ready`, 5xx rate and latency.
 - Replace generic in-app privacy text with the operator's legal name, contact,
   provider retention terms and counsel-reviewed privacy policy.
 - Run field tests with wheelchair users, older adults and screen-reader users;
