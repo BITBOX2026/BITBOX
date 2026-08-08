@@ -1,5 +1,5 @@
-import { BusFront, Clock3, FileText, Footprints, Map as MapIcon, MapPin } from "lucide-react";
-import { CustomOverlayMap, Map, MapMarker, Polyline } from "react-kakao-maps-sdk";
+import { AlertTriangle, BusFront, Clock3, FileText, Footprints, LoaderCircle, Map as MapIcon, MapPin } from "lucide-react";
+import { CustomOverlayMap, Map, MapMarker, Polyline, useKakaoLoader } from "react-kakao-maps-sdk";
 import type { RouteDetail, RouteSegment } from "../../../types/bus";
 
 interface RouteDetailOverlayProps {
@@ -31,6 +31,10 @@ function formatDuration(minutes: number): string {
 }
 
 export function RouteDetailOverlay({ route, destination, viewMode, onToggleView }: RouteDetailOverlayProps) {
+  const [mapLoading, mapError] = useKakaoLoader({
+    appkey: import.meta.env.VITE_KAKAO_MAP_APPKEY || "",
+    libraries: ["services", "clusterer"],
+  });
   const segments = route.route_segments ?? [];
   const mapLines: MapLine[] = [];
   const mapMarkers: Array<{ lat: number; lng: number; name: string }> = [];
@@ -87,19 +91,41 @@ export function RouteDetailOverlay({ route, destination, viewMode, onToggleView 
           mapMarkers.length > 0 ? (
             <div className="fade-enter relative h-full min-h-[260px] overflow-hidden rounded-md border border-slate-300 bg-white">
               <span className="absolute left-2 top-2 z-10 rounded bg-white/95 px-2 py-1 text-[11px] font-bold text-slate-600 shadow">정류장 기준 예상 경로</span>
-              <Map center={mapMarkers[0]} style={{ width: "100%", height: "100%", minHeight: "260px" }} level={5}>
-                {mapMarkers.map((marker, index) => <MapMarker key={`${marker.name}-${index}`} position={marker} title={marker.name} />)}
-                {mapLines.map((line, index) => <Polyline key={index} path={line.path} strokeWeight={line.isWalk ? 4 : 6} strokeColor={line.color} strokeOpacity={0.85} strokeStyle={line.isWalk ? "shortdash" : "solid"} />)}
-                {mapLines.map((line, index) => {
-                  if (!line.busNumber) return null;
-                  const [start, end] = line.path;
-                  return (
-                    <CustomOverlayMap key={`label-${index}`} position={{ lat: (start.lat + end.lat) / 2, lng: (start.lng + end.lng) / 2 }} yAnchor={1.2}>
-                      <span className="rounded-md border-2 border-white px-2 py-1 text-xs font-black text-white shadow-lg" style={{ backgroundColor: line.color }}>{line.busNumber}</span>
-                    </CustomOverlayMap>
-                  );
-                })}
-              </Map>
+              {mapError ? (
+                <div className="flex h-full min-h-[260px] flex-col overflow-y-auto bg-slate-50 px-4 pb-4 pt-11">
+                  <p className="mb-4 flex items-center gap-2 rounded bg-amber-100 px-3 py-2 text-xs font-bold text-amber-900"><AlertTriangle className="size-4 shrink-0" />지도 연결이 지연되어 정류장 순서로 표시합니다.</p>
+                  <div className="mx-auto w-full max-w-[440px]">
+                    {route.steps.map((step, index) => (
+                      <div key={`${step.type}-${index}`} className="grid grid-cols-[32px_minmax(0,1fr)] gap-3">
+                        <div className="flex flex-col items-center">
+                          <span className={`grid size-8 place-items-center rounded-full text-white ${step.type === "walk" ? "bg-slate-500" : "bg-[#145466]"}`}>{step.type === "walk" ? <Footprints className="size-4" /> : <BusFront className="size-4" />}</span>
+                          {index < route.steps.length - 1 && <span className="min-h-8 w-1 flex-1 bg-slate-300" />}
+                        </div>
+                        <div className="pb-4 text-sm">
+                          <strong>{step.type === "walk" ? step.description || "도보 이동" : `${step.busNumber || route.busNumber}번 버스`}</strong>
+                          <p className="mt-1 text-xs text-slate-600">{step.fromStop || "출발"} → {step.toStop || "도착"} · {formatDuration(step.durationMin)}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : mapLoading ? (
+                <div className="grid h-full min-h-[260px] place-items-center text-sm font-bold text-slate-500"><span className="flex items-center gap-2"><LoaderCircle className="size-5 animate-spin" />지도를 불러오는 중입니다.</span></div>
+              ) : (
+                <Map center={mapMarkers[0]} style={{ width: "100%", height: "100%", minHeight: "260px" }} level={5}>
+                  {mapMarkers.map((marker, index) => <MapMarker key={`${marker.name}-${index}`} position={marker} title={marker.name} />)}
+                  {mapLines.map((line, index) => <Polyline key={index} path={line.path} strokeWeight={line.isWalk ? 4 : 6} strokeColor={line.color} strokeOpacity={0.85} strokeStyle={line.isWalk ? "shortdash" : "solid"} />)}
+                  {mapLines.map((line, index) => {
+                    if (!line.busNumber) return null;
+                    const [start, end] = line.path;
+                    return (
+                      <CustomOverlayMap key={`label-${index}`} position={{ lat: (start.lat + end.lat) / 2, lng: (start.lng + end.lng) / 2 }} yAnchor={1.2}>
+                        <span className="rounded-md border-2 border-white px-2 py-1 text-xs font-black text-white shadow-lg" style={{ backgroundColor: line.color }}>{line.busNumber}</span>
+                      </CustomOverlayMap>
+                    );
+                  })}
+                </Map>
+              )}
             </div>
           ) : (
             <div className="grid h-full min-h-[260px] place-items-center rounded-md border border-dashed border-slate-300 bg-white px-4 text-center">

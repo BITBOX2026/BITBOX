@@ -175,7 +175,10 @@ test("submits the exact autocomplete coordinates and renders walk steps", async 
   await page.getByTitle("지도").click();
   await expect(page.getByText("정류장 기준 예상 경로")).toBeVisible();
   await expect(page.getByText("3412", { exact: true }).last()).toBeVisible();
-  await expect(page.locator('img[src*="daumcdn.net"], img[src*="kakaocdn.net"]').first()).toBeVisible({ timeout: 10_000 });
+  await expect(
+    page.locator('img[src*="daumcdn.net"], img[src*="kakaocdn.net"]').first()
+      .or(page.getByText("지도 연결이 지연되어 정류장 순서로 표시합니다.")),
+  ).toBeVisible({ timeout: 10_000 });
   await page.screenshot({ path: testInfo.outputPath("map.png"), fullPage: true });
 });
 

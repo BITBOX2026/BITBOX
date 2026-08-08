@@ -30,6 +30,9 @@ information or real users. They cannot be truthfully completed by a code change.
   record pass/fail evidence for arrival accuracy, audio, glare and touch targets.
 - Confirm an HTTPS endpoint or compensating control for the Seoul bus provider's
   HTTP-only interface, and rotate that provider key on a schedule.
+- Register `https://3-144-238-75.sslip.io` as a JavaScript SDK web domain in
+  Kakao Developers. Until registration, the UI intentionally shows the route
+  sequence fallback instead of a blank map.
 - Define and test RTO/RPO, incident ownership and restoration from a fresh EC2
   instance before advertising an availability commitment.
 
