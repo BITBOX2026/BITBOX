@@ -52,7 +52,7 @@ async function parseTransitResponse(response: Response): Promise<TransitResponse
   const payload = await response.json().catch(() => null);
   if (!response.ok) {
     const detail = payload?.detail || payload?.message;
-    throw new Error(detail || `서버 요청에 실패했습니다. (${response.status})`);
+    throw new Error(withSupportCode(detail || `서버 요청에 실패했습니다. (${response.status})`, response));
   }
   return payload as TransitResponse;
 }
@@ -97,7 +97,12 @@ export async function suggestPlaces(query: string, signal?: AbortSignal): Promis
   const response = await apiFetch(`/api/places/suggest?${params}`, { signal });
   const payload = await response.json().catch(() => null);
   if (!response.ok) {
-    throw new Error(payload?.detail || payload?.message || `장소 검색에 실패했습니다. (${response.status})`);
+    throw new Error(withSupportCode(payload?.detail || payload?.message || `장소 검색에 실패했습니다. (${response.status})`, response));
   }
   return Array.isArray(payload?.suggestions) ? payload.suggestions : [];
+}
+
+function withSupportCode(message: string, response: Response): string {
+  const requestId = response.headers.get("x-request-id")?.slice(0, 12);
+  return requestId ? `${message} (문의 코드: ${requestId})` : message;
 }

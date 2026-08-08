@@ -44,6 +44,12 @@ export function DestinationSearch({ disabled, onSubmit }: DestinationSearchProps
   const trimmedDestination = useMemo(() => destination.trim(), [destination]);
 
   useEffect(() => {
+    const clearRecent = () => setRecent([]);
+    window.addEventListener("bitbox:recent-cleared", clearRecent);
+    return () => window.removeEventListener("bitbox:recent-cleared", clearRecent);
+  }, []);
+
+  useEffect(() => {
     if (trimmedDestination.length < 2 || selectedDestination?.name === trimmedDestination) {
       setSuggestions([]);
       setIsSuggesting(false);

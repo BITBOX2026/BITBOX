@@ -4,4 +4,5 @@ After=network-online.target bitbox-backend.service
 
 [Service]
 Type=oneshot
+EnvironmentFile=-/etc/bitbox/monitoring.env
 ExecStart=/usr/local/sbin/bitbox-healthcheck

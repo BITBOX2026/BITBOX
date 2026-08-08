@@ -64,6 +64,14 @@ class Settings(BaseSettings):
     API_AUTH_TOKEN: str | None = None   # 설정 시 /api/process 호출에 토큰 필요
     TTS_TIMEOUT_SECONDS: int = 8        # TTS 단독 타임아웃 (초)
     ALLOW_KNOWN_PLACE_FALLBACK: bool | None = None
+    VOICE_MAX_CONCURRENT_REQUESTS: int = 4
+    VOICE_DAILY_REQUEST_LIMIT: int = 500
+    ROUTE_MAX_CONCURRENT_REQUESTS: int = 12
+    ROUTE_DAILY_REQUEST_LIMIT: int = 5000
+    PLACE_MAX_CONCURRENT_REQUESTS: int = 12
+    PLACE_DAILY_REQUEST_LIMIT: int = 10000
+    EXTERNAL_CIRCUIT_FAILURE_THRESHOLD: int = 5
+    EXTERNAL_CIRCUIT_RESET_SECONDS: int = 30
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -105,6 +113,16 @@ def validate_required_settings() -> None:
             raise RuntimeError("APP_ENV=prod에서는 API_AUTH_TOKEN 설정이 필요합니다.")
         if settings.CORS_ALLOWED_ORIGINS.strip() == "*":
             raise RuntimeError("APP_ENV=prod에서는 CORS_ALLOWED_ORIGINS='*'를 사용할 수 없습니다.")
+
+    positive_settings = (
+        "VOICE_MAX_CONCURRENT_REQUESTS", "VOICE_DAILY_REQUEST_LIMIT",
+        "ROUTE_MAX_CONCURRENT_REQUESTS", "ROUTE_DAILY_REQUEST_LIMIT",
+        "PLACE_MAX_CONCURRENT_REQUESTS", "PLACE_DAILY_REQUEST_LIMIT",
+        "EXTERNAL_CIRCUIT_FAILURE_THRESHOLD", "EXTERNAL_CIRCUIT_RESET_SECONDS",
+    )
+    for name in positive_settings:
+        if getattr(settings, name) < 1:
+            raise RuntimeError(f"{name}은 1 이상이어야 합니다.")
 
     # 좌표값이 있으면 숫자 형식인지 확인
     for name in ("DEFAULT_ORIGIN_X", "DEFAULT_ORIGIN_Y", "ORIGIN_X", "ORIGIN_Y"):

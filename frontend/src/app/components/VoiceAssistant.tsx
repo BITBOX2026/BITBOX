@@ -1,11 +1,15 @@
-import { AlertCircle, X } from "lucide-react";
+import { AlertCircle, ShieldCheck, X } from "lucide-react";
+import { useState } from "react";
 import { DestinationSearch } from "./DestinationSearch";
+import { PrivacyNotice, VOICE_CONSENT_KEY } from "./PrivacyNotice";
 import { VoiceLoading } from "./VoiceLoading";
 import { VoiceMicButton } from "./VoiceMicButton";
 import { VoiceRecording, useVoiceRecorder } from "./VoiceRecording";
 import { VoiceResult } from "./VoiceResult";
 
 export function VoiceAssistant() {
+  const [privacyOpen, setPrivacyOpen] = useState(false);
+  const [consentRequired, setConsentRequired] = useState(false);
   const {
     status,
     transcript,
@@ -20,21 +24,40 @@ export function VoiceAssistant() {
     reset,
   } = useVoiceRecorder();
 
+  const requestRecording = () => {
+    if (localStorage.getItem(VOICE_CONSENT_KEY) !== "accepted") {
+      setConsentRequired(true);
+      setPrivacyOpen(true);
+      return;
+    }
+    void startRecording();
+  };
+
   const toggleRecording = () => {
-    if (status === "idle") void startRecording();
+    if (status === "idle") requestRecording();
     if (status === "listening") stopRecording();
+  };
+
+  const acceptVoiceProcessing = () => {
+    localStorage.setItem(VOICE_CONSENT_KEY, "accepted");
+    setPrivacyOpen(false);
+    setConsentRequired(false);
+    void startRecording();
   };
 
   if (status === "result") {
     return (
-      <VoiceResult
-        destination={destination}
-        buses={buses}
-        message={message}
-        audio_base64={audioBase64}
-        onReset={() => void startRecording()}
-        onGoHome={reset}
-      />
+      <section className="relative h-full w-full">
+        <VoiceResult
+          destination={destination}
+          buses={buses}
+          message={message}
+          audio_base64={audioBase64}
+          onReset={requestRecording}
+          onGoHome={reset}
+        />
+        <PrivacyNotice open={privacyOpen} consentRequired={consentRequired} onAccept={acceptVoiceProcessing} onClose={() => { setPrivacyOpen(false); setConsentRequired(false); }} />
+      </section>
     );
   }
 
@@ -82,8 +105,13 @@ export function VoiceAssistant() {
           <span className="text-center text-xs font-bold text-white/65">
             {status === "idle" ? "음성으로 찾기" : status === "listening" ? "눌러서 완료" : "조회 중"}
           </span>
+          <button type="button" onClick={() => { setConsentRequired(false); setPrivacyOpen(true); }} aria-label="개인정보 처리 안내" title="개인정보 처리 안내" className="grid size-7 place-items-center rounded text-white/55 hover:bg-white/10 hover:text-white">
+            <ShieldCheck className="size-4" />
+          </button>
         </div>
       </div>
+
+      <PrivacyNotice open={privacyOpen} consentRequired={consentRequired} onAccept={acceptVoiceProcessing} onClose={() => { setPrivacyOpen(false); setConsentRequired(false); }} />
     </section>
   );
 }

@@ -8,6 +8,7 @@ from collections.abc import Awaitable, Callable
 from fastapi import Request, Response
 
 from app.core.logger import get_logger
+from app.core.runtime_metrics import record_request
 
 logger = get_logger(__name__)
 _REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
@@ -36,6 +37,7 @@ async def request_context_middleware(
         response = await call_next(request)
     except Exception:
         elapsed_ms = round((time.monotonic() - started_at) * 1000)
+        record_request(500, elapsed_ms)
         logger.exception(
             "[%s] request failed method=%s path=%s duration_ms=%d",
             request_id,
@@ -46,6 +48,7 @@ async def request_context_middleware(
         raise
 
     elapsed_ms = round((time.monotonic() - started_at) * 1000)
+    record_request(response.status_code, elapsed_ms)
     response.headers["X-Request-ID"] = request_id
     response.headers["X-Response-Time-Ms"] = str(elapsed_ms)
     if request.url.path.startswith("/api/") or request.url.path in {"/health", "/ready"}:

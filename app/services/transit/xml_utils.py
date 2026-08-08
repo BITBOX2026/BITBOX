@@ -5,7 +5,6 @@ from typing import Any
 from defusedxml import ElementTree
 from defusedxml.common import DefusedXmlException
 
-
 XML_ELEMENT_TYPE = type(ElementTree.fromstring("<root />"))
 XML_PARSE_ERRORS = (ElementTree.ParseError, DefusedXmlException)
 

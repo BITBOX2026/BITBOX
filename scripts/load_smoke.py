@@ -10,7 +10,6 @@ from urllib.parse import urlsplit
 
 import httpx
 
-
 _thread_local = threading.local()
 
 
@@ -69,11 +68,16 @@ def main() -> int:
             executor.submit(request_once, args.url, args.timeout)
             for _ in range(args.concurrency)
         ]
-        warmup_errors = sum(not future.result()[0] for future in as_completed(warmup_futures))
+        warmup_errors = sum(
+            not future.result()[0] for future in as_completed(warmup_futures)
+        )
 
         results: list[tuple[bool, float]] = []
         started_at = time.perf_counter()
-        futures = [executor.submit(request_once, args.url, args.timeout) for _ in range(args.requests)]
+        futures = [
+            executor.submit(request_once, args.url, args.timeout)
+            for _ in range(args.requests)
+        ]
         for future in as_completed(futures):
             results.append(future.result())
 
@@ -93,7 +97,13 @@ def main() -> int:
     }
     print(json.dumps(report, ensure_ascii=False))
 
-    return 1 if warmup_errors or error_rate > args.max_error_rate or report["p95_ms"] > args.max_p95_ms else 0
+    return (
+        1
+        if warmup_errors
+        or error_rate > args.max_error_rate
+        or report["p95_ms"] > args.max_p95_ms
+        else 0
+    )
 
 
 if __name__ == "__main__":

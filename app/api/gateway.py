@@ -18,7 +18,12 @@ from app.core.config import settings
 from app.core.logger import get_logger
 from app.core.rate_limiter import limiter
 from app.core.request_context import request_id_for
-from app.services.pipeline import build_timeout_error_response, run_pipeline, run_text_route
+from app.core.usage_guard import usage_slot
+from app.services.pipeline import (
+    build_timeout_error_response,
+    run_pipeline,
+    run_text_route,
+)
 
 router = APIRouter()
 logger = get_logger(__name__)
@@ -93,15 +98,20 @@ async def process_audio(request: Request, file: UploadFile = File(...)) -> dict:
     )
 
     try:
-        # 전체 파이프라인에 타임아웃 적용 (기본 30초)
-        result = await asyncio.wait_for(
-            run_pipeline(
-                audio_bytes=audio_bytes,
-                filename=_safe_audio_filename(content_type),
-                request_id=request_id,
-            ),
-            timeout=settings.REQUEST_TIMEOUT_SECONDS,
-        )
+        async with usage_slot(
+            "voice",
+            max_concurrent=settings.VOICE_MAX_CONCURRENT_REQUESTS,
+            daily_limit=settings.VOICE_DAILY_REQUEST_LIMIT,
+        ):
+            # 전체 파이프라인에 타임아웃 적용 (기본 30초)
+            result = await asyncio.wait_for(
+                run_pipeline(
+                    audio_bytes=audio_bytes,
+                    filename=_safe_audio_filename(content_type),
+                    request_id=request_id,
+                ),
+                timeout=settings.REQUEST_TIMEOUT_SECONDS,
+            )
 
         logger.info("[%s] 요청 완료: status=%s", request_id, result.get("status"))
         return result
@@ -129,17 +139,22 @@ async def process_text_route(request: Request, body: TextRouteRequest) -> dict:
     request_id = request_id_for(request)[:12]
 
     try:
-        result = await asyncio.wait_for(
-            run_text_route(
-                destination=body.destination.strip(),
-                destination_x=body.destination_x,
-                destination_y=body.destination_y,
-                origin=body.origin.strip() if body.origin else None,
-                transport_mode=body.transport_mode,
-                request_id=request_id,
-            ),
-            timeout=settings.REQUEST_TIMEOUT_SECONDS,
-        )
+        async with usage_slot(
+            "route",
+            max_concurrent=settings.ROUTE_MAX_CONCURRENT_REQUESTS,
+            daily_limit=settings.ROUTE_DAILY_REQUEST_LIMIT,
+        ):
+            result = await asyncio.wait_for(
+                run_text_route(
+                    destination=body.destination.strip(),
+                    destination_x=body.destination_x,
+                    destination_y=body.destination_y,
+                    origin=body.origin.strip() if body.origin else None,
+                    transport_mode=body.transport_mode,
+                    request_id=request_id,
+                ),
+                timeout=settings.REQUEST_TIMEOUT_SECONDS,
+            )
     except asyncio.TimeoutError:
         result = build_timeout_error_response()
         result["request_id"] = request_id

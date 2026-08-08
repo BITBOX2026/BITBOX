@@ -39,6 +39,7 @@ server {
     add_header X-Content-Type-Options "nosniff" always;
     add_header X-Frame-Options "DENY" always;
     add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header Content-Security-Policy "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self' https://dapi.kakao.com https://*.daumcdn.net; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://*.daumcdn.net https://*.kakaocdn.net; font-src 'self' data:; media-src 'self' data: blob:; connect-src 'self' https://dapi.kakao.com https://*.daum.net https://*.kakao.com; worker-src 'self' blob:; upgrade-insecure-requests" always;
     access_log /var/log/nginx/bitbox_access.log bitbox_json;
     error_log /var/log/nginx/bitbox_error.log warn;
 
@@ -62,6 +63,10 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header X-Request-ID $request_id;
         proxy_set_header X-BITBOX-Token ${BITBOX_API_AUTH_TOKEN};
+    }
+
+    location ^~ /internal/ {
+        return 404;
     }
 
     location /health {

@@ -7,21 +7,24 @@ FastAPI 애플리케이션을 초기화하고 미들웨어·라우터를 등록�
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
-from app.api.schemas import HealthResponse, ReadinessResponse
 from app.api.gateway import router as gateway_router
+from app.api.schemas import HealthResponse, ReadinessResponse
 from app.core.config import settings, validate_required_settings
 from app.core.logger import get_logger
 from app.core.rate_limiter import limiter
 from app.core.request_context import request_context_middleware
+from app.core.runtime_metrics import runtime_snapshot
+from app.core.usage_guard import usage_snapshot
 from app.routers.bus import router as bus_router
 from app.routers.place import router as place_router
 from app.routers.station import router as station_router
 from app.services.core.http_client import close_http_client
+from app.services.core.http_utils import circuit_snapshot
 from app.services.core.openai_client import close_openai_client
 from app.services.core.settings_helper import is_mock_mode
 
@@ -72,7 +75,7 @@ _cors_origins = (
 app = FastAPI(
     title="BITBOX Voice Transit Assistant Backend",
     description="음성 기반 버스/교통 안내 시스템 백엔드 API",
-    version="1.1.0",
+    version="1.2.0",
     lifespan=lifespan,
 )
 app.middleware("http")(request_context_middleware)
@@ -133,3 +136,18 @@ def health_check() -> HealthResponse:
 def readiness_check() -> ReadinessResponse:
     """Report readiness after startup validation has completed."""
     return ReadinessResponse(status="ready", version=app.version)
+
+
+@app.get("/internal/status", include_in_schema=False)
+async def internal_status(request: Request) -> dict[str, object]:
+    """Expose privacy-safe runtime state only to local EC2 operators."""
+    client_host = request.client.host if request.client else ""
+    if client_host not in {"127.0.0.1", "::1", "testclient"}:
+        raise HTTPException(status_code=404, detail="Not found")
+    return {
+        "status": "ok",
+        "version": app.version,
+        "runtime": runtime_snapshot(),
+        "usage": usage_snapshot(),
+        "circuits": circuit_snapshot(),
+    }

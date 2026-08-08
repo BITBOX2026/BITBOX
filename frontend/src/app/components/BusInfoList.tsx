@@ -260,6 +260,7 @@ export function BusInfoList() {
   const lastUpdatedStr = lastUpdated
     ? `${String(lastUpdated.getHours()).padStart(2,"0")}:${String(lastUpdated.getMinutes()).padStart(2,"0")}:${String(lastUpdated.getSeconds()).padStart(2,"0")} 갱신`
     : "";
+  const isStale = !loading && (!lastUpdated || now.getTime() - lastUpdated.getTime() > 45_000);
 
   return (
     <div className="flex h-full w-full flex-col overflow-hidden bg-[#EDF1F3] font-['Noto_Sans_KR']">
@@ -310,7 +311,7 @@ export function BusInfoList() {
             <span className="text-[20px] font-black leading-tight text-[#2C2A1A] sm:text-[24px]">잠시 후 도착</span>
             <span className="text-[12px] font-bold text-[#645716] sm:text-[13px]">3분 이내 도착 차량</span>
           </div>
-          {lastUpdatedStr && <span className="text-[12px] text-[#92400E]">{lastUpdatedStr}</span>}
+          {lastUpdatedStr && <span className={`text-[12px] font-bold ${isStale ? "text-red-700" : "text-[#92400E]"}`}>{isStale ? `정보 지연 · ${lastUpdatedStr}` : lastUpdatedStr}</span>}
         </div>
 
         {loading ? (
@@ -410,8 +411,8 @@ export function BusInfoList() {
         {/* 푸터 */}
         <div className="flex shrink-0 items-center justify-between border-t border-[#CBD5E1] bg-[#EDF1F3] px-3 py-2 sm:px-5">
           <div className="flex min-w-0 items-center gap-3">
-            <button type="button" onClick={refetch} className="inline-flex items-center gap-1.5 text-[12px] font-bold text-[#52616B] hover:text-[#1B2930]" title="도착 정보 새로고침">
-              <Wifi className="size-3.5 text-emerald-600" /> 실시간 · 15초마다 갱신
+            <button type="button" onClick={refetch} className={`inline-flex items-center gap-1.5 text-[12px] font-bold hover:text-[#1B2930] ${isStale ? "text-red-700" : "text-[#52616B]"}`} title="도착 정보 새로고침">
+              <Wifi className={`size-3.5 ${isStale ? "text-red-600" : "text-emerald-600"}`} /> {isStale ? "정보 갱신 지연 · 다시 시도" : "실시간 · 15초마다 갱신"}
             </button>
             {trackedBusId && <span className="hidden items-center gap-1 truncate text-[12px] font-black text-[#145466] sm:inline-flex"><Volume2 className="size-3.5" /> 선택 차량 도착 알림 중</span>}
           </div>

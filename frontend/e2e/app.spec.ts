@@ -207,5 +207,22 @@ test("handles denied microphone permission", async ({ page, context }) => {
   await context.clearPermissions();
   await page.goto("/");
   await page.getByRole("button", { name: "음성 입력 시작" }).click();
+  await expect(page.getByRole("dialog", { name: "음성·위치정보 처리 안내" })).toBeVisible();
+  await page.getByRole("button", { name: "동의하고 마이크 사용" }).click();
   await expect(page.getByRole("alert")).toContainText("마이크를 사용할 수 없습니다");
+});
+
+test("requires voice consent and clears local recent destinations", async ({ page }) => {
+  await page.goto("/");
+  await page.evaluate(() => localStorage.setItem("bitbox.recentDestinations", JSON.stringify([{ name: "강남역" }])));
+  await page.getByRole("button", { name: "음성 입력 시작" }).click();
+
+  const dialog = page.getByRole("dialog", { name: "음성·위치정보 처리 안내" });
+  await expect(dialog).toContainText("OpenAI로 전송");
+  await dialog.getByRole("button", { name: "이 기기의 최근 목적지 삭제" }).click();
+  await expect(dialog.getByText("최근 목적지를 삭제했습니다")).toBeVisible();
+  expect(await page.evaluate(() => localStorage.getItem("bitbox.recentDestinations"))).toBeNull();
+
+  await dialog.getByRole("button", { name: "닫기", exact: true }).click();
+  expect(await page.evaluate(() => localStorage.getItem("bitbox.voiceConsent.v1"))).toBeNull();
 });

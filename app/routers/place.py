@@ -4,7 +4,9 @@ from fastapi import APIRouter, Query, Request
 from pydantic import BaseModel
 
 from app.core.auth import verify_api_token
+from app.core.config import settings
 from app.core.rate_limiter import limiter
+from app.core.usage_guard import usage_slot
 from app.services.transit.kakao_service import search_place_suggestions
 
 router = APIRouter()
@@ -34,7 +36,12 @@ async def suggest_places(
     Kakao API 오류 시 빈 리스트를 반환합니다.
     """
     verify_api_token(request)
-    results = await search_place_suggestions(query, max_results=5)
+    async with usage_slot(
+        "place",
+        max_concurrent=settings.PLACE_MAX_CONCURRENT_REQUESTS,
+        daily_limit=settings.PLACE_DAILY_REQUEST_LIMIT,
+    ):
+        results = await search_place_suggestions(query, max_results=5)
     return PlaceSuggestResponse(
         suggestions=[PlaceSuggestion(**r) for r in results]
     )

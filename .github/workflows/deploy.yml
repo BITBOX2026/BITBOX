@@ -22,6 +22,7 @@ jobs:
       - name: Test backend
         run: |
           python -m pip install -r requirements-backend.txt pytest pip-audit bandit
+          python -m pip check
           python -m pip_audit -r requirements-backend.txt
           python -m bandit -r app scripts -x tests
           python -m pytest -q

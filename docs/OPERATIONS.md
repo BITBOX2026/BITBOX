@@ -25,6 +25,15 @@ consecutive failures restart the backend and write an event to the system log.
 This is self-recovery, not external uptime monitoring; an independent monitor
 must still alert when the whole instance or network is unavailable.
 
+For a Slack-compatible alert webhook, create `/etc/bitbox/monitoring.env` with
+`BITBOX_ALERT_WEBHOOK_URL=<secret URL>` and mode `600`. The local healthcheck
+sends an alert after three failures before restarting the backend. Keep this
+file outside Git and rotate the webhook if it is exposed.
+
+Local runtime counters, paid-request usage and external circuit states are
+available only from EC2 with `curl http://127.0.0.1:8001/internal/status`.
+Nginx returns `404` for every external `/internal/` request.
+
 ## Incident checks
 
 ```bash
@@ -46,6 +55,10 @@ frontend tests, type checking, build, E2E, and a concurrent health smoke test.
 Frontend assets are written to a commit-specific release directory and switched
 through `/var/www/bitbox-current` atomically.
 
+Direct backend dependencies and frontend packages are pinned to tested versions.
+Dependabot proposes reviewed upgrades; do not loosen production version pins
+without passing the full security, unit, build and E2E pipeline.
+
 To restore an earlier frontend release, point `/var/www/bitbox-current` to a
 known release under `/var/www/bitbox-releases` and reload Nginx. Backend rollback
 uses a reviewed revert commit on the deployment branch; do not edit production
@@ -58,6 +71,8 @@ source files directly.
 - Destination text is sent to Kakao and ODsay as required for routing.
 - Publish a privacy policy and obtain any required consent before public launch.
 - Define provider-side retention and regional processing settings with the service owner.
+- Replace the in-app generic notice with the operator's legal name, contact,
+  provider retention terms and final counsel-reviewed policy before public launch.
 
 ## Capacity and scaling
 
@@ -71,3 +86,7 @@ The current deployment is one EC2 instance. Before claiming high availability,
 add at least two instances behind an Application Load Balancer, shared Redis for
 distributed rate limits/cache, managed monitoring, and automated instance health
 replacement. Provider quotas and billing alerts must be configured independently.
+
+The in-process daily limits are emergency cost guards, not billing controls. They
+reset on process restart and are not shared across instances. Use API Gateway/WAF
+and provider-side hard quotas before horizontal scaling.
