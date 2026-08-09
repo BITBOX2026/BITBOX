@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { BusOption } from "../../types/bus";
-import { accessibilityScore, getApproachThreshold } from "./BusInfoList";
-import { selectRecordingMimeType } from "./VoiceRecording";
+import { accessibilityScore, describeBus, getApproachThreshold } from "./BusInfoList";
+import { selectRecordingMimeType } from "../../hooks/useVoiceRecorder";
 
 function bus(overrides: Partial<BusOption> = {}): BusOption {
   return {
@@ -13,7 +13,7 @@ function bus(overrides: Partial<BusOption> = {}): BusOption {
     currentStationName: "몽촌토성역",
     remainingStops: 3,
     busType: 0,
-    congetion: 3,
+    congestion: 3,
     isFullFlag: false,
     isLastBus: false,
     plainNo: "vehicle-1",
@@ -30,8 +30,8 @@ describe("accessibilityScore", () => {
   });
 
   it("does not rank unknown congestion as available seating", () => {
-    expect(accessibilityScore(bus({ congetion: 0 }))).toBeGreaterThan(
-      accessibilityScore(bus({ congetion: 3 })),
+    expect(accessibilityScore(bus({ congestion: 0 }))).toBeGreaterThan(
+      accessibilityScore(bus({ congestion: 3 })),
     );
   });
 });
@@ -43,6 +43,25 @@ describe("selectRecordingMimeType", () => {
 
   it("allows the browser default when no candidate is supported", () => {
     expect(selectRecordingMimeType(() => false)).toBeUndefined();
+  });
+});
+
+describe("describeBus", () => {
+  it("summarizes an approaching bus as one screen-reader sentence", () => {
+    const description = describeBus(bus({ traTimeSec: 30, congestion: 5, currentStationName: "잠실역" }));
+    expect(description).toBe("3214번 버스, 곧 도착, 혼잡도 혼잡, 잠실역 통과");
+  });
+
+  it("includes low-floor, full, and last-bus flags when present", () => {
+    const description = describeBus(bus({ busType: 1, isFullFlag: true, isLastBus: true }));
+    expect(description).toContain("저상버스");
+    expect(description).toContain("만차");
+    expect(description).toContain("막차");
+  });
+
+  it("omits the location when currentStationName is missing", () => {
+    const description = describeBus(bus({ currentStationName: "" }));
+    expect(description).not.toContain("통과");
   });
 });
 

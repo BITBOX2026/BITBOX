@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { BusOption as BusInfo } from "../../types/bus";
 import { getDefaultArrivals, getCongestionLabel, getCongestionColor } from "../../api/busService";
-import { Accessibility, BusFront, MapPin, RefreshCw, Volume2, Wifi } from "lucide-react";
+import { Accessibility, BusFront, MapPin, RefreshCw, Volume2, Wifi, ZoomIn } from "lucide-react";
+import { useAccessibilityDisplay } from "../../hooks/useAccessibilityDisplay";
 
 const STATION_NAME = import.meta.env.VITE_STATION_NAME ?? "정류장";
 
@@ -16,8 +17,21 @@ const DAY_KR = ["일", "월", "화", "수", "목", "금", "토"];
 export function accessibilityScore(bus: BusInfo): number {
   const fullPenalty = bus.isFullFlag ? 100 : 0;
   const lowFloorBonus = bus.busType === 1 ? -20 : 0;
-  const congestionPenalty = bus.congetion === 5 ? 15 : bus.congetion === 4 ? 5 : bus.congetion === 0 ? 10 : 0;
+  const congestionPenalty = bus.congestion === 5 ? 15 : bus.congestion === 4 ? 5 : bus.congestion === 0 ? 10 : 0;
   return fullPenalty + lowFloorBonus + congestionPenalty + bus.arrivalMin;
+}
+
+// 카드/행 전체를 스크린리더가 하나의 문장으로 읽도록 요약합니다.
+// (개별 텍스트 조각을 순서대로 읽으면 맥락 없이 끊겨 들리는 문제를 방지)
+export function describeBus(bus: BusInfo): string {
+  const arrival = bus.traTimeSec < SOON_ARRIVE ? "곧 도착" : `약 ${bus.arrivalMin}분 후 도착`;
+  const congestion = getCongestionLabel(bus.congestion);
+  const parts = [`${bus.busNumber}번 버스`, arrival, `혼잡도 ${congestion}`];
+  if (bus.currentStationName) parts.push(`${bus.currentStationName} 통과`);
+  if (bus.busType === 1) parts.push("저상버스");
+  if (bus.isFullFlag) parts.push("만차");
+  if (bus.isLastBus) parts.push("막차");
+  return parts.join(", ");
 }
 
 export function getApproachThreshold(previous: number | null, current: number): number | null {
@@ -94,10 +108,10 @@ function StopsDot({ remaining }: { remaining: number }) {
 
 // ─── 잠시 후 도착 카드 (시간 없음, 번호+혼잡도만) ────────────
 function SoonCard({ bus, isTracked, onTrack }: { bus: BusInfo; isTracked: boolean; onTrack: () => void }) {
-  const congLabel = getCongestionLabel(bus.congetion);
-  const congColor = getCongestionColor(bus.congetion);
+  const congLabel = getCongestionLabel(bus.congestion);
+  const congColor = getCongestionColor(bus.congestion);
   return (
-    <button type="button" onClick={onTrack} aria-pressed={isTracked} className={`flex min-w-0 flex-1 flex-col items-center justify-center gap-2 rounded-md border bg-[#1C2229] px-2 py-3 shadow-md ${isTracked ? "border-white ring-2 ring-white" : "border-[#303842]"}`}>
+    <button type="button" onClick={onTrack} aria-pressed={isTracked} aria-label={describeBus(bus)} className={`flex min-w-0 flex-1 flex-col items-center justify-center gap-2 rounded-md border bg-[#1C2229] px-2 py-3 shadow-md ${isTracked ? "border-white ring-2 ring-white" : "border-[#303842]"}`}>
       <div className={`rounded-full px-3 py-0.5 text-[12px] font-black border ${congColor}`}>
         {congLabel}
       </div>
@@ -177,6 +191,7 @@ export function BusInfoList() {
   const [mainPage, setMainPage] = useState(0);
   const [soonPage, setSoonPage] = useState(0);
   const [accessibleMode, setAccessibleMode] = useState(false);
+  const [largeTextMode, toggleLargeTextMode] = useAccessibilityDisplay();
   const [trackedBusId, setTrackedBusId] = useState<string | null>(null);
   const lastRemainingStopsRef = useRef<number | null>(null);
   const now = useLiveClock();
@@ -279,6 +294,15 @@ export function BusInfoList() {
         <div className="flex shrink-0 items-center gap-2 sm:gap-3">
           <button
             type="button"
+            onClick={toggleLargeTextMode}
+            aria-pressed={largeTextMode}
+            className={`inline-flex items-center gap-2 rounded-md border p-2 text-xs font-black sm:px-3 ${largeTextMode ? "border-[#F0C929] bg-[#F0C929] text-[#171D23]" : "border-white/20 bg-white/10 text-white"}`}
+            title="큰 글씨·고대비 화면으로 전환"
+          >
+            <ZoomIn className="size-4" /><span className="hidden sm:inline">큰 글씨</span>
+          </button>
+          <button
+            type="button"
             onClick={() => { setAccessibleMode((enabled) => !enabled); setMainPage(0); setSoonPage(0); }}
             aria-pressed={accessibleMode}
             className={`inline-flex items-center gap-2 rounded-md border p-2 text-xs font-black sm:px-3 ${accessibleMode ? "border-[#F0C929] bg-[#F0C929] text-[#171D23]" : "border-white/20 bg-white/10 text-white"}`}
@@ -351,12 +375,12 @@ export function BusInfoList() {
             {loading
               ? Array.from({ length: MAIN_PER_PAGE }).map((_, i) => <SkeletonRow key={i} idx={i} />)
               : currentMain.map((bus, idx) => {
-                  const congLabel = getCongestionLabel(bus.congetion);
-                  const congColor = getCongestionColor(bus.congetion);
+                  const congLabel = getCongestionLabel(bus.congestion);
+                  const congColor = getCongestionColor(bus.congestion);
                   const isArriving = bus.traTimeSec < SOON_ARRIVE;
 
                   return (
-                    <button type="button" onClick={() => toggleTracking(bus)} aria-pressed={trackedBusId === (bus.plainNo || bus.id)} key={bus.id} className={`grid min-h-0 flex-1 grid-cols-[minmax(78px,1fr)_82px_minmax(120px,2fr)] items-center border-b border-[#E2E8F0] text-left md:grid-cols-[150px_110px_1fr]
+                    <button type="button" onClick={() => toggleTracking(bus)} aria-pressed={trackedBusId === (bus.plainNo || bus.id)} aria-label={describeBus(bus)} key={bus.id} className={`grid min-h-0 flex-1 grid-cols-[minmax(78px,1fr)_82px_minmax(120px,2fr)] items-center border-b border-[#E2E8F0] text-left md:grid-cols-[150px_110px_1fr]
                       ${trackedBusId === (bus.plainNo || bus.id) ? "bg-amber-50 ring-2 ring-inset ring-[#F0C929]" : idx % 2 === 0 ? "bg-white" : "bg-[#F8FAFC]"}`}>
 
                       {/* 노선번호 */}

@@ -1,4 +1,4 @@
-import type { BusOption, BusCongetion } from "../types/bus";
+import type { BusOption, BusCongestion } from "../types/bus";
 import { apiFetch } from "./client";
 
 // ─── 기본 전광판(/api/bus/default) 전용 인터페이스 ───
@@ -35,7 +35,7 @@ interface DefaultApiResponse {
 /**
  * 혼잡도 수치 변환 헬퍼 함수
  */
-export function toCongestion(val?: string | null): BusCongetion {
+export function toCongestion(val?: string | null): BusCongestion {
   const n = Number.parseInt(val ?? "", 10);
   if (n === 3) return 3;
   if (n === 4) return 4;
@@ -88,7 +88,7 @@ export async function getDefaultArrivals(): Promise<{ stationName: string; buses
         currentStationName: item.raw_station_nm1?.trim() || "",
         remainingStops: parseRemainingStops(item.raw_arrmsg1),
         busType: parseInt(item.raw_bus_type1 || "0", 10),
-        congetion: toCongestion(item.raw_congestion1),
+        congestion: toCongestion(item.raw_congestion1),
         isFullFlag: item.raw_is_full_flag1 === "1",
         isLastBus: item.raw_is_last1 === "1",
         plainNo: item.raw_veh_id1 || "",
@@ -107,7 +107,7 @@ export async function getDefaultArrivals(): Promise<{ stationName: string; buses
         currentStationName: item.raw_station_nm2?.trim() || "",
         remainingStops: parseRemainingStops(item.raw_arrmsg2),
         busType: parseInt(item.raw_bus_type2 || "0", 10),
-        congetion: toCongestion(item.raw_congestion2),
+        congestion: toCongestion(item.raw_congestion2),
         isFullFlag: item.raw_is_full_flag2 === "1",
         isLastBus: item.raw_is_last2 === "1",
         plainNo: item.raw_veh_id2 || "",
@@ -131,15 +131,15 @@ export async function getDefaultArrivals(): Promise<{ stationName: string; buses
 /**
  * UI 뱃지용 혼잡도 라벨/컬러 매핑 헬퍼 함수들
  */
-export function getCongestionLabel(c: BusCongetion): string {
-  return ({ 0: "정보 없음", 3: "여유", 4: "보통", 5: "혼잡" } as Record<BusCongetion, string>)[c];
+export function getCongestionLabel(c: BusCongestion): string {
+  return ({ 0: "정보 없음", 3: "여유", 4: "보통", 5: "혼잡" } as Record<BusCongestion, string>)[c];
 }
 
-export function getCongestionColor(c: BusCongetion): string {
+export function getCongestionColor(c: BusCongestion): string {
   return ({
     0: "text-slate-700 bg-slate-100 border-slate-300",
     3: "text-[#065F46] bg-[#D1FAE5] border-[#34D399]",
     4: "text-[#92400E] bg-[#FEF3C7] border-[#F59E0B]",
     5: "text-[#991B1B] bg-[#FEE2E2] border-[#F87171]",
-  } as Record<BusCongetion, string>)[c];
+  } as Record<BusCongestion, string>)[c];
 }

@@ -44,3 +44,23 @@ button:focus-visible, input:focus-visible { outline: 3px solid #f0c929; outline-
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
 }
+
+/* ── 큰 글씨·고대비 모드 (고령자·저시력 사용자 배려) ──────────────
+   Tailwind의 rem 기반 텍스트 크기는 html font-size 확대만으로 함께 커집니다.
+   낮은 명도 대비로 쓰이던 반투명/회색 텍스트만 별도로 진하게 보정합니다. */
+html[data-a11y-large] { font-size: 120%; }
+
+[data-a11y-large] .text-white\/45,
+[data-a11y-large] .text-white\/50,
+[data-a11y-large] .text-white\/55,
+[data-a11y-large] .text-white\/65,
+[data-a11y-large] .text-white\/70,
+[data-a11y-large] .text-white\/80,
+[data-a11y-large] .text-white\/85,
+[data-a11y-large] .text-white\/90 {
+  color: rgb(255 255 255 / 96%);
+}
+
+[data-a11y-large] .text-slate-400 { color: #334155; }
+[data-a11y-large] .text-slate-500 { color: #1e293b; }
+[data-a11y-large] .text-slate-600 { color: #0f172a; }

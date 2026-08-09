@@ -4,7 +4,7 @@ import { suggestPlaces, type PlaceSuggestion, type RouteDestination } from "../.
 
 const RECENT_KEY = "bitbox.recentDestinations";
 
-function loadRecentDestinations(): RouteDestination[] {
+export function loadRecentDestinations(): RouteDestination[] {
   try {
     const value = JSON.parse(localStorage.getItem(RECENT_KEY) || "[]");
     if (!Array.isArray(value)) return [];

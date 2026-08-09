@@ -16,7 +16,14 @@ from app.services.core.settings_helper import get_bool_setting
 
 
 def _client_address(request: Request) -> str:
-    """Trust forwarding headers only from the local reverse proxy."""
+    """Trust forwarding headers only from the local reverse proxy.
+
+    보안 전제: 이 로직은 loopback(127.0.0.1/::1)에 바인딩된 프로세스가
+    nginx 리버스 프록시뿐이라는 배포 토폴로지를 전제로 합니다.
+    컨테이너화 등으로 여러 프로세스가 네트워크 네임스페이스를 공유하게 되면
+    다른 프로세스가 X-Forwarded-For를 위조해 rate limit을 우회할 수 있으므로,
+    배포 구조를 바꿀 때는 반드시 이 가정을 재검토해야 합니다.
+    """
     direct = request.client.host if request.client else "unknown"
     if direct in {"127.0.0.1", "::1"}:
         forwarded = request.headers.get("x-forwarded-for", "").split(",", 1)[0].strip()

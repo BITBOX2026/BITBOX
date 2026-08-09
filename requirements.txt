@@ -1,3 +1,7 @@
+# 로컬 개발 / 라즈베리파이 클라이언트 전체 환경용 (pytest, 오디오 클라이언트 의존성 포함).
+# 운영 서버(EC2)에는 이 파일을 설치하지 마세요 — requirements-backend.txt만 사용합니다.
+# (docs/PROJECT_STRUCTURE.md 배포 절차 참고)
+
 # Backend
 fastapi==0.141.1
 uvicorn[standard]==0.52.1

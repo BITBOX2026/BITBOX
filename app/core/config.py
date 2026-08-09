@@ -82,14 +82,35 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
+# "local"만 신뢰할 수 있는 개발 환경으로 취급합니다.
+# staging/prod는 물론, 오타나 미설정으로 알 수 없는 값이 들어와도
+# 항상 운영 환경 수준의 보안 검증을 적용합니다 (fail-closed).
+_LOCAL_ENV = "local"
+
+
+def is_local_env() -> bool:
+    return settings.APP_ENV == _LOCAL_ENV
+
 
 def validate_required_settings() -> None:
     """
     실행 모드에 따라 필수 환경변수를 검증합니다.
 
-    mock 모드: API 키 없이 실행 가능
+    mock 모드: API 키 없이 실행 가능 (단, 보안 관련 설정은 항상 검증)
     real 모드: OPENAI / KAKAO / ODSAY / PUBLIC_DATA 키 모두 필요
     """
+    # 보안 설정 검증은 mock 모드 여부와 무관하게 항상 수행합니다.
+    # (USE_MOCK_EXTERNALS=true 인 채로 실수로 prod에 배포되는 경우를 방지)
+    if not is_local_env():
+        if not settings.API_AUTH_TOKEN:
+            raise RuntimeError(
+                f"APP_ENV={settings.APP_ENV!r}에서는 API_AUTH_TOKEN 설정이 필요합니다."
+            )
+        if settings.CORS_ALLOWED_ORIGINS.strip() == "*":
+            raise RuntimeError(
+                f"APP_ENV={settings.APP_ENV!r}에서는 CORS_ALLOWED_ORIGINS='*'를 사용할 수 없습니다."
+            )
+
     if settings.USE_MOCK_EXTERNALS:
         return
 
@@ -107,12 +128,6 @@ def validate_required_settings() -> None:
         raise RuntimeError(
             f"USE_MOCK_EXTERNALS=false 일 때 다음 환경변수가 필요합니다: {', '.join(missing)}"
         )
-
-    if settings.APP_ENV == "prod":
-        if not settings.API_AUTH_TOKEN:
-            raise RuntimeError("APP_ENV=prod에서는 API_AUTH_TOKEN 설정이 필요합니다.")
-        if settings.CORS_ALLOWED_ORIGINS.strip() == "*":
-            raise RuntimeError("APP_ENV=prod에서는 CORS_ALLOWED_ORIGINS='*'를 사용할 수 없습니다.")
 
     positive_settings = (
         "VOICE_MAX_CONCURRENT_REQUESTS", "VOICE_DAILY_REQUEST_LIMIT",

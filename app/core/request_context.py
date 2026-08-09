@@ -51,6 +51,10 @@ async def request_context_middleware(
     record_request(response.status_code, elapsed_ms)
     response.headers["X-Request-ID"] = request_id
     response.headers["X-Response-Time-Ms"] = str(elapsed_ms)
+    # nginx가 프론트엔드 정적 자산에 CSP/HSTS 등을 붙여주지만, API 응답 자체에도
+    # 방어적으로 최소한의 보안 헤더를 붙여 nginx를 우회한 직접 접근에도 대비합니다.
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "no-referrer"
     if request.url.path.startswith("/api/") or request.url.path in {"/health", "/ready"}:
         response.headers["Cache-Control"] = "no-store"
     logger.info(

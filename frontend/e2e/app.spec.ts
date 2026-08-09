@@ -46,7 +46,7 @@ const routeResult = {
       currentStationName: "올림픽공원역 정류장",
       remainingStops: 2,
       busType: 0,
-      congetion: 0,
+      congestion: 0,
       isFullFlag: false,
       isLastBus: false,
       plainNo: "",

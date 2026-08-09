@@ -78,6 +78,9 @@ export function VoiceResult({
 
   return (
     <div className="relative flex h-full w-full flex-col overflow-hidden bg-[#123E49] font-['Noto_Sans_KR']">
+      {/* 음성으로만 전달되던 안내 문구를 스크린리더 사용자에게도 동일하게 전달 */}
+      <p aria-live="polite" className="sr-only">{message}</p>
+
       <header className="z-10 flex min-h-14 shrink-0 items-center justify-between gap-2 border-b border-white/15 px-3 py-2 sm:px-5">
         <div className="flex min-w-0 items-center gap-2 sm:gap-4">
           <button type="button" onClick={onGoHome} className="icon-command" title="처음으로" aria-label="처음으로">

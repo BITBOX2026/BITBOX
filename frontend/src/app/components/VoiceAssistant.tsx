@@ -4,8 +4,9 @@ import { DestinationSearch } from "./DestinationSearch";
 import { PrivacyNotice, VOICE_CONSENT_KEY } from "./PrivacyNotice";
 import { VoiceLoading } from "./VoiceLoading";
 import { VoiceMicButton } from "./VoiceMicButton";
-import { VoiceRecording, useVoiceRecorder } from "./VoiceRecording";
+import { VoiceRecording } from "./VoiceRecording";
 import { VoiceResult } from "./VoiceResult";
+import { useVoiceRecorder } from "../../hooks/useVoiceRecorder";
 
 export function VoiceAssistant() {
   const [privacyOpen, setPrivacyOpen] = useState(false);
@@ -64,6 +65,15 @@ export function VoiceAssistant() {
   return (
     <section className="relative flex h-full w-full overflow-hidden bg-[#123E49] font-['Noto_Sans_KR'] text-white">
       <div className="absolute inset-x-0 top-0 h-1 bg-[#F0C929]" />
+
+      {/* 화면을 보지 않는 사용자를 위한 상태 안내 (스크린리더 전용) */}
+      <p aria-live="polite" className="sr-only">
+        {status === "listening"
+          ? "음성 인식을 시작했습니다. 목적지를 말씀해 주세요."
+          : status === "loading"
+            ? "경로를 조회하고 있습니다. 잠시만 기다려 주세요."
+            : ""}
+      </p>
 
       {error && (
         <div

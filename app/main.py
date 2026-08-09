@@ -14,7 +14,7 @@ from slowapi.errors import RateLimitExceeded
 
 from app.api.gateway import router as gateway_router
 from app.api.schemas import HealthResponse, ReadinessResponse
-from app.core.config import settings, validate_required_settings
+from app.core.config import is_local_env, settings, validate_required_settings
 from app.core.logger import get_logger
 from app.core.rate_limiter import limiter
 from app.core.request_context import request_context_middleware
@@ -64,7 +64,9 @@ _cors_origins = (
     else sorted(
         {
             *[o.strip() for o in settings.CORS_ALLOWED_ORIGINS.split(",") if o.strip()],
-            *(  _frontend_dev_origins if settings.APP_ENV != "prod" else set()  ),
+            # 오직 "local" 환경에서만 개발 서버 오리진을 추가합니다.
+            # staging 등 알 수 없는 APP_ENV 값은 prod와 동일하게 취급 (fail-closed).
+            *(_frontend_dev_origins if is_local_env() else set()),
         }
     )
 )
@@ -120,7 +122,7 @@ def health_check() -> HealthResponse:
         "api_keys_configured": None,
     }
 
-    if settings.APP_ENV != "prod":
+    if is_local_env():
         body["api_keys_configured"] = {
             "openai": bool(settings.OPENAI_API_KEY),
             "kakao": bool(settings.KAKAO_REST_API_KEY),
@@ -142,7 +144,7 @@ def readiness_check() -> ReadinessResponse:
 async def internal_status(request: Request) -> dict[str, object]:
     """Expose privacy-safe runtime state only to local EC2 operators."""
     client_host = request.client.host if request.client else ""
-    if client_host not in {"127.0.0.1", "::1", "testclient"}:
+    if client_host not in {"127.0.0.1", "::1"}:
         raise HTTPException(status_code=404, detail="Not found")
     return {
         "status": "ok",

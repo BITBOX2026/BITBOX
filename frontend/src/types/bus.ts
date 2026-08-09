@@ -1,6 +1,6 @@
 // src/types/bus.ts
 
-export type BusCongetion = 0 | 3 | 4 | 5;
+export type BusCongestion = 0 | 3 | 4 | 5;
 
 export interface BusOption {
   id: string;
@@ -11,7 +11,7 @@ export interface BusOption {
   currentStationName: string;
   remainingStops: number;
   busType: number;
-  congetion: BusCongetion;
+  congestion: BusCongestion;
   isFullFlag: boolean;
   isLastBus: boolean;
   plainNo: string;
