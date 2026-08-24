@@ -30,6 +30,8 @@ logger = get_logger(__name__)
 
 # 서울시 버스 API가 성공으로 반환하는 결과 코드 목록
 SUCCESS_CODES = {"0", "00", "NORMAL_CODE", "INFO-000", "SUCCESS"}
+# 서울시 버스 API의 `4`는 요청 실패가 아니라 검색 결과 없음입니다.
+NO_RESULT_CODES = {"4"}
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 
 
@@ -81,6 +83,10 @@ async def request_seoul_bus_payload(
                 logger.debug("공공데이터 API 응답에 resultCode 없음 (%s) — 성공으로 간주", stage)
             if code and not is_success_code(code):
                 message = message or "공공데이터 API 오류"
+
+                if code.strip().upper() in NO_RESULT_CODES:
+                    logger.info("공공데이터 API 검색 결과 없음 (%s)", stage)
+                    return payload
 
                 # 인증 오류일 때만 다음 파라미터명으로 재시도
                 if index + 1 < len(service_key_param_names) and is_service_key_error(code, message):

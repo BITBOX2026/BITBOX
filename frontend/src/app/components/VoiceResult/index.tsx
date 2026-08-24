@@ -104,7 +104,7 @@ export function VoiceResult({
         </div>
       </header>
 
-      <div className="relative flex min-h-0 flex-1 overflow-hidden">
+      <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden sm:flex-row">
         <BusList buses={buses} selectedId={selectedBus?.id} onBusClick={setSelectedBus} />
         <div className="relative min-w-0 flex-1 bg-white">
           {selectedBus?.routeDetail ? (

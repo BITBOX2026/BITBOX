@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { uploadVoiceAudio, type RouteDestination } from "../api/client";
-import { findRoute } from "../api/routeService";
+import { requestTextRoute, uploadVoiceAudio, type RouteDestination, type TransitConfirmation, type PlaceSuggestion } from "../api/client";
 import { BusOption } from "../types/bus";
 
-type RecorderStatus = "idle" | "listening" | "loading" | "result";
+type RecorderStatus = "idle" | "listening" | "loading" | "confirming" | "result";
 const NO_SPEECH_TIMEOUT_MS = 8_000;
 const MAX_RECORDING_MS = 20_000;
 const REQUEST_TIMEOUT_MS = 35_000;
@@ -34,6 +33,7 @@ export function useVoiceRecorder() {
   const [message, setMessage] = useState("");
   const [audioBase64, setAudioBase64] = useState("");
   const [error, setError] = useState("");
+  const [confirmation, setConfirmation] = useState<TransitConfirmation | null>(null);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -46,6 +46,17 @@ export function useVoiceRecorder() {
   const isTimeoutRef = useRef(false);
 
   const applyResult = (result: Awaited<ReturnType<typeof uploadVoiceAudio>>) => {
+    setTranscript(result.text || "");
+    if (result.needs_confirmation && result.confirmation) {
+      setError("");
+      setMessage(result.message || result.confirmation.prompt);
+      setAudioBase64(result.audio_base64 || "");
+      setDestination(result.destination || result.destination_text || "");
+      setBuses([]);
+      setConfirmation(result.confirmation);
+      setStatus("confirming");
+      return;
+    }
     if (!result.success) {
       setError(result.message || "경로를 찾지 못했습니다.");
       setStatus("idle");
@@ -58,6 +69,7 @@ export function useVoiceRecorder() {
     }
 
     setError("");
+    setConfirmation(null);
     setMessage(result.message || "");
     setAudioBase64(result.audio_base64 || "");
     setDestination(result.destination || result.destination_text || "");
@@ -97,7 +109,11 @@ export function useVoiceRecorder() {
     setMessage("");
     setAudioBase64("");
     try {
-      const result = await findRoute(value, undefined, controller.signal);
+      const result = await requestTextRoute(
+        { ...value, name: value.name.trim() },
+        undefined,
+        controller.signal,
+      );
       if (requestControllerRef.current !== controller) return;
       applyResult(result);
     } catch (routeError) {
@@ -109,6 +125,17 @@ export function useVoiceRecorder() {
       window.clearTimeout(timeoutId);
       if (requestControllerRef.current === controller) requestControllerRef.current = null;
     }
+  };
+
+  const confirmPlace = async (place: PlaceSuggestion) => {
+    const x = place.x == null ? null : Number(place.x);
+    const y = place.y == null ? null : Number(place.y);
+    await submitTextRoute({
+      name: place.name,
+      address: place.address,
+      x: Number.isFinite(x) ? x : null,
+      y: Number.isFinite(y) ? y : null,
+    });
   };
 
   const clearTimers = () => {
@@ -254,6 +281,7 @@ export function useVoiceRecorder() {
     setMessage("");
     setAudioBase64("");
     setError("");
+    setConfirmation(null);
   };
 
   useEffect(() => () => {
@@ -270,15 +298,16 @@ export function useVoiceRecorder() {
   return {
     status,
     transcript,
-    audioChunks,
     destination,
     buses,
     message,
     audioBase64,
     error,
+    confirmation,
     startRecording,
     stopRecording,
     submitTextRoute,
+    confirmPlace,
     reset,
   };
 }

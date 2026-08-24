@@ -2,6 +2,7 @@
 
 import asyncio
 
+import httpx
 import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
@@ -31,6 +32,10 @@ from app.services.transit import transport_service
 from app.services.transit.odsay_service import _extract_route_segments, _select_best_path
 from app.services.transit.validate_service import validate_parsed_intent
 from app.core import auth
+from app.main import app
+import app.api.gateway as gateway_module
+import app.routers.bus as bus_module
+from app.schemas.bus import DefaultBusArrivalItem, DefaultBusArrivalResponse
 
 
 def test_shared_api_token_rejects_missing_token(monkeypatch) -> None:
@@ -293,7 +298,13 @@ def test_typed_route_uses_same_frontend_contract(monkeypatch) -> None:
     monkeypatch.setattr(pipeline, "generate_tts_audio", fail_tts)
 
     result = asyncio.run(
-        pipeline.run_text_route("강남역", origin="서울시청", request_id="typed-route")
+        pipeline.run_text_route(
+            "강남역",
+            destination_x=127.0276,
+            destination_y=37.4979,
+            origin="서울시청",
+            request_id="typed-route",
+        )
     )
     compat = _build_upload_compat_response(result)
 
@@ -302,6 +313,34 @@ def test_typed_route_uses_same_frontend_contract(monkeypatch) -> None:
     assert compat["buses"][0]["busNumber"] == "402"
     assert compat["buses"][0]["routeDetail"]["totalMin"] == 28
     assert result["audio_base64"] is None
+
+
+def test_place_confirmation_is_exposed_to_frontend_contract() -> None:
+    result = {
+        "status": "success",
+        "message": "강남역 2호선이 맞나요?",
+        "data": {
+            "intent": "route",
+            "destination": "강남역 2호선",
+            "needs_confirmation": True,
+            "confirmation": {
+                "kind": "place",
+                "prompt": "강남역 2호선이 맞나요?",
+                "candidate": {
+                    "name": "강남역 2호선",
+                    "address": "서울 강남구 강남대로 지하 396",
+                    "x": "127.028",
+                    "y": "37.498",
+                },
+                "alternatives": [],
+            },
+        },
+    }
+    compat = _build_upload_compat_response(result)
+    assert compat["success"] is True
+    assert compat["needs_confirmation"] is True
+    assert compat["confirmation"]["candidate"]["name"] == "강남역 2호선"
+    assert compat["buses"] == []
 
 
 def test_default_bus_route_omits_none_fields_for_javascript_comparison() -> None:
@@ -479,3 +518,71 @@ def test_arrival_intent_uses_stop_name_as_frontend_destination(monkeypatch) -> N
     assert result["status"] == "success"
     assert result["data"]["destination"] == "올림픽공원역"
     assert result["data"]["arrival_time"] == "3분후"
+
+
+def test_frontend_http_endpoints_share_the_expected_contract(monkeypatch) -> None:
+    """Exercise the same HTTP boundary used by the React application."""
+
+    async def mock_route(**_kwargs):
+        return {
+            "status": "success",
+            "message": "3412번 버스를 타세요.",
+            "data": {
+                "intent": "route",
+                "origin": "올림픽공원역",
+                "destination": "강남역",
+                "bus_number": "3412",
+                "arrival_time": "2분후",
+                "total_time_min": 30,
+                "route_segments": [
+                    {
+                        "vehicle_type": "버스",
+                        "line": "3412번",
+                        "start_name": "올림픽공원역 정류장",
+                        "end_name": "강남역 정류장",
+                        "time_min": 30,
+                    }
+                ],
+            },
+            "audio_base64": None,
+            "request_id": "integration",
+        }
+
+    async def mock_arrivals():
+        return DefaultBusArrivalResponse(
+            success=True,
+            station_name="올림픽공원역",
+            station_id="24245",
+            message="정상",
+            items=[
+                DefaultBusArrivalItem(
+                    bus_number="3412",
+                    direction="강남역 방면",
+                    first_arrival_min=2,
+                    message="2분 후 도착",
+                    raw_station_nm1="몽촌토성역",
+                )
+            ],
+        )
+
+    monkeypatch.setattr(gateway_module, "verify_api_token", lambda _request: None)
+    monkeypatch.setattr(gateway_module, "run_text_route", mock_route)
+    monkeypatch.setattr(bus_module, "verify_api_token", lambda _request: None)
+    monkeypatch.setattr(bus_module, "get_default_bus_arrivals", mock_arrivals)
+
+    async def exercise_http_boundary():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            route_response = await client.post(
+                "/api/route",
+                json={"destination": "강남역", "transport_mode": "bus"},
+            )
+            board_response = await client.get("/api/bus/default")
+        return route_response, board_response
+
+    route_response, board_response = asyncio.run(exercise_http_boundary())
+
+    assert route_response.status_code == 200
+    assert route_response.json()["buses"][0]["routeDetail"]["steps"][0]["type"] == "bus"
+    assert board_response.status_code == 200
+    assert board_response.json()["items"][0]["bus_number"] == "3412"

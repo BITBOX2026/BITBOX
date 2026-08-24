@@ -1,20 +1,17 @@
 import { BusInfoList } from "./components/BusInfoList";
-import { VoiceAssistant } from "./components/VoiceAssistant"; 
-import { useKakaoLoader } from "react-kakao-maps-sdk";
+import { VoiceAssistant } from "./components/VoiceAssistant";
+import { useState } from "react";
 
 export default function App() {
-  useKakaoLoader({
-    appkey: import.meta.env.VITE_KAKAO_MAP_APPKEY || "",
-    libraries: ["services", "clusterer"],
-  });
+  const [isRouteMode, setIsRouteMode] = useState(false);
 
   return (
-    <main className="mx-auto flex h-dvh min-h-[680px] w-full max-w-[960px] flex-col overflow-hidden border-x border-black/10 bg-white shadow-2xl">
-      <section className="h-[58%] min-h-0 w-full shrink-0 overflow-hidden md:h-[60%]">
+    <main className="mx-auto flex h-dvh min-h-[680px] w-full max-w-[1280px] flex-col overflow-hidden bg-white shadow-[0_24px_80px_rgba(15,23,42,0.22)]">
+      <section className={`min-h-0 w-full shrink-0 overflow-hidden transition-[height] duration-500 ${isRouteMode ? "h-[30%] md:h-[36%]" : "h-[58%] md:h-[60%]"}`}>
         <BusInfoList />
       </section>
-      <section className="relative h-[42%] min-h-0 w-full shrink-0 overflow-hidden md:h-[40%]">
-        <VoiceAssistant />
+      <section className={`relative min-h-0 w-full shrink-0 overflow-hidden transition-[height] duration-500 ${isRouteMode ? "h-[70%] md:h-[64%]" : "h-[42%] md:h-[40%]"}`}>
+        <VoiceAssistant onResultModeChange={setIsRouteMode} />
       </section>
     </main>
   );

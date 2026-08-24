@@ -12,6 +12,7 @@ from app.services.core.exceptions import LLMParsingError
 from app.services.core.openai_client import get_openai_client as _get_openai_client
 from app.services.core.service_types import ParsedIntent
 from app.services.core.settings_helper import get_bool_setting, get_setting, is_mock_mode
+from app.services.ai.korean_number_normalizer import normalize_spoken_bus_numbers
 
 logger = get_logger(__name__)
 
@@ -149,7 +150,8 @@ async def parse_transit_intent(transcript: str, request_id: str = "") -> ParsedI
 
     logger.info("[%s] LLM 분석 시작: transcript_length=%d", request_id, len(transcript))
 
-    deterministic = _mock_parse_transit_intent(transcript)
+    normalized_transcript = normalize_spoken_bus_numbers(transcript)
+    deterministic = _mock_parse_transit_intent(normalized_transcript)
     if get_bool_setting("INTENT_FAST_PATH_ENABLED", True) and _is_unambiguous(deterministic):
         logger.info(
             "[%s] 규칙 기반 의도 분석 사용: intent=%s",
@@ -167,7 +169,7 @@ async def parse_transit_intent(transcript: str, request_id: str = "") -> ParsedI
     llm_model = get_setting("LLM_MODEL", DEFAULT_LLM_MODEL)
 
     try:
-        return await _call_llm(_get_openai_client(), llm_model, transcript)
+        return await _call_llm(_get_openai_client(), llm_model, normalized_transcript)
 
     except LLMParsingError:
         raise

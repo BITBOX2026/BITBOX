@@ -23,12 +23,37 @@ from app.services.core.service_types import ParsedIntent
     [
         ("146번 버스 언제 와요", "146"),
         ("740 번 버스 타야 해요", "740"),
+        ("3400 열두 번 버스 언제 와요", None),
         ("서울역에서 강남역까지 가는 버스 알려줘", None),
         ("", None),
     ],
 )
 def test_extract_bus_number(text: str, expected: str | None) -> None:
     assert llm_service._extract_bus_number(text) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("3400 열두 번", "3412번"),
+        ("3300 스무세 번", "3323번"),
+        ("삼천사백이십삼 번", "3423번"),
+        ("삼사일삼 번", "3413번"),
+        ("146번", "146번"),
+    ],
+)
+def test_normalize_mixed_spoken_bus_number(text: str, expected: str) -> None:
+    assert llm_service.normalize_spoken_bus_numbers(text) == expected
+
+
+def test_parse_transit_intent_uses_normalized_bus_number(monkeypatch) -> None:
+    monkeypatch.setattr(llm_service, "get_bool_setting", lambda name, default=True: True)
+    parsed = asyncio.run(
+        llm_service.parse_transit_intent("올림픽공원역에서 3400 열두 번 언제 도착해요")
+    )
+    assert parsed.intent == "arrival"
+    assert parsed.stop_text == "올림픽공원역"
+    assert parsed.bus_number == "3412"
 
 
 # ---------------------------------------------------------------------------

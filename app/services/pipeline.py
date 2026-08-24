@@ -31,8 +31,10 @@ from app.services.core.exceptions import (
     TransportAPIError,
 )
 from app.services.core.service_types import ParsedIntent, RouteSegment, TransportMode
+from app.services.core.settings_helper import is_mock_mode
 from app.services.response_builder import build_user_message
 from app.services.transit.transport_service import search_transport_info
+from app.services.transit.kakao_service import resolve_place_candidate
 from app.services.transit.validate_service import validate_parsed_intent
 
 logger = get_logger(__name__)
@@ -78,7 +80,12 @@ async def run_text_route(
     )
 
     try:
-        result = await _run_parsed_pipeline(parsed, destination, request_id)
+        result = await _run_parsed_pipeline(
+            parsed,
+            destination,
+            request_id,
+            require_place_confirmation=destination_x is None,
+        )
     except (CoordinateResolveError, TransportAPIError) as exc:
         logger.warning("[%s] text route lookup failed: error_type=%s", request_id, type(exc).__name__)
         result = _error_response_from_parsed(exc.user_message, parsed, transcript=destination)
@@ -142,7 +149,9 @@ async def _run_pipeline_core(
             request_id, time.monotonic() - t1, parsed.intent, parsed.confidence,
         )
 
-        return await _run_parsed_pipeline(parsed, transcript, request_id)
+        return await _run_parsed_pipeline(
+            parsed, transcript, request_id, require_place_confirmation=True
+        )
 
     except CoordinateResolveError as exc:
         # 장소명 → 좌표 변환 실패 — 사용자가 더 정확한 이름을 말해야 함
@@ -166,11 +175,23 @@ async def _run_parsed_pipeline(
     parsed: ParsedIntent,
     transcript: str,
     request_id: str,
+    require_place_confirmation: bool = False,
 ) -> dict:
     """Validate one intent and build the shared transport response."""
     validation = validate_parsed_intent(parsed)
     if not validation.is_valid:
         return _error_response_from_parsed(validation.message, parsed, transcript=transcript)
+
+    if (
+        require_place_confirmation
+        and not is_mock_mode()
+        and parsed.intent == "route"
+        and parsed.destination_text
+        and parsed.destination_x is None
+    ):
+        resolution = await resolve_place_candidate(parsed.destination_text, "목적지")
+        if resolution.needs_confirmation:
+            return _place_confirmation_response(parsed, transcript, resolution)
 
     started_at = time.monotonic()
     transport_result = await search_transport_info(parsed, request_id=request_id)
@@ -260,6 +281,7 @@ class ResponseData:
     confidence: float = 0.0
     source: str = "none"
     needs_confirmation: bool = False
+    confirmation: dict | None = None
 
     def to_dict(self) -> dict:
         # dataclasses.asdict는 route_segments 안의 RouteSegment(dataclass)도
@@ -288,3 +310,33 @@ def _error_response_from_parsed(
             needs_confirmation=True,
         )
     return {"status": "error", "message": message, "data": data.to_dict()}
+
+
+def _place_confirmation_response(parsed, transcript: str, resolution) -> dict:
+    """경로 API 호출 전 사용자가 좌표 후보를 확정할 수 있는 응답입니다."""
+    selected = resolution.selected
+    data = ResponseData(
+        transcript=transcript,
+        intent=parsed.intent,
+        origin=parsed.origin_text,
+        destination=selected.get("name"),
+        destination_x=_safe_float(selected.get("x")),
+        destination_y=_safe_float(selected.get("y")),
+        transport_mode=parsed.transport_mode,
+        confidence=parsed.confidence,
+        needs_confirmation=True,
+        confirmation={
+            "kind": "place",
+            "prompt": resolution.prompt,
+            "candidate": selected,
+            "alternatives": resolution.alternatives[:4],
+        },
+    )
+    return {"status": "success", "message": resolution.prompt, "data": data.to_dict()}
+
+
+def _safe_float(value: object) -> float | None:
+    try:
+        return float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { BusOption as BusInfo } from "../../types/bus";
 import { getDefaultArrivals, getCongestionLabel, getCongestionColor } from "../../api/busService";
-import { Accessibility, BusFront, MapPin, RefreshCw, Volume2, Wifi, ZoomIn } from "lucide-react";
+import { Accessibility, BusFront, MapPin, Radio, RefreshCw, Volume2, Wifi, ZoomIn } from "lucide-react";
 import { useAccessibilityDisplay } from "../../hooks/useAccessibilityDisplay";
 
 const STATION_NAME = import.meta.env.VITE_STATION_NAME ?? "정류장";
@@ -111,11 +111,11 @@ function SoonCard({ bus, isTracked, onTrack }: { bus: BusInfo; isTracked: boolea
   const congLabel = getCongestionLabel(bus.congestion);
   const congColor = getCongestionColor(bus.congestion);
   return (
-    <button type="button" onClick={onTrack} aria-pressed={isTracked} aria-label={describeBus(bus)} className={`flex min-w-0 flex-1 flex-col items-center justify-center gap-2 rounded-md border bg-[#1C2229] px-2 py-3 shadow-md ${isTracked ? "border-white ring-2 ring-white" : "border-[#303842]"}`}>
+    <button type="button" onClick={onTrack} aria-pressed={isTracked} aria-label={describeBus(bus)} className={`flex min-w-0 flex-col items-center justify-center gap-2 rounded-xl border bg-[#171D23] px-2 py-3 shadow-[0_8px_18px_rgba(23,29,35,0.22)] transition-transform hover:-translate-y-0.5 ${isTracked ? "border-white ring-2 ring-white" : "border-[#303842]"}`}>
       <div className={`rounded-full px-3 py-0.5 text-[12px] font-black border ${congColor}`}>
         {congLabel}
       </div>
-      <div className="max-w-full truncate text-[28px] font-black text-[#FACC15] font-mono leading-none sm:text-[36px] md:text-[44px]">
+      <div className="max-w-full truncate text-[28px] font-black text-[#FACC15] font-mono leading-none sm:text-[36px] md:text-[42px]">
         {bus.busNumber}
       </div>
       <div className="flex flex-wrap justify-center gap-1">
@@ -349,11 +349,17 @@ export function BusInfoList() {
             3분 이내 도착 예정 버스가 없습니다
           </div>
         ) : (
-          <div className="flex items-stretch gap-1 sm:gap-2">
+          <div className="grid grid-cols-2 items-stretch gap-2 sm:grid-cols-5">
             {currentSoon.map((bus) => <SoonCard key={bus.id} bus={bus} isTracked={trackedBusId === (bus.plainNo || bus.id)} onTrack={() => toggleTracking(bus)} />)}
-            {Array.from({ length: SOON_PER_PAGE - currentSoon.length }).map((_, i) => (
-              <div key={`es-${i}`} className="min-h-[92px] flex-1 rounded-md border border-[#6F611E]/20 bg-[#1C2229]/12" />
-            ))}
+            {currentSoon.length < SOON_PER_PAGE && (
+              <div
+                className="hidden min-h-[92px] items-center justify-center gap-3 rounded-xl border border-[#6F611E]/25 bg-[#E5BE24]/55 px-5 text-[#4E4214] sm:flex"
+                style={{ gridColumn: `span ${SOON_PER_PAGE - currentSoon.length}` }}
+              >
+                <span className="grid size-10 shrink-0 place-items-center rounded-full bg-black/10"><Radio className="size-5" /></span>
+                <span className="text-left"><strong className="block text-sm font-black">실시간 도착정보 수신 중</strong><span className="text-xs font-bold opacity-75">새로운 차량이 확인되면 바로 표시됩니다.</span></span>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -426,9 +432,13 @@ export function BusInfoList() {
                   );
                 })}
 
-            {!loading && Array.from({ length: Math.max(0, MAIN_PER_PAGE - currentMain.length) }).map((_, i) => (
-              <div key={`em-${i}`} className={`grid min-h-0 flex-1 grid-cols-[minmax(78px,1fr)_82px_minmax(120px,2fr)] border-b border-[#E2E8F0] md:grid-cols-[150px_110px_1fr] ${(currentMain.length + i) % 2 === 0 ? "bg-white" : "bg-[#F8FAFC]"}`} />
-            ))}
+            {!loading && currentMain.length < MAIN_PER_PAGE && (
+              <div className="grid min-h-[68px] flex-1 place-items-center bg-[linear-gradient(135deg,#f8fafc_25%,#f1f5f9_25%,#f1f5f9_50%,#f8fafc_50%,#f8fafc_75%,#f1f5f9_75%)] bg-[length:24px_24px] px-4 text-center">
+                <div className="rounded-full border border-slate-200 bg-white/95 px-4 py-2 text-xs font-bold text-slate-500 shadow-sm">
+                  현재 확인된 도착 차량은 {currentMain.length}대입니다
+                </div>
+              </div>
+            )}
           </div>
         </div>
 

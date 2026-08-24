@@ -9,6 +9,8 @@ Kakao API 실패 시 KNOWN_PLACE_COORDS(내장 좌표 목록)를 보조로 사�
 """
 
 import asyncio
+import re
+from dataclasses import dataclass
 
 import httpx
 
@@ -33,21 +35,30 @@ _default_origin_cache: tuple[str, float, float] | None = None
 _default_origin_lock = asyncio.Lock()
 
 
+@dataclass(frozen=True)
+class PlaceResolution:
+    selected: dict
+    alternatives: list[dict]
+    needs_confirmation: bool
+    prompt: str
+
+
 @_http_retry
 async def _kakao_fetch(
     kakao_key: str,
     place_text: str,
     x: float | None = None,
     y: float | None = None,
-    size: int = 1,
+    size: int = 5,
 ) -> dict:
     """Kakao Local 키워드 검색 API를 호출합니다. 실패 시 자동 재시도합니다."""
     params: dict = {"query": place_text, "size": size}
     if x is not None and y is not None:
-        # 기기 위치 기준으로 가장 가까운 결과를 반환 — 동명이인 장소명 오인식 방지
+        # 위치는 거리 정보와 보조 신호로만 사용합니다. 거리순 정렬은 이름이 정확한
+        # 목적지보다 가까운 동명이 장소를 앞세울 수 있어 정확도순을 유지합니다.
         params["x"] = x
         params["y"] = y
-        params["sort"] = "distance"
+    params["sort"] = "accuracy"
     response = await get_http_client().get(
         KAKAO_KEYWORD_SEARCH_URL,
         headers={"Authorization": f"KakaoAK {kakao_key}"},
@@ -85,6 +96,13 @@ async def resolve_place_coordinates(
 
 
 async def _resolve_via_kakao(place_text: str, label: str) -> tuple[float, float]:
+    resolution = await resolve_place_candidate(place_text, label)
+    selected = resolution.selected
+    return float(selected["x"]), float(selected["y"])
+
+
+async def resolve_place_candidate(place_text: str, label: str = "목적지") -> PlaceResolution:
+    """상위 5개를 이름·카테고리·거리로 재정렬하고 모호성을 함께 반환합니다."""
     kakao_key = get_setting("KAKAO_REST_API_KEY")
     if not kakao_key:
         raise TransportAPIError("KAKAO_REST_API_KEY가 설정되지 않았습니다.")
@@ -92,7 +110,7 @@ async def _resolve_via_kakao(place_text: str, label: str) -> tuple[float, float]
     device_x, device_y = _get_device_coordinates()
 
     try:
-        payload = await _kakao_fetch(kakao_key, place_text, device_x, device_y)
+        payload = await _kakao_fetch(kakao_key, place_text, device_x, device_y, size=5)
 
     except httpx.HTTPStatusError as exc:
         raise TransportAPIError(
@@ -106,7 +124,8 @@ async def _resolve_via_kakao(place_text: str, label: str) -> tuple[float, float]
     if not documents:
         raise CoordinateResolveError(f"'{place_text}' 검색 결과가 없습니다.")
 
-    first_place = documents[0]
+    ranked = _rank_place_documents(place_text, documents)[:5]
+    first_place = ranked[0]
 
     try:
         longitude = float(first_place["x"])
@@ -117,7 +136,11 @@ async def _resolve_via_kakao(place_text: str, label: str) -> tuple[float, float]
         ) from exc
 
     _validate_korea_coordinates(longitude, latitude, label)
-    return longitude, latitude
+    selected = _place_document_to_candidate(first_place)
+    alternatives = [_place_document_to_candidate(doc) for doc in ranked[1:]]
+    needs_confirmation = _needs_place_confirmation(place_text, ranked)
+    prompt = f"{selected['name']}이 맞나요?" if needs_confirmation else ""
+    return PlaceResolution(selected, alternatives, needs_confirmation, prompt)
 
 
 async def search_place_suggestions(
@@ -146,15 +169,76 @@ async def search_place_suggestions(
         return []
 
     return [
-        {
-            "name": doc.get("place_name", ""),
-            "address": doc.get("road_address_name") or doc.get("address_name") or "",
-            "x": doc.get("x"),
-            "y": doc.get("y"),
-        }
-        for doc in payload.get("documents", [])
+        _place_document_to_candidate(doc)
+        for doc in _rank_place_documents(query, payload.get("documents", []))
         if doc.get("place_name")
-    ]
+    ][:max_results]
+
+
+def _normalize_place_name(value: str) -> str:
+    return re.sub(r"[^0-9a-zA-Z가-힣]", "", value).lower()
+
+
+def _is_station_query(query: str) -> bool:
+    normalized = _normalize_place_name(query)
+    return normalized.endswith("역") or "지하철역" in normalized
+
+
+def _place_score(query: str, document: dict) -> tuple[float, float]:
+    query_name = _normalize_place_name(query)
+    place_name = _normalize_place_name(str(document.get("place_name") or ""))
+    score = 0.0
+    if place_name == query_name:
+        score += 120
+    elif place_name.startswith(query_name):
+        score += 90
+    elif query_name and query_name in place_name:
+        score += 60
+
+    category_code = str(document.get("category_group_code") or "")
+    category_name = str(document.get("category_name") or "")
+    if _is_station_query(query):
+        if category_code == "SW8":
+            score += 80
+        if "지하철역" in category_name:
+            score += 40
+        elif "교통" in category_name:
+            score += 20
+
+    try:
+        distance = float(document.get("distance") or 10**9)
+    except (TypeError, ValueError):
+        distance = float(10**9)
+    return score, -distance
+
+
+def _rank_place_documents(query: str, documents: list[dict]) -> list[dict]:
+    """Kakao 상위 후보를 의미 적합도 우선으로 안정 정렬합니다."""
+    return sorted(documents, key=lambda doc: _place_score(query, doc), reverse=True)
+
+
+def _needs_place_confirmation(query: str, ranked: list[dict]) -> bool:
+    if not ranked:
+        return False
+    selected_name = str(ranked[0].get("place_name") or "")
+    if _is_station_query(query) and _normalize_place_name(selected_name) != _normalize_place_name(query):
+        return True
+    if len(ranked) < 2:
+        return False
+    first_score = _place_score(query, ranked[0])[0]
+    second_score = _place_score(query, ranked[1])[0]
+    return first_score < 100 and first_score - second_score < 15
+
+
+def _place_document_to_candidate(document: dict) -> dict:
+    return {
+        "name": document.get("place_name", ""),
+        "address": document.get("road_address_name") or document.get("address_name") or "",
+        "category": document.get("category_name") or document.get("category_group_name") or "",
+        "category_code": document.get("category_group_code") or "",
+        "x": document.get("x"),
+        "y": document.get("y"),
+    }
 
 
 async def resolve_origin(origin_text: str | None) -> tuple[str, float, float]:

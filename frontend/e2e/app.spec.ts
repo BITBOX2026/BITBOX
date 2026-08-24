@@ -102,6 +102,38 @@ const routeResult = {
   ],
 };
 
+const placeConfirmationResult = {
+  success: true,
+  destination: "강남역 2호선",
+  destination_text: "강남역 2호선",
+  message: "강남역 2호선이 맞나요?",
+  buses: [],
+  audio_base64: null,
+  needs_confirmation: true,
+  confirmation: {
+    kind: "place",
+    prompt: "강남역 2호선이 맞나요?",
+    candidate: {
+      name: "강남역 2호선",
+      address: "서울 강남구 강남대로 지하 396",
+      category: "교통,수송 > 지하철,전철 > 수도권2호선",
+      category_code: "SW8",
+      x: "127.02800140627488",
+      y: "37.49808633653005",
+    },
+    alternatives: [
+      {
+        name: "강남역 신분당선",
+        address: "서울 강남구 강남대로 지하 396",
+        category: "교통,수송 > 지하철,전철 > 신분당선",
+        category_code: "SW8",
+        x: "127.028185245594",
+        y: "37.4967771303817",
+      },
+    ],
+  },
+};
+
 async function mockBoard(page: Page) {
   await page.route("**/api/bus/default", (route) => route.fulfill({ json: arrivals }));
 }
@@ -112,6 +144,7 @@ async function expectNoHorizontalOverflow(page: Page) {
 }
 
 test.beforeEach(async ({ page }) => {
+  await page.route("**/api/places/suggest?**", (route) => route.fulfill({ json: { suggestions: [] } }));
   await page.addInitScript(() => {
     class FakeUtterance {
       text: string;
@@ -196,6 +229,29 @@ test("supports keyboard autocomplete selection", async ({ page }) => {
   await input.press("Enter");
   await input.press("Enter");
   await expect(page.getByText("강남역 2호선 방면")).toBeVisible();
+});
+
+test("confirms an ambiguous station before requesting its route", async ({ page }) => {
+  const requestBodies: Record<string, unknown>[] = [];
+  await page.route("**/api/route", async (route) => {
+    requestBodies.push(route.request().postDataJSON());
+    await route.fulfill({ json: requestBodies.length === 1 ? placeConfirmationResult : routeResult });
+  });
+
+  await page.goto("/");
+  await page.getByLabel("버스 목적지").fill("강남역");
+  await page.getByRole("button", { name: "버스 경로 검색" }).click();
+
+  const confirmation = page.getByRole("dialog", { name: "강남역 2호선이 맞나요?" });
+  await expect(confirmation).toBeVisible();
+  await expect(confirmation.getByText("강남역 신분당선")).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+  await confirmation.getByRole("button", { name: /강남역 2호선/ }).click();
+
+  await expect(page.getByText("강남역 2호선 방면")).toBeVisible();
+  expect(requestBodies).toHaveLength(2);
+  expect(requestBodies[1].destination_x).toBe(127.02800140627488);
+  expect(requestBodies[1].destination_y).toBe(37.49808633653005);
 });
 
 test("shows route server errors instead of an empty result", async ({ page }) => {

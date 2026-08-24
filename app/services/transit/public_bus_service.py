@@ -49,11 +49,11 @@ async def search_bus_arrival(parsed: ParsedIntent) -> TransportResult:
     # 1단계: 버스 번호 → 노선 ID
     bus_route = await search_bus_route(parsed.bus_number)
     if not bus_route:
-        raise TransportAPIError(user_message="해당 버스 노선을 찾지 못했습니다. 현재 서울 버스만 조회 가능합니다.")
+        raise TransportAPIError(user_message=_bus_number_reconfirmation_message(parsed.bus_number))
 
     bus_route_id = first_item_value(bus_route, ["busRouteId"])
     if not bus_route_id:
-        raise TransportAPIError(user_message="해당 버스 노선을 찾지 못했습니다. 현재 서울 버스만 조회 가능합니다.")
+        raise TransportAPIError(user_message=_bus_number_reconfirmation_message(parsed.bus_number))
 
     # 2단계: 노선 경유 정류소에서 정류장 이름으로 검색
     route_station = await _find_route_station_by_stop_text(
@@ -110,11 +110,9 @@ async def search_bus_route(bus_number: str) -> dict[str, str] | None:
     if not items:
         return None
 
-    # 정확히 일치하는 노선을 우선하고, 없으면 첫 번째 결과를 사용
+    # 검색 API는 유사 노선도 반환하므로 정확히 일치하지 않으면 선택하지 않습니다.
     exact_match = find_first(items, lambda item: is_matching_bus_route(item, bus_number))
-    selected = exact_match or items[0]
-
-    return selected if first_item_value(selected, ["busRouteId"]) else None
+    return exact_match if exact_match and first_item_value(exact_match, ["busRouteId"]) else None
 
 
 async def get_bus_arrival_time(
@@ -265,7 +263,14 @@ async def _search_arrival_at_default_stop(bus_number: str) -> TransportResult:
             source="public_data",
         )
 
-    raise TransportAPIError(user_message="해당 정류장의 버스 도착 정보를 찾지 못했습니다.")
+    raise TransportAPIError(user_message=_bus_number_reconfirmation_message(bus_number))
+
+
+def _bus_number_reconfirmation_message(bus_number: str) -> str:
+    return (
+        f"현재 정류장에서 {bus_number}번 노선을 확인하지 못했습니다. "
+        "비슷한 번호로 추정하지 않을게요. 버스 번호를 다시 말씀해 주세요."
+    )
 
 
 def _arrmsg_or_minutes(raw_arrmsg: str | None, minutes: int | None) -> str | None:

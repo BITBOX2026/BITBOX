@@ -10,7 +10,12 @@
 
 * { box-sizing: border-box; }
 html, body, #root { min-width: 320px; min-height: 100%; margin: 0; }
-body { background: #dce3e6; -webkit-font-smoothing: antialiased; }
+body {
+  background:
+    radial-gradient(circle at 18% 12%, rgb(240 201 41 / 16%), transparent 28rem),
+    linear-gradient(135deg, #dce3e6 0%, #edf2f4 48%, #d7e0e3 100%);
+  -webkit-font-smoothing: antialiased;
+}
 button, input { font: inherit; }
 button { cursor: pointer; }
 button:focus-visible, input:focus-visible { outline: 3px solid #f0c929; outline-offset: 2px; }

@@ -62,17 +62,32 @@ python -m venv .venv
 source .venv/bin/activate
 
 pip install -r requirements-backend.txt
+
+cd frontend
+npm install
 ```
 
 ---
 
-## 3. 서버 실행
+## 3. 로컬 실행
 
-```bash
+터미널 1에서 백엔드를 실행합니다.
+
+```powershell
 uvicorn app.main:app --reload
 ```
 
-서버 상태 확인:
+터미널 2에서 프론트엔드를 실행합니다.
+
+```powershell
+cd frontend
+npm run dev
+```
+
+프론트엔드는 `http://127.0.0.1:5173`, 백엔드는 `http://127.0.0.1:8000`에서 실행됩니다.
+개발 서버가 `/api` 요청을 백엔드로 전달하므로 브라우저 코드에 API 토큰을 넣지 않습니다.
+
+상태 확인:
 
 ```
 http://127.0.0.1:8000/health
@@ -80,7 +95,18 @@ http://127.0.0.1:8000/health
 
 ---
 
-## 4. API
+## 4. 프론트·백엔드 요청 흐름
+
+```text
+정류장 전광판  → GET  /api/bus/default
+목적지 자동완성 → GET  /api/places/suggest
+텍스트 길찾기   → POST /api/route
+음성 길찾기     → POST /api/upload → STT → 의도 분석 → 교통 API → TTS
+```
+
+`/api/route`와 `/api/upload`는 같은 프론트 응답 구조를 사용하므로 검색 방식이 달라도 동일한 결과 화면으로 연결됩니다. 지도는 경로 결과에 좌표가 있을 때만 Kakao SDK를 불러옵니다.
+
+라즈베리파이 등 원시 백엔드 클라이언트는 `POST /api/process`를 사용할 수 있습니다.
 
 `POST /api/process` — WAV 파일을 업로드하면 경로 안내 응답을 반환합니다.
 

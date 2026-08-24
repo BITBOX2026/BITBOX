@@ -1,6 +1,6 @@
 """FastAPI response models for the public API."""
 
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -43,6 +43,7 @@ class ProcessDataResponse(BaseModel):
     confidence: float | None = None
     source: str | None = None
     needs_confirmation: bool | None = None
+    confirmation: dict | None = None
 
 
 class ProcessResponse(BaseModel):
@@ -51,6 +52,46 @@ class ProcessResponse(BaseModel):
     data: ProcessDataResponse = Field(default_factory=ProcessDataResponse)
     audio_base64: str | None = None
     request_id: str | None = None
+
+
+class FrontendRouteStep(BaseModel):
+    type: Literal["walk", "bus"]
+    durationMin: int
+    description: str | None = None
+    fromStop: str | None = None
+    toStop: str | None = None
+    busNumber: str | None = None
+
+
+class FrontendRouteDetail(BaseModel):
+    busNumber: str
+    totalMin: int
+    steps: list[FrontendRouteStep] = Field(default_factory=list)
+    origin: str | None = None
+    origin_x: float | None = None
+    origin_y: float | None = None
+    destination_x: float | None = None
+    destination_y: float | None = None
+    route_segments: list[RouteSegmentResponse] | None = None
+
+
+class FrontendBusOption(BaseModel):
+    id: str
+    busNumber: str
+    arrivalMin: int
+    traTimeSec: int
+    arrivalMsg: str
+    currentStationName: str
+    remainingStops: int
+    busType: int
+    congestion: Literal[0, 3, 4, 5]
+    isFullFlag: bool
+    isLastBus: bool
+    plainNo: str
+    isSecond: bool
+    totalMin: int | None = None
+    steps: list[FrontendRouteStep] | None = None
+    routeDetail: FrontendRouteDetail | None = None
 
 
 class UploadCompatResponse(BaseModel):
@@ -64,9 +105,11 @@ class UploadCompatResponse(BaseModel):
     arrival_time_2: str | None = None
     first_bus_time: str | None = None
     message: str
-    buses: list[dict[str, Any]] = Field(default_factory=list)
+    buses: list[FrontendBusOption] = Field(default_factory=list)
     audio_base64: str | None = None
     request_id: str | None = None
+    needs_confirmation: bool = False
+    confirmation: dict | None = None
 
 
 class TextRouteRequest(BaseModel):

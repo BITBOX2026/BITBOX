@@ -1,14 +1,19 @@
 import { AlertCircle, ShieldCheck, X } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { DestinationSearch } from "./DestinationSearch";
 import { PrivacyNotice, VOICE_CONSENT_KEY } from "./PrivacyNotice";
 import { VoiceLoading } from "./VoiceLoading";
 import { VoiceMicButton } from "./VoiceMicButton";
 import { VoiceRecording } from "./VoiceRecording";
 import { VoiceResult } from "./VoiceResult";
+import { VoiceConfirmation } from "./VoiceConfirmation";
 import { useVoiceRecorder } from "../../hooks/useVoiceRecorder";
 
-export function VoiceAssistant() {
+interface VoiceAssistantProps {
+  onResultModeChange?: (isResult: boolean) => void;
+}
+
+export function VoiceAssistant({ onResultModeChange }: VoiceAssistantProps) {
   const [privacyOpen, setPrivacyOpen] = useState(false);
   const [consentRequired, setConsentRequired] = useState(false);
   const {
@@ -19,11 +24,17 @@ export function VoiceAssistant() {
     message,
     audioBase64,
     error,
+    confirmation,
     startRecording,
     stopRecording,
     submitTextRoute,
+    confirmPlace,
     reset,
   } = useVoiceRecorder();
+
+  useEffect(() => {
+    onResultModeChange?.(status === "result");
+  }, [onResultModeChange, status]);
 
   const requestRecording = () => {
     if (localStorage.getItem(VOICE_CONSENT_KEY) !== "accepted") {
@@ -108,12 +119,20 @@ export function VoiceAssistant() {
           )}
 
           {status === "loading" && <VoiceLoading />}
+          {status === "confirming" && confirmation && (
+            <VoiceConfirmation
+              confirmation={confirmation}
+              transcript={transcript}
+              onSelect={(place) => void confirmPlace(place)}
+              onRetry={requestRecording}
+            />
+          )}
         </div>
 
         <div className="flex flex-col items-center gap-2">
-          <VoiceMicButton status={status} onClick={toggleRecording} />
+          {status !== "confirming" && <VoiceMicButton status={status} onClick={toggleRecording} />}
           <span className="text-center text-xs font-bold text-white/65">
-            {status === "idle" ? "음성으로 찾기" : status === "listening" ? "눌러서 완료" : "조회 중"}
+            {status === "idle" ? "음성으로 찾기" : status === "listening" ? "눌러서 완료" : status === "confirming" ? "후보를 선택하세요" : "조회 중"}
           </span>
           <button type="button" onClick={() => { setConsentRequired(false); setPrivacyOpen(true); }} aria-label="개인정보 처리 안내" title="개인정보 처리 안내" className="grid size-7 place-items-center rounded text-white/55 hover:bg-white/10 hover:text-white">
             <ShieldCheck className="size-4" />

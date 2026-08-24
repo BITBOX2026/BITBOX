@@ -162,7 +162,7 @@ export function DestinationSearch({ disabled, onSubmit }: DestinationSearchProps
                 className={`flex w-full items-start gap-2 px-3 py-2 text-left hover:bg-slate-100 ${activeIndex === index ? "bg-slate-100" : ""}`}
               >
                 <MapPin className="mt-0.5 size-4 shrink-0 text-[#145466]" />
-                <span className="min-w-0"><strong className="block truncate text-sm">{suggestion.name}</strong><span className="block truncate text-xs text-slate-500">{suggestion.address}</span></span>
+                <span className="min-w-0"><strong className="block truncate text-sm">{suggestion.name}</strong><span className="block truncate text-xs text-slate-500">{suggestion.category || suggestion.address}</span></span>
               </button>
             ))}
           </div>

@@ -14,6 +14,15 @@ export type TransitResponse = {
   buses: Array<BusOption & { routeDetail?: RouteDetail }>;
   audio_base64?: string | null;
   request_id?: string | null;
+  needs_confirmation?: boolean;
+  confirmation?: TransitConfirmation | null;
+};
+
+export type TransitConfirmation = {
+  kind: "place" | "bus_number";
+  prompt: string;
+  candidate?: PlaceSuggestion | null;
+  alternatives?: PlaceSuggestion[];
 };
 
 export interface PlaceSuggestion {
@@ -21,6 +30,8 @@ export interface PlaceSuggestion {
   address: string;
   x?: string | null;
   y?: string | null;
+  category?: string | null;
+  category_code?: string | null;
 }
 
 export interface RouteDestination {
@@ -48,13 +59,20 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
   });
 }
 
-async function parseTransitResponse(response: Response): Promise<TransitResponse> {
+export async function parseApiResponse<T>(response: Response, fallbackMessage: string): Promise<T> {
   const payload = await response.json().catch(() => null);
   if (!response.ok) {
     const detail = payload?.detail || payload?.message;
-    throw new Error(withSupportCode(detail || `서버 요청에 실패했습니다. (${response.status})`, response));
+    throw new Error(withSupportCode(detail || `${fallbackMessage} (${response.status})`, response));
   }
-  return payload as TransitResponse;
+  if (payload === null) {
+    throw new Error(withSupportCode("서버 응답 형식을 확인하지 못했습니다.", response));
+  }
+  return payload as T;
+}
+
+async function parseTransitResponse(response: Response): Promise<TransitResponse> {
+  return parseApiResponse<TransitResponse>(response, "서버 요청에 실패했습니다.");
 }
 
 export async function uploadVoiceAudio(blob: Blob, signal?: AbortSignal): Promise<TransitResponse> {
@@ -95,10 +113,7 @@ export async function requestTextRoute(
 export async function suggestPlaces(query: string, signal?: AbortSignal): Promise<PlaceSuggestion[]> {
   const params = new URLSearchParams({ query: query.trim() });
   const response = await apiFetch(`/api/places/suggest?${params}`, { signal });
-  const payload = await response.json().catch(() => null);
-  if (!response.ok) {
-    throw new Error(withSupportCode(payload?.detail || payload?.message || `장소 검색에 실패했습니다. (${response.status})`, response));
-  }
+  const payload = await parseApiResponse<{ suggestions?: PlaceSuggestion[] }>(response, "장소 검색에 실패했습니다.");
   return Array.isArray(payload?.suggestions) ? payload.suggestions : [];
 }
 

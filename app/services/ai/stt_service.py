@@ -52,6 +52,10 @@ async def transcribe_audio(
             model=stt_model,
             file=audio_file,
             language="ko",
+            prompt=(
+                "서울 버스 안내 음성입니다. 버스 노선 번호는 3412번, 3323번처럼 "
+                "아라비아 숫자로 정확히 적고, 장소명과 지하철 노선명을 보존하세요."
+            ),
             response_format="json",
         )
 

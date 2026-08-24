@@ -190,6 +190,8 @@ def _build_upload_compat_response(result: dict) -> dict:
         "buses": _build_buses_from_result(data, is_success),
         "audio_base64": result.get("audio_base64"),
         "request_id": result.get("request_id"),
+        "needs_confirmation": bool(data.get("needs_confirmation")),
+        "confirmation": data.get("confirmation"),
     }
 
 

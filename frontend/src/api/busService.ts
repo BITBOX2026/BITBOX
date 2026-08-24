@@ -1,7 +1,6 @@
 import type { BusOption, BusCongestion } from "../types/bus";
-import { apiFetch } from "./client";
+import { apiFetch, parseApiResponse } from "./client";
 
-// ─── 기본 전광판(/api/bus/default) 전용 인터페이스 ───
 interface DefaultBackendItem {
   bus_number: string;
   direction: string;
@@ -32,9 +31,6 @@ interface DefaultApiResponse {
   message: string;
 }
 
-/**
- * 혼잡도 수치 변환 헬퍼 함수
- */
 export function toCongestion(val?: string | null): BusCongestion {
   const n = Number.parseInt(val ?? "", 10);
   if (n === 3) return 3;
@@ -43,9 +39,6 @@ export function toCongestion(val?: string | null): BusCongestion {
   return 0;
 }
 
-/**
- * 문자열에서 남은 정류장 수 파싱
- */
 export function parseRemainingStops(arrmsg?: string | null): number {
   if (!arrmsg) return -1;
   if (arrmsg.includes("곧 도착")) return 0;
@@ -53,21 +46,13 @@ export function parseRemainingStops(arrmsg?: string | null): number {
   return match ? parseInt(match[1], 10) : -1;
 }
 
-/**
- * 노선명은 마을버스의 한글 지역명을 보존하고 불필요한 "번" 접미사만 제거
- */
 export function cleanBusNumber(name: string): string {
   return name.trim().replace(/\s*번$/, "");
 }
 
-/**
- * 📺 메인 화면 상시 표시 기본 버스 정보 조회 (Default 전용)
- */
 export async function getDefaultArrivals(): Promise<{ stationName: string; buses: BusOption[] }> {
   const res = await apiFetch("/api/bus/default", { signal: AbortSignal.timeout(5000) });
-  if (!res.ok) throw new Error(`HTTP 오류: ${res.status}`);
-
-  const data: DefaultApiResponse = await res.json();
+  const data = await parseApiResponse<DefaultApiResponse>(res, "버스 도착 정보를 불러오지 못했습니다.");
   if (!data.success) throw new Error(data.message || "기본 버스 정보를 가져오는데 실패했습니다.");
 
   const stationName = data.station_name || "정류장";
@@ -77,7 +62,6 @@ export async function getDefaultArrivals(): Promise<{ stationName: string; buses
   items.forEach((item) => {
     const cleanNum = cleanBusNumber(item.bus_number);
 
-    // 1번째 도착 예정 버스 객체화
     if (item.first_arrival_min != null && item.first_arrival_min >= 0) {
       result.push({
         id: item.raw_veh_id1 || `${item.bus_number}-1`,
@@ -96,7 +80,6 @@ export async function getDefaultArrivals(): Promise<{ stationName: string; buses
       });
     }
 
-    // 2번째 도착 예정 버스 객체화
     if (item.second_arrival_min != null && item.second_arrival_min >= 0) {
       result.push({
         id: item.raw_veh_id2 || `${item.bus_number}-2`,
@@ -116,10 +99,7 @@ export async function getDefaultArrivals(): Promise<{ stationName: string; buses
     }
   });
 
-  // 1. 남은 시간순 오름차순 정렬
   const sortedBuses = result.sort((a, b) => a.arrivalMin - b.arrivalMin);
-
-  // 2. [필터링] 현재 위치 명칭(currentStationName)이 유실된 불완전 버스 데이터 전격 제거
   const withLocationBuses = sortedBuses.filter((bus) => bus.currentStationName !== "");
 
   return {
@@ -128,9 +108,6 @@ export async function getDefaultArrivals(): Promise<{ stationName: string; buses
   };
 }
 
-/**
- * UI 뱃지용 혼잡도 라벨/컬러 매핑 헬퍼 함수들
- */
 export function getCongestionLabel(c: BusCongestion): string {
   return ({ 0: "정보 없음", 3: "여유", 4: "보통", 5: "혼잡" } as Record<BusCongestion, string>)[c];
 }
