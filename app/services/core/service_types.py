@@ -8,7 +8,6 @@ STT → LLM → 검증 → 교통 API → 응답 빌더 순서로 전달되며,
 from dataclasses import dataclass
 from typing import Literal
 
-
 # 허용된 intent 값 — LLM이 분류하는 사용자 요청 유형
 IntentType = Literal["route", "arrival", "unknown"]
 

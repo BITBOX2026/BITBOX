@@ -123,6 +123,7 @@ export function VoiceAssistant({ onResultModeChange }: VoiceAssistantProps) {
             <VoiceConfirmation
               confirmation={confirmation}
               transcript={transcript}
+              audioBase64={audioBase64}
               onSelect={(place) => void confirmPlace(place)}
               onRetry={requestRecording}
             />

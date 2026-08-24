@@ -52,7 +52,10 @@ AUDIO_FILENAME_BY_CONTENT_TYPE = {
 
 @router.post("/process", response_model=ProcessResponse)
 @limiter.limit("10/minute")  # IP당 분당 최대 10회 요청 허용
-async def process_audio(request: Request, file: UploadFile = File(...)) -> dict:
+async def process_audio(
+    request: Request,
+    file: UploadFile = File(...),  # noqa: B008 - FastAPI upload injection
+) -> dict:
     """
     음성 파일을 받아 전체 백엔드 파이프라인을 실행합니다.
 
@@ -125,7 +128,10 @@ async def process_audio(request: Request, file: UploadFile = File(...)) -> dict:
 
 @router.post("/upload", response_model=UploadCompatResponse)
 @limiter.limit("10/minute")
-async def upload_audio(request: Request, file: UploadFile = File(...)) -> dict:
+async def upload_audio(
+    request: Request,
+    file: UploadFile = File(...),  # noqa: B008 - FastAPI upload injection
+) -> dict:
     """Compatibility alias for the existing React frontend."""
     result = await process_audio(request, file)
     return _build_upload_compat_response(result)

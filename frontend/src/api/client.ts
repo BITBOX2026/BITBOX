@@ -19,10 +19,10 @@ export type TransitResponse = {
 };
 
 export type TransitConfirmation = {
-  kind: "place" | "bus_number";
+  kind: "place";
   prompt: string;
-  candidate?: PlaceSuggestion | null;
-  alternatives?: PlaceSuggestion[];
+  candidate: PlaceSuggestion;
+  alternatives: PlaceSuggestion[];
 };
 
 export interface PlaceSuggestion {

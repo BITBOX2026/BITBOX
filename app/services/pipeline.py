@@ -33,8 +33,8 @@ from app.services.core.exceptions import (
 from app.services.core.service_types import ParsedIntent, RouteSegment, TransportMode
 from app.services.core.settings_helper import is_mock_mode
 from app.services.response_builder import build_user_message
-from app.services.transit.transport_service import search_transport_info
 from app.services.transit.kakao_service import resolve_place_candidate
+from app.services.transit.transport_service import search_transport_info
 from app.services.transit.validate_service import validate_parsed_intent
 
 logger = get_logger(__name__)

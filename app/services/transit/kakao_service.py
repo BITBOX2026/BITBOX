@@ -14,6 +14,7 @@ from dataclasses import dataclass
 
 import httpx
 
+from app.core.logger import get_logger
 from app.services.core.constants import (
     KAKAO_KEYWORD_SEARCH_URL,
     KNOWN_PLACE_COORDS,
@@ -22,11 +23,10 @@ from app.services.core.constants import (
     KOREA_LONGITUDE_MAX,
     KOREA_LONGITUDE_MIN,
 )
-from app.core.logger import get_logger
 from app.services.core.exceptions import CoordinateResolveError, TransportAPIError
 from app.services.core.http_client import get_http_client
 from app.services.core.http_utils import http_retry as _http_retry
-from app.services.core.settings_helper import get_bool_setting, get_setting
+from app.services.core.settings_helper import get_setting
 
 logger = get_logger(__name__)
 

@@ -134,6 +134,18 @@ const placeConfirmationResult = {
   },
 };
 
+const terminalArrivalResult = {
+  success: true,
+  intent: "arrival",
+  destination: "송파책박물관 정류장",
+  destination_text: "송파책박물관 정류장",
+  message: "3412번 버스는 운행이 종료되었습니다. 내일 첫차는 오전 5시 30분입니다.",
+  buses: [],
+  audio_base64: null,
+  needs_confirmation: false,
+  confirmation: null,
+};
+
 async function mockBoard(page: Page) {
   await page.route("**/api/bus/default", (route) => route.fulfill({ json: arrivals }));
 }
@@ -141,6 +153,55 @@ async function mockBoard(page: Page) {
 async function expectNoHorizontalOverflow(page: Page) {
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1);
   expect(overflow).toBe(false);
+}
+
+async function installFakeRecorder(page: Page) {
+  await page.addInitScript(() => {
+    localStorage.setItem("bitbox.voiceConsent.v1", "accepted");
+
+    const stream = {
+      getTracks: () => [{ stop() {} }],
+    };
+
+    class FakeAudioContext {
+      state = "running";
+      createAnalyser() {
+        return {
+          fftSize: 32,
+          getByteFrequencyData(data: Uint8Array) { data.fill(12); },
+        };
+      }
+      createMediaStreamSource() { return { connect() {} }; }
+      resume() { return Promise.resolve(); }
+      close() { this.state = "closed"; return Promise.resolve(); }
+    }
+
+    class FakeMediaRecorder {
+      static isTypeSupported() { return true; }
+      state = "inactive";
+      mimeType = "audio/webm";
+      stream: typeof stream;
+      ondataavailable: ((event: { data: Blob }) => void) | null = null;
+      onstop: (() => void) | null = null;
+      constructor(inputStream: typeof stream) { this.stream = inputStream; }
+      start() { this.state = "recording"; }
+      stop() {
+        this.state = "inactive";
+        this.ondataavailable?.({
+          data: new Blob([new Uint8Array([0x1a, 0x45, 0xdf, 0xa3])], { type: "audio/webm" }),
+        });
+        this.onstop?.();
+      }
+    }
+
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: { getUserMedia: async () => stream },
+    });
+    Object.defineProperty(window, "AudioContext", { configurable: true, value: FakeAudioContext });
+    Object.defineProperty(window, "webkitAudioContext", { configurable: true, value: FakeAudioContext });
+    Object.defineProperty(window, "MediaRecorder", { configurable: true, value: FakeMediaRecorder });
+  });
 }
 
 test.beforeEach(async ({ page }) => {
@@ -160,6 +221,8 @@ test.beforeEach(async ({ page }) => {
         speaking: false,
         cancel() { this.speaking = false; },
         speak(utterance: FakeUtterance) {
+          const trackedWindow = window as Window & { __spokenPrompts?: string[] };
+          trackedWindow.__spokenPrompts = [...(trackedWindow.__spokenPrompts || []), utterance.text];
           this.speaking = true;
           window.setTimeout(() => { this.speaking = false; utterance.onend?.(); }, 20);
         },
@@ -245,8 +308,17 @@ test("confirms an ambiguous station before requesting its route", async ({ page 
   const confirmation = page.getByRole("dialog", { name: "강남역 2호선이 맞나요?" });
   await expect(confirmation).toBeVisible();
   await expect(confirmation.getByText("강남역 신분당선")).toBeVisible();
+  const primaryCandidate = confirmation.getByRole("button", { name: /강남역 2호선/ });
+  await expect(primaryCandidate).toBeFocused();
+  await expect.poll(() => page.evaluate(() => (
+    window as Window & { __spokenPrompts?: string[] }
+  ).__spokenPrompts?.length || 0)).toBeGreaterThanOrEqual(1);
+  await confirmation.getByRole("button", { name: "질문 다시 듣기" }).click();
+  await expect.poll(() => page.evaluate(() => (
+    window as Window & { __spokenPrompts?: string[] }
+  ).__spokenPrompts?.length || 0)).toBeGreaterThanOrEqual(2);
   await expectNoHorizontalOverflow(page);
-  await confirmation.getByRole("button", { name: /강남역 2호선/ }).click();
+  await primaryCandidate.click();
 
   await expect(page.getByText("강남역 2호선 방면")).toBeVisible();
   expect(requestBodies).toHaveLength(2);
@@ -269,6 +341,37 @@ test("handles denied microphone permission", async ({ page, context }) => {
   await expect(page.getByRole("dialog", { name: "음성·위치정보 처리 안내" })).toBeVisible();
   await page.getByRole("button", { name: "동의하고 마이크 사용" }).click();
   await expect(page.getByRole("alert")).toContainText("마이크를 사용할 수 없습니다");
+});
+
+test("uploads a browser recording and opens place confirmation", async ({ page }) => {
+  await installFakeRecorder(page);
+  let uploadContentType = "";
+  await page.route("**/api/upload", async (route) => {
+    uploadContentType = route.request().headers()["content-type"] || "";
+    await route.fulfill({ json: placeConfirmationResult });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "음성 입력 시작" }).click();
+  await expect(page.getByRole("button", { name: "음성 입력 완료" })).toBeVisible();
+  await page.getByRole("button", { name: "음성 입력 완료" }).click();
+
+  await expect(page.getByRole("dialog", { name: "강남역 2호선이 맞나요?" })).toBeVisible();
+  expect(uploadContentType).toContain("multipart/form-data");
+});
+
+test("renders terminal arrival as information instead of an error", async ({ page }) => {
+  await installFakeRecorder(page);
+  await page.route("**/api/upload", (route) => route.fulfill({ json: terminalArrivalResult }));
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "음성 입력 시작" }).click();
+  await page.getByRole("button", { name: "음성 입력 완료" }).click();
+
+  const informationCard = page.getByRole("heading", { name: "버스 운행 안내" }).locator("..");
+  await expect(informationCard).toBeVisible();
+  await expect(informationCard.getByText(/3412번 버스는 운행이 종료되었습니다/)).toBeVisible();
+  await expect(page.getByRole("alert")).toHaveCount(0);
 });
 
 test("requires voice consent and clears local recent destinations", async ({ page }) => {

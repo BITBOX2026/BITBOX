@@ -13,7 +13,6 @@ import pytest
 from app.services.ai import llm_service
 from app.services.core.service_types import ParsedIntent
 
-
 # ---------------------------------------------------------------------------
 # _extract_bus_number
 # ---------------------------------------------------------------------------

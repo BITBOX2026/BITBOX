@@ -3,16 +3,19 @@ import os
 import re
 
 from openai import AsyncOpenAI
-
-from app.core.logger import get_logger
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_fixed
 
+from app.core.logger import get_logger
+from app.services.ai.korean_number_normalizer import normalize_spoken_bus_numbers
 from app.services.core.constants import DEFAULT_LLM_MODEL, TRANSIT_INTENT_SYSTEM_PROMPT
 from app.services.core.exceptions import LLMParsingError
 from app.services.core.openai_client import get_openai_client as _get_openai_client
 from app.services.core.service_types import ParsedIntent
-from app.services.core.settings_helper import get_bool_setting, get_setting, is_mock_mode
-from app.services.ai.korean_number_normalizer import normalize_spoken_bus_numbers
+from app.services.core.settings_helper import (
+    get_bool_setting,
+    get_setting,
+    is_mock_mode,
+)
 
 logger = get_logger(__name__)
 

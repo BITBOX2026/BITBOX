@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Home, MapPin, Mic, Play, RotateCcw, Square, Volume2 } from "lucide-react";
+import { Home, Info, MapPin, Mic, Play, RotateCcw, Square, Volume2 } from "lucide-react";
 import type { BusOption } from "../../../types/bus";
 import { BusList } from "./BusList";
 import { RouteDetailOverlay } from "./RouteDetail";
@@ -105,7 +105,7 @@ export function VoiceResult({
       </header>
 
       <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden sm:flex-row">
-        <BusList buses={buses} selectedId={selectedBus?.id} onBusClick={setSelectedBus} />
+        {buses.length > 0 && <BusList buses={buses} selectedId={selectedBus?.id} onBusClick={setSelectedBus} />}
         <div className="relative min-w-0 flex-1 bg-white">
           {selectedBus?.routeDetail ? (
             <RouteDetailOverlay
@@ -115,7 +115,13 @@ export function VoiceResult({
               onToggleView={() => setViewMode((mode) => mode === "text" ? "map" : "text")}
             />
           ) : (
-            <div className="grid h-full place-items-center px-4 text-center text-sm font-bold text-slate-500">경로 정보를 준비하고 있습니다.</div>
+            <div className="grid h-full place-items-center bg-slate-50 px-5 text-center">
+              <div className="max-w-xl rounded-xl border border-slate-200 bg-white px-6 py-7 shadow-sm">
+                <Info className="mx-auto mb-3 size-9 text-[#145466]" />
+                <h2 className="text-xl font-black text-slate-900">버스 운행 안내</h2>
+                <p className="mt-3 text-base font-bold leading-relaxed text-slate-700">{message || "현재 표시할 수 있는 버스 도착 정보가 없습니다."}</p>
+              </div>
+            </div>
           )}
         </div>
       </div>

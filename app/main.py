@@ -136,7 +136,12 @@ def health_check() -> HealthResponse:
 
 @app.get("/ready", response_model=ReadinessResponse)
 def readiness_check() -> ReadinessResponse:
-    """Report readiness after startup validation has completed."""
+    """Report readiness and fail while a persistent external circuit is open."""
+    if any(state.get("open") for state in circuit_snapshot().values()):
+        raise HTTPException(
+            status_code=503,
+            detail="외부 교통 서비스 연결이 일시적으로 불안정합니다.",
+        )
     return ReadinessResponse(status="ready", version=app.version)
 
 

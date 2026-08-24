@@ -2,7 +2,6 @@
 
 import re
 
-
 _NATIVE_TENS = {
     "열": 10,
     "스물": 20,

@@ -28,9 +28,11 @@ def _request(url: str) -> tuple[int, dict[str, str], bytes]:
 
 def _certificate_days_remaining(hostname: str, port: int) -> int:
     context = ssl.create_default_context()
-    with socket.create_connection((hostname, port), timeout=10) as raw_socket:
-        with context.wrap_socket(raw_socket, server_hostname=hostname) as tls_socket:
-            certificate = tls_socket.getpeercert()
+    with (
+        socket.create_connection((hostname, port), timeout=10) as raw_socket,
+        context.wrap_socket(raw_socket, server_hostname=hostname) as tls_socket,
+    ):
+        certificate = tls_socket.getpeercert()
     expires_at = datetime.strptime(certificate["notAfter"], "%b %d %H:%M:%S %Y %Z").replace(tzinfo=UTC)
     return (expires_at - datetime.now(UTC)).days
 

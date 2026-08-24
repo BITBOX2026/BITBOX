@@ -3,10 +3,15 @@
 import asyncio
 import base64
 import json
+import sys
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from app.services.ai.tts_service import generate_tts_audio
 from app.services.pipeline import _run_pipeline_core
-
 
 PHRASES = [
     "올림픽공원역에서 삼사일이 번 버스 언제 도착해요",

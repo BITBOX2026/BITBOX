@@ -52,7 +52,7 @@ async def generate_tts_audio(text: str) -> str | None:
 
         return base64.b64encode(response.content).decode("utf-8")
 
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - TTS is optional and must never fail the text response.
         # TTS 실패는 경고만 기록하고 None 반환 — 텍스트 안내는 계속 전달됨
         logger.warning("TTS 생성 실패 (텍스트 응답은 정상 반환): error_type=%s", type(exc).__name__)
         return None

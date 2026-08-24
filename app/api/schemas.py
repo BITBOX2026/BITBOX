@@ -18,6 +18,22 @@ class RouteSegmentResponse(BaseModel):
     path_points: list[dict[str, float]] | None = None
 
 
+class PlaceCandidateResponse(BaseModel):
+    name: str
+    address: str
+    category: str = ""
+    category_code: str = ""
+    x: str
+    y: str
+
+
+class PlaceConfirmationResponse(BaseModel):
+    kind: Literal["place"]
+    prompt: str
+    candidate: PlaceCandidateResponse
+    alternatives: list[PlaceCandidateResponse] = Field(default_factory=list)
+
+
 class ProcessDataResponse(BaseModel):
     transcript: str | None = None
     intent: str | None = None
@@ -43,7 +59,7 @@ class ProcessDataResponse(BaseModel):
     confidence: float | None = None
     source: str | None = None
     needs_confirmation: bool | None = None
-    confirmation: dict | None = None
+    confirmation: PlaceConfirmationResponse | None = None
 
 
 class ProcessResponse(BaseModel):
@@ -109,7 +125,7 @@ class UploadCompatResponse(BaseModel):
     audio_base64: str | None = None
     request_id: str | None = None
     needs_confirmation: bool = False
-    confirmation: dict | None = None
+    confirmation: PlaceConfirmationResponse | None = None
 
 
 class TextRouteRequest(BaseModel):

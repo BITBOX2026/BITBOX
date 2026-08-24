@@ -8,13 +8,18 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 from starlette.requests import Request
 
+import app.api.gateway as gateway_module
+import app.routers.bus as bus_module
 from app.api.gateway import _build_upload_compat_response, _looks_like_supported_audio
 from app.api.schemas import ProcessResponse, TextRouteRequest, UploadCompatResponse
+from app.core import auth
+from app.main import app
 from app.routers.bus import router as bus_router
+from app.routers.place import PlaceSuggestion
+from app.schemas.bus import DefaultBusArrivalItem, DefaultBusArrivalResponse
 from app.services import pipeline
-from app.services.bus_service import _extract_arrival_minutes
-from app.services.response_builder import build_user_message
 from app.services.ai import llm_service
+from app.services.bus_service import _extract_arrival_minutes
 from app.services.core.constants import (
     SEOUL_BUS_ARRIVAL_URL,
     SEOUL_BUS_ROUTE_SEARCH_URL,
@@ -22,20 +27,20 @@ from app.services.core.constants import (
     SEOUL_STATION_ARRIVAL_URL,
     SEOUL_STATION_SEARCH_URL,
 )
+from app.services.core.exceptions import CoordinateResolveError
 from app.services.core.service_types import (
     ParsedIntent,
     RouteSegment,
     TransportResult,
     ValidationResult,
 )
+from app.services.response_builder import build_user_message
 from app.services.transit import transport_service
-from app.services.transit.odsay_service import _extract_route_segments, _select_best_path
+from app.services.transit.odsay_service import (
+    _extract_route_segments,
+    _select_best_path,
+)
 from app.services.transit.validate_service import validate_parsed_intent
-from app.core import auth
-from app.main import app
-import app.api.gateway as gateway_module
-import app.routers.bus as bus_module
-from app.schemas.bus import DefaultBusArrivalItem, DefaultBusArrivalResponse
 
 
 def test_shared_api_token_rejects_missing_token(monkeypatch) -> None:
@@ -341,6 +346,68 @@ def test_place_confirmation_is_exposed_to_frontend_contract() -> None:
     assert compat["needs_confirmation"] is True
     assert compat["confirmation"]["candidate"]["name"] == "강남역 2호선"
     assert compat["buses"] == []
+
+
+def test_place_suggestion_contract_preserves_ranking_metadata() -> None:
+    suggestion = PlaceSuggestion(
+        name="강남역 2호선",
+        address="서울 강남구 강남대로 지하 396",
+        category="교통,수송 > 지하철,전철 > 수도권 2호선",
+        category_code="SW8",
+        x="127.028",
+        y="37.498",
+    ).model_dump()
+
+    assert suggestion["category_code"] == "SW8"
+    assert "지하철" in suggestion["category"]
+
+
+def test_confirmation_contract_rejects_missing_candidate() -> None:
+    with pytest.raises(ValidationError):
+        UploadCompatResponse.model_validate({
+            "success": True,
+            "needs_confirmation": True,
+            "confirmation": {
+                "kind": "place",
+                "prompt": "강남역 2호선이 맞나요?",
+                "alternatives": [],
+            },
+        })
+
+
+def test_failed_route_search_does_not_leak_per_key_locks(monkeypatch) -> None:
+    async def resolve_origin(_origin_text: str | None):
+        return "송파책박물관", 127.104, 37.498
+
+    async def fail_destination(_place_name: str, _label: str):
+        raise CoordinateResolveError("목적지를 찾을 수 없습니다.")
+
+    monkeypatch.setattr(transport_service, "resolve_origin", resolve_origin)
+    monkeypatch.setattr(
+        transport_service,
+        "resolve_place_coordinates",
+        fail_destination,
+    )
+    transport_service._route_cache.clear()
+    transport_service._route_cache_locks.clear()
+
+    async def exercise_failures() -> None:
+        for index in range(10):
+            parsed = ParsedIntent(
+                intent="route",
+                destination_text=f"존재하지 않는 목적지 {index}",
+                transport_mode="bus",
+            )
+            with pytest.raises(CoordinateResolveError):
+                await transport_service._search_route_with_odsay(parsed)
+
+    try:
+        asyncio.run(exercise_failures())
+        assert transport_service._route_cache == {}
+        assert transport_service._route_cache_locks == {}
+    finally:
+        transport_service._route_cache.clear()
+        transport_service._route_cache_locks.clear()
 
 
 def test_default_bus_route_omits_none_fields_for_javascript_comparison() -> None:

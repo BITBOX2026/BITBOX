@@ -15,6 +15,8 @@ router = APIRouter()
 class PlaceSuggestion(BaseModel):
     name: str
     address: str
+    category: str = ""
+    category_code: str = ""
     x: str | None = None
     y: str | None = None
 
@@ -32,7 +34,7 @@ async def suggest_places(
     """
     장소명 자동완성 후보를 반환합니다.
 
-    기기 위치 기준으로 가장 가까운 순서로 최대 5개 결과를 반환합니다.
+    이름·카테고리 적합도를 우선하고 거리를 보조 기준으로 최대 5개를 반환합니다.
     Kakao API 오류 시 빈 리스트를 반환합니다.
     """
     verify_api_token(request)

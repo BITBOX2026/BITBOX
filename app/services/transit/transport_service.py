@@ -22,7 +22,11 @@ from app.services.core.service_types import ParsedIntent, RouteSegment, Transpor
 from app.services.core.settings_helper import is_mock_mode
 from app.services.transit.kakao_service import resolve_origin, resolve_place_coordinates
 from app.services.transit.odsay_service import search_odsay_route
-from app.services.transit.public_bus_service import fetch_arrival_at_default_stop, fetch_arrival_at_stop, search_bus_arrival
+from app.services.transit.public_bus_service import (
+    fetch_arrival_at_default_stop,
+    fetch_arrival_at_stop,
+    search_bus_arrival,
+)
 
 logger = get_logger(__name__)
 
@@ -150,7 +154,7 @@ async def _enrich_arrival_time(
             request_id,
             bus_number,
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - Arrival enrichment is optional for a valid route.
         logger.warning(
             "[%s] 실시간 도착 보강 실패: bus=%s error_type=%s",
             request_id,
@@ -210,41 +214,48 @@ async def _search_route_with_odsay(parsed: ParsedIntent) -> TransportResult:
         return cached
 
     # 캐시 미스 — per-key lock으로 동일 경로 요청 직렬화 (캐시 스탬피드 방지)
-    async with _route_cache_locks.setdefault(cache_key, asyncio.Lock()):
-        cached = _get_cached_route(cache_key)
-        if cached is not None:
-            return cached
+    route_lock = _route_cache_locks.setdefault(cache_key, asyncio.Lock())
+    try:
+        async with route_lock:
+            cached = _get_cached_route(cache_key)
+            if cached is not None:
+                return cached
 
-        if has_destination_coordinates:
-            destination_x = float(parsed.destination_x)
-            destination_y = float(parsed.destination_y)
-            if origin_coords is None:
-                origin_x, origin_y = await resolve_place_coordinates(origin_name, "출발지")
+            if has_destination_coordinates:
+                destination_x = float(parsed.destination_x)
+                destination_y = float(parsed.destination_y)
+                if origin_coords is None:
+                    origin_x, origin_y = await resolve_place_coordinates(origin_name, "출발지")
+                else:
+                    origin_x, origin_y = origin_coords
+            elif origin_coords is None:
+                # 출발지·목적지 좌표를 병렬 조회
+                (origin_x, origin_y), (destination_x, destination_y) = await asyncio.gather(
+                    resolve_place_coordinates(origin_name, "출발지"),
+                    resolve_place_coordinates(parsed.destination_text, "목적지"),
+                )
             else:
                 origin_x, origin_y = origin_coords
-        elif origin_coords is None:
-            # 출발지·목적지 좌표를 병렬 조회
-            (origin_x, origin_y), (destination_x, destination_y) = await asyncio.gather(
-                resolve_place_coordinates(origin_name, "출발지"),
-                resolve_place_coordinates(parsed.destination_text, "목적지"),
-            )
-        else:
-            origin_x, origin_y = origin_coords
-            destination_x, destination_y = await resolve_place_coordinates(
-                parsed.destination_text, "목적지"
-            )
+                destination_x, destination_y = await resolve_place_coordinates(
+                    parsed.destination_text, "목적지"
+                )
 
-        result = await search_odsay_route(
-            origin_name=origin_name,
-            origin_x=origin_x,
-            origin_y=origin_y,
-            destination_text=parsed.destination_text,
-            destination_x=destination_x,
-            destination_y=destination_y,
-            transport_mode=parsed.transport_mode,
-        )
-        _set_cached_route(cache_key, result)
-        return result
+            result = await search_odsay_route(
+                origin_name=origin_name,
+                origin_x=origin_x,
+                origin_y=origin_y,
+                destination_text=parsed.destination_text,
+                destination_x=destination_x,
+                destination_y=destination_y,
+                transport_mode=parsed.transport_mode,
+            )
+            _set_cached_route(cache_key, result)
+            return result
+    finally:
+        # 실패한 고유 검색어가 Lock 사전에 영구 누적되지 않도록 정리합니다.
+        # 성공한 경로의 Lock은 캐시 수명 동안 유지해 캐시 스탬피드를 방지합니다.
+        if cache_key not in _route_cache and _route_cache_locks.get(cache_key) is route_lock:
+            _route_cache_locks.pop(cache_key, None)
 
 
 # ---------------------------------------------------------------------------

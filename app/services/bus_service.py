@@ -1,9 +1,9 @@
 """Default bus stop arrival lookup service."""
 
 import asyncio
-from dataclasses import dataclass
 import re
 import time
+from dataclasses import dataclass
 
 from app.schemas.bus import (
     DefaultBusArrivalItem,

@@ -3,9 +3,12 @@
 import asyncio
 import re
 
+import pytest
+from fastapi import HTTPException
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+import app.main as main_module
 from app.core.request_context import request_context_middleware, request_id_for
 from app.main import readiness_check
 
@@ -44,7 +47,21 @@ def test_request_context_adds_operational_headers() -> None:
     assert response.headers["cache-control"] == "no-store"
 
 
-def test_readiness_contract() -> None:
+def test_readiness_contract(monkeypatch) -> None:
+    monkeypatch.setattr(main_module, "circuit_snapshot", dict)
     response = readiness_check()
     assert response.status == "ready"
     assert response.version
+
+
+def test_readiness_fails_while_external_circuit_is_open(monkeypatch) -> None:
+    monkeypatch.setattr(
+        main_module,
+        "circuit_snapshot",
+        lambda: {"seoul_bus": {"open": True, "failures": 3}},
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        readiness_check()
+
+    assert exc_info.value.status_code == 503

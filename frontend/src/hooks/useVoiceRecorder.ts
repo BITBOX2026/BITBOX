@@ -47,7 +47,11 @@ export function useVoiceRecorder() {
 
   const applyResult = (result: Awaited<ReturnType<typeof uploadVoiceAudio>>) => {
     setTranscript(result.text || "");
-    if (result.needs_confirmation && result.confirmation) {
+    if (
+      result.needs_confirmation
+      && result.confirmation?.kind === "place"
+      && result.confirmation.candidate?.name
+    ) {
       setError("");
       setMessage(result.message || result.confirmation.prompt);
       setAudioBase64(result.audio_base64 || "");
@@ -57,9 +61,25 @@ export function useVoiceRecorder() {
       setStatus("confirming");
       return;
     }
+    if (result.needs_confirmation && !result.confirmation && result.success) {
+      setError("확인할 장소 정보가 올바르지 않습니다. 목적지를 다시 말씀해 주세요.");
+      setConfirmation(null);
+      setStatus("idle");
+      return;
+    }
     if (!result.success) {
       setError(result.message || "경로를 찾지 못했습니다.");
       setStatus("idle");
+      return;
+    }
+    if (!result.buses?.length && result.intent === "arrival") {
+      setError("");
+      setConfirmation(null);
+      setMessage(result.message || "현재 표시할 수 있는 버스 도착 정보가 없습니다.");
+      setAudioBase64(result.audio_base64 || "");
+      setDestination(result.destination || result.destination_text || "버스 운행 안내");
+      setBuses([]);
+      setStatus("result");
       return;
     }
     if (!result.buses?.length) {
@@ -185,6 +205,7 @@ export function useVoiceRecorder() {
       audioChunks.current = [];
       isTimeoutRef.current = false;
       hasDetectedSound.current = false;
+      setConfirmation(null);
       setMessage("");
       setAudioBase64("");
       setError("");
