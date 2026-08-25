@@ -3,6 +3,7 @@
 import asyncio
 import json
 import re
+import ssl
 
 import httpx
 import pytest
@@ -160,3 +161,8 @@ def test_readiness_http_boundary_returns_503_for_open_circuit(monkeypatch) -> No
     response = asyncio.run(request_ready())
     assert response.status_code == 503
     assert response.json()["detail"]
+
+
+def test_production_smoke_requires_tls_1_2_or_newer() -> None:
+    context = production_smoke._secure_ssl_context()
+    assert context.minimum_version >= ssl.TLSVersion.TLSv1_2

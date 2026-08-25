@@ -13,6 +13,13 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 
+def _secure_ssl_context() -> ssl.SSLContext:
+    """Require TLS 1.2+ for every production verification connection."""
+    context = ssl.create_default_context()
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    return context
+
+
 def _request(
     url: str,
     *,
@@ -28,14 +35,18 @@ def _request(
     request = Request(url, data=body, headers=headers, method=method)
     try:
         # The URL is constrained to HTTPS immediately above.
-        with urlopen(request, timeout=15) as response:  # nosec B310
+        with urlopen(
+            request,
+            timeout=15,
+            context=_secure_ssl_context(),
+        ) as response:  # nosec B310
             return response.status, dict(response.headers.items()), response.read(1_000_000)
     except HTTPError as exc:
         return exc.code, dict(exc.headers.items()), exc.read(1_000_000)
 
 
 def _certificate_days_remaining(hostname: str, port: int) -> int:
-    context = ssl.create_default_context()
+    context = _secure_ssl_context()
     with (
         socket.create_connection((hostname, port), timeout=10) as raw_socket,
         context.wrap_socket(raw_socket, server_hostname=hostname) as tls_socket,
