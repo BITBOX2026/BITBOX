@@ -7,6 +7,7 @@
 """
 
 import asyncio
+import contextlib
 
 import httpx
 import pytest
@@ -139,6 +140,54 @@ def test_requires_the_proxy_token_when_one_is_configured(monkeypatch) -> None:
     monkeypatch.setattr(speech_module, "generate_tts_audio", fake_tts)
     allowed = asyncio.run(_post({"text": "안녕하세요"}, headers={"X-BITBOX-Token": "configured-token"}))
     assert allowed.status_code == 200
+
+
+def test_slow_synthesis_gives_up_instead_of_holding_the_kiosk(monkeypatch) -> None:
+    """느린 합성이 무한정 매달리면 안 됩니다.
+
+    OpenAI 클라이언트 기본 읽기 타임아웃은 600초입니다. 상한이 없으면 그동안
+    동시 실행 슬롯을 붙잡아 키오스크의 음성 안내가 통째로 멈추고, 화면은 소리도
+    대체 버튼도 없이 "재생 중"에 갇힙니다.
+    """
+
+    async def never_returns(_text: str) -> str:
+        await asyncio.sleep(60)
+        return "QUJD"
+
+    monkeypatch.setattr(speech_module, "generate_tts_audio", never_returns)
+    monkeypatch.setattr(speech_module.settings, "TTS_TIMEOUT_SECONDS", 0.05)
+
+    response = asyncio.run(_post({"text": "3412번 버스가 곧 도착합니다."}))
+
+    assert response.status_code == 200
+    assert response.json()["audio_base64"] is None
+
+
+def test_a_cancelled_request_does_not_block_later_synthesis(monkeypatch) -> None:
+    """먼저 기다리던 요청이 끊겨도 다음 요청이 새로 합성할 수 있어야 합니다."""
+    calls = {"count": 0}
+
+    async def slow_tts(_text: str) -> str:
+        calls["count"] += 1
+        await asyncio.sleep(0.05)
+        return "QUJD"
+
+    async def run() -> httpx.Response:
+        monkeypatch.setattr(speech_module, "generate_tts_audio", slow_tts)
+        text = "3412번 버스가 곧 도착합니다."
+        first = asyncio.ensure_future(_post({"text": text}))
+        await asyncio.sleep(0.01)
+        first.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await first
+        # 진행 중이던 작업이 끝나 정리될 때까지 기다립니다.
+        await asyncio.sleep(0.15)
+        assert not speech_module._inflight, "완료된 합성 작업이 정리되지 않았습니다"
+        return await _post({"text": text})
+
+    response = asyncio.run(run())
+    assert response.status_code == 200
+    assert response.json()["audio_base64"] == "QUJD"
 
 
 def test_cache_does_not_grow_without_bound(monkeypatch) -> None:

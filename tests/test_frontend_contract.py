@@ -11,7 +11,12 @@ from starlette.requests import Request
 
 import app.api.gateway as gateway_module
 import app.routers.bus as bus_module
-from app.api.gateway import _build_upload_compat_response, _looks_like_supported_audio
+from app.api.gateway import (
+    ALLOWED_CONTENT_TYPES,
+    _build_upload_compat_response,
+    _looks_like_supported_audio,
+    _safe_audio_filename,
+)
 from app.api.schemas import ProcessResponse, TextRouteRequest, UploadCompatResponse
 from app.core import auth
 from app.main import app
@@ -274,6 +279,20 @@ def test_upload_compat_route_preserves_walk_steps() -> None:
 def test_ogg_audio_header_is_supported() -> None:
     assert _looks_like_supported_audio("audio/ogg", b"OggS\x00\x02payload") is True
     assert _looks_like_supported_audio("audio/ogg", b"not-ogg") is False
+
+
+def test_matroska_recording_from_chromium_is_accepted() -> None:
+    """일부 Chromium 빌드는 MediaRecorder 결과를 audio/x-matroska 로 보고합니다.
+
+    기기 차이일 뿐 내용은 WebM 과 같은 EBML 컨테이너입니다. 거부하면 그 기기에서는
+    음성 입력이 통째로 400 으로 막힙니다.
+    """
+    ebml_header = b"\x1a\x45\xdf\xa3payload"
+    assert "audio/x-matroska" in ALLOWED_CONTENT_TYPES
+    assert _looks_like_supported_audio("audio/x-matroska", ebml_header) is True
+    assert _looks_like_supported_audio("audio/x-matroska", b"not-ebml") is False
+    # STT 가 확장자로 형식을 인식하므로 파일명도 함께 정해져 있어야 합니다.
+    assert _safe_audio_filename("audio/x-matroska") == "recording.webm"
 
 
 def test_route_message_includes_each_walk_and_bus_segment() -> None:

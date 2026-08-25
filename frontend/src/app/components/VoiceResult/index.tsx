@@ -17,6 +17,9 @@ interface VoiceResultProps {
   onGoHome: () => void;
 }
 
+// 가장 긴 안내 문장을 서버 음성으로 읽어도 넉넉한 값입니다.
+const PLAYBACK_WATCHDOG_MS = 30_000;
+
 function formatCheckedAt(value?: string | null): string | null {
   if (!value) return null;
   const timestamp = Date.parse(value);
@@ -43,8 +46,25 @@ export function VoiceResult({
   const [playbackStatus, setPlaybackStatus] = useState<"idle" | "playing" | "blocked">("idle");
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const playbackIdRef = useRef(0);
+  const watchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const rawAudioData = audio_base64 || audioBase64;
   const checkedAtLabel = formatCheckedAt(safetyDecision?.checked_at);
+
+  // 재생 종료 신호가 오지 않아도 "재생 중" 표시에 갇히지 않게 하는 상한입니다.
+  // 여기에 갇히면 소리도 나지 않고 대체 재생 버튼도 뜨지 않아, 이용자는 안내를
+  // 들을 방법이 없어집니다. BusInfoList 의 도착 안내와 같은 보호입니다.
+  const armPlaybackWatchdog = useCallback((playbackId: number) => {
+    if (watchdogRef.current) clearTimeout(watchdogRef.current);
+    watchdogRef.current = setTimeout(() => {
+      if (playbackIdRef.current !== playbackId) return;
+      setPlaybackStatus((current) => (current === "playing" ? "blocked" : current));
+    }, PLAYBACK_WATCHDOG_MS);
+  }, []);
+
+  const clearPlaybackWatchdog = useCallback(() => {
+    if (watchdogRef.current) clearTimeout(watchdogRef.current);
+    watchdogRef.current = null;
+  }, []);
 
   useEffect(() => {
     setSelectedBus(buses[0] ?? null);
@@ -53,17 +73,21 @@ export function VoiceResult({
   const stopRawPlayback = useCallback(() => {
     if (!audioRef.current) return;
     playbackIdRef.current += 1;
+    clearPlaybackWatchdog();
     audioRef.current?.pause();
     if (audioRef.current) audioRef.current.currentTime = 0;
     audioRef.current = null;
     setPlaybackStatus("idle");
-  }, []);
+  }, [clearPlaybackWatchdog]);
 
   const stopPlayback = useCallback(() => {
     stopRawPlayback();
+    clearPlaybackWatchdog();
     cancelSpeech();
     setPlaybackStatus("idle");
-  }, [stopRawPlayback]);
+  }, [clearPlaybackWatchdog, stopRawPlayback]);
+
+  useEffect(() => clearPlaybackWatchdog, [clearPlaybackWatchdog]);
 
   useEffect(() => {
     window.addEventListener(SPEECH_CANCEL_EVENT, stopRawPlayback);
@@ -81,15 +105,20 @@ export function VoiceResult({
       const audio = new Audio(audioUrl);
       audioRef.current = audio;
       audio.onended = () => {
-        if (playbackIdRef.current === playbackId) setPlaybackStatus("idle");
+        if (playbackIdRef.current !== playbackId) return;
+        clearPlaybackWatchdog();
+        setPlaybackStatus("idle");
       };
       audio.onerror = () => {
-        if (playbackIdRef.current === playbackId) setPlaybackStatus("blocked");
+        if (playbackIdRef.current !== playbackId) return;
+        clearPlaybackWatchdog();
+        setPlaybackStatus("blocked");
       };
       try {
         await audio.play();
         if (playbackIdRef.current === playbackId && audioRef.current === audio) {
           setPlaybackStatus("playing");
+          armPlaybackWatchdog(playbackId);
         }
       } catch {
         if (playbackIdRef.current === playbackId) setPlaybackStatus("blocked");
@@ -98,12 +127,20 @@ export function VoiceResult({
       // 브라우저가 한국어를 말할 수 없는 기기(라즈베리파이 등)에서는 서버 음성으로
       // 대체됩니다. 둘 다 안 되면 화면에 재생 버튼을 남깁니다.
       setPlaybackStatus("playing");
-      const outcome = await speakKorean(message, { onEnd: () => setPlaybackStatus("idle") });
+      armPlaybackWatchdog(playbackId);
+      const outcome = await speakKorean(message, {
+        onEnd: () => {
+          if (playbackIdRef.current !== playbackId) return;
+          clearPlaybackWatchdog();
+          setPlaybackStatus("idle");
+        },
+      });
       if (playbackIdRef.current === playbackId && outcome === "unavailable") {
+        clearPlaybackWatchdog();
         setPlaybackStatus("blocked");
       }
     }
-  }, [message, rawAudioData, stopPlayback]);
+  }, [armPlaybackWatchdog, clearPlaybackWatchdog, message, rawAudioData, stopPlayback]);
 
   useEffect(() => {
     if (!message) return;

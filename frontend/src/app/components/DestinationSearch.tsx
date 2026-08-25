@@ -3,6 +3,8 @@ import { BusFront, Clock3, LoaderCircle, MapPin, Search } from "lucide-react";
 import { suggestPlaces, type PlaceSuggestion, type RouteDestination } from "../../api/client";
 import { RECENT_DESTINATIONS_KEY, readKioskStorage, writeKioskStorage } from "../../utils/kioskStorage";
 
+const SUGGEST_TIMEOUT_MS = 8_000;
+
 export function loadRecentDestinations(): RouteDestination[] {
   try {
     const value = JSON.parse(readKioskStorage(RECENT_DESTINATIONS_KEY) || "[]");
@@ -57,24 +59,36 @@ export function DestinationSearch({ disabled, onSubmit }: DestinationSearchProps
     }
 
     const controller = new AbortController();
+    // 응답이 오지 않으면 검색 버튼의 회전 표시가 계속 남습니다. 상한을 둡니다.
+    // 입력이 바뀌어 정리된 경우(superseded)와 구분해야 합니다. 정리된 요청은
+    // 화면을 건드리면 안 되지만, 시간 초과는 이용자에게 알려야 합니다.
+    let superseded = false;
+    let abortTimer: number | undefined;
     const timer = window.setTimeout(async () => {
       setIsSuggesting(true);
       setSuggestionError("");
+      abortTimer = window.setTimeout(() => controller.abort(), SUGGEST_TIMEOUT_MS);
       try {
         setSuggestions(await suggestPlaces(trimmedDestination, controller.signal));
         setActiveIndex(-1);
       } catch (error) {
-        if (!controller.signal.aborted) {
-          setSuggestions([]);
-          setSuggestionError(error instanceof Error ? error.message : "장소 후보를 불러오지 못했습니다.");
-        }
+        if (superseded) return;
+        setSuggestions([]);
+        setSuggestionError(
+          controller.signal.aborted
+            ? "장소 검색이 지연되고 있습니다. 잠시 후 다시 시도해 주세요."
+            : error instanceof Error ? error.message : "장소 후보를 불러오지 못했습니다.",
+        );
       } finally {
-        if (!controller.signal.aborted) setIsSuggesting(false);
+        window.clearTimeout(abortTimer);
+        if (!superseded) setIsSuggesting(false);
       }
     }, 250);
 
     return () => {
+      superseded = true;
       window.clearTimeout(timer);
+      window.clearTimeout(abortTimer);
       controller.abort();
     };
   }, [selectedDestination, trimmedDestination]);

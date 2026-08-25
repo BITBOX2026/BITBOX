@@ -7,12 +7,60 @@ type RecorderStatus = "idle" | "starting" | "listening" | "loading" | "confirmin
 const NO_SPEECH_TIMEOUT_MS = 8_000;
 const MAX_RECORDING_MS = 20_000;
 const REQUEST_TIMEOUT_MS = 35_000;
+// 말을 마쳤다고 판단하기까지 기다리는 침묵 길이. 고령 이용자는 문장 중간에
+// 쉬는 일이 잦아("올림픽공원역… 어… 가는 버스") 1초로는 발화가 잘립니다.
+const SILENCE_END_MS = 1_800;
+// 마이크 권한 프롬프트에 아무도 응답하지 않으면 getUserMedia 는 영영 대기합니다.
+// 무인 키오스크에서는 그대로 "마이크 준비 중"에 갇히므로 상한을 둡니다.
+const MIC_START_TIMEOUT_MS = 15_000;
+// 사람 목소리로 판정하는 주파수 평균 임계값(0~255).
+const SPEECH_VOLUME_THRESHOLD = 5;
+
+/** getUserMedia 가 응답하지 않는 기기에서 무한 대기를 막습니다. */
+async function withMicrophoneTimeout(request: Promise<MediaStream>): Promise<MediaStream> {
+  let timedOut = false;
+  let timer: number | undefined;
+  try {
+    return await Promise.race([
+      request,
+      new Promise<never>((_resolve, reject) => {
+        timer = window.setTimeout(() => {
+          timedOut = true;
+          reject(new Error("마이크 응답이 없습니다. 화면의 입력창을 이용해 주세요."));
+        }, MIC_START_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    window.clearTimeout(timer);
+    if (timedOut) {
+      // 뒤늦게 열린 스트림이 마이크 표시를 켜 둔 채 남지 않도록 정리합니다.
+      void request.then(
+        (stream) => stream.getTracks().forEach((track) => track.stop()),
+        () => {},
+      );
+    }
+  }
+}
 
 export function selectRecordingMimeType(
   isSupported: (mimeType: string) => boolean = MediaRecorder.isTypeSupported,
 ): string | undefined {
   return ["audio/webm;codecs=opus", "audio/mp4", "audio/ogg;codecs=opus"]
     .find((type) => isSupported(type));
+}
+
+/** 분석기가 채워 주는 주파수 구간만으로 평균 세기를 구합니다. */
+export function createVolumeReader(
+  analyser: Pick<AnalyserNode, "frequencyBinCount" | "getByteFrequencyData">,
+): () => number {
+  // getByteFrequencyData 는 frequencyBinCount 개만 채웁니다. 버퍼를 그보다 크게
+  // 잡으면 남은 칸이 0 인 채로 평균에 섞여 감도가 그만큼 떨어집니다.
+  const bins = new Uint8Array(analyser.frequencyBinCount);
+  return () => {
+    analyser.getByteFrequencyData(bins);
+    if (bins.length === 0) return 0;
+    return bins.reduce((sum, value) => sum + value, 0) / bins.length;
+  };
 }
 
 function normalizeBuses(rawBuses: BusOption[]): BusOption[] {
@@ -228,7 +276,7 @@ export function useVoiceRecorder() {
       if (!("MediaRecorder" in window)) {
         throw new Error("이 브라우저는 음성 녹음을 지원하지 않습니다.");
       }
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream = await withMicrophoneTimeout(navigator.mediaDevices.getUserMedia({ audio: true }));
       if (recordingStartIdRef.current !== startId) {
         stream.getTracks().forEach((track) => track.stop());
         return;
@@ -254,7 +302,7 @@ export function useVoiceRecorder() {
       const analyser = audioContext.createAnalyser();
       const source = audioContext.createMediaStreamSource(stream);
       source.connect(analyser);
-      const dataArray = new Uint8Array(analyser.fftSize);
+      const readVolume = createVolumeReader(analyser);
 
       const mimeType = selectRecordingMimeType();
       const mediaRecorder = mimeType
@@ -275,6 +323,9 @@ export function useVoiceRecorder() {
           const audioBlob = new Blob(audioChunks, { type: mediaRecorder.mimeType || mimeType || "application/octet-stream" });
           await uploadAudioToServer(audioBlob);
         } else {
+          // 소리가 하나도 담기지 않았는데 조용히 첫 화면으로 돌아가면 이용자는
+          // 무엇이 잘못됐는지 알 수 없습니다. 이유를 남깁니다.
+          setError("녹음된 소리가 없습니다. 마이크에 가까이 대고 다시 말씀해 주세요.");
           setStatus("idle");
         }
       };
@@ -288,10 +339,9 @@ export function useVoiceRecorder() {
       const checkVolume = () => {
         if (mediaRecorder.state === "inactive") return;
 
-        analyser.getByteFrequencyData(dataArray);
-        const volume = dataArray.reduce((sum, value) => sum + value, 0) / dataArray.length;
+        const volume = readVolume();
 
-        if (volume > 5) {
+        if (volume > SPEECH_VOLUME_THRESHOLD) {
           hasDetectedSound.current = true;
           if (timerRef.current) clearTimeout(timerRef.current);
           timerRef.current = null;
@@ -300,7 +350,7 @@ export function useVoiceRecorder() {
             silenceTimerRef.current = null;
           }
         } else if (hasDetectedSound.current && !silenceTimerRef.current) {
-          silenceTimerRef.current = setTimeout(() => stopRecording(false), 1000);
+          silenceTimerRef.current = setTimeout(() => stopRecording(false), SILENCE_END_MS);
         }
 
         requestAnimationFrame(checkVolume);
