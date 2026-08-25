@@ -128,9 +128,14 @@ def test_healthcheck_does_not_restart_for_external_readiness_failure() -> None:
 
 def test_healthcheck_supports_discord_and_logs_delivery_failure() -> None:
     script = Path("deploy/bitbox-healthcheck.sh").read_text(encoding="utf-8")
-    assert "discord.com/api/webhooks/" in script
+    # discord.com 만 보면 구 도메인 discordapp.com 을 놓쳐 Slack 형식 {"text":...}
+    # 을 보내게 되고, Discord 는 이를 400 으로 거절합니다.
+    assert "*discord*.com/api/webhooks/*" in script
     assert "{\\\"content\\\"" in script
-    assert "alert delivery failed" in script
+    # 시크릿에 섞여 들어온 공백은 URL 경로를 깨뜨리므로 떼어내야 합니다.
+    assert "${BITBOX_ALERT_WEBHOOK_URL//[[:space:]]/}" in script
+    # 상태 코드를 남겨야 400(페이로드 형식)과 401·404(URL·토큰)를 구분할 수 있습니다.
+    assert "alert delivery failed (HTTP ${http_code:-000})" in script
     assert '"--test-alert"' in script
     assert "test alert delivered" in script
     assert "BITBOX_MONITORING_ENV_FILE" in script
