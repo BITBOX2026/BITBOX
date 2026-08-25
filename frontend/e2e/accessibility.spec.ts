@@ -90,7 +90,14 @@ test.beforeEach(async ({ page }) => {
       constructor(text: string) { this.text = text; }
     }
     Object.defineProperty(window, "SpeechSynthesisUtterance", { value: FakeUtterance });
-    Object.defineProperty(window, "speechSynthesis", { value: { speaking: false, cancel() {}, speak() {} } });
+    Object.defineProperty(window, "speechSynthesis", { value: {
+      speaking: false,
+      getVoices: () => [{ lang: "ko-KR", name: "Korean" }],
+      addEventListener() {},
+      removeEventListener() {},
+      cancel() {},
+      speak(utterance: { onend?: (() => void) | null }) { queueMicrotask(() => utterance.onend?.()); },
+    } });
   });
 });
 

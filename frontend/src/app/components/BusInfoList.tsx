@@ -486,7 +486,7 @@ export function BusInfoList() {
                   const isArriving = bus.status === "live" && bus.traTimeSec < SOON_ARRIVE;
 
                   return (
-                    <button data-testid="main-bus-row" type="button" onClick={() => toggleTracking(bus)} aria-pressed={trackedBusId === (bus.plainNo || bus.id)} aria-label={describeBus(bus)} key={bus.id} className={`grid min-h-[56px] min-w-0 w-full flex-1 shrink-0 grid-cols-[minmax(78px,1fr)_82px_minmax(120px,2fr)] items-center border-b border-[#E2E8F0] text-left sm:min-h-[68px] md:grid-cols-[150px_110px_1fr]
+                    <button data-testid="main-bus-row" type="button" disabled={bus.status !== "live"} onClick={() => toggleTracking(bus)} aria-pressed={bus.status === "live" ? trackedBusId === (bus.plainNo || bus.id) : undefined} aria-label={describeBus(bus)} key={bus.id} className={`grid min-h-[56px] min-w-0 w-full flex-1 shrink-0 grid-cols-[minmax(78px,1fr)_82px_minmax(120px,2fr)] items-center border-b border-[#E2E8F0] text-left disabled:cursor-default sm:min-h-[68px] md:grid-cols-[150px_110px_1fr]
                       ${trackedBusId === (bus.plainNo || bus.id) ? "bg-amber-50 ring-2 ring-inset ring-[#F0C929]" : idx % 2 === 0 ? "bg-white" : "bg-[#F8FAFC]"}`}>
 
                       {/* 노선번호 */}

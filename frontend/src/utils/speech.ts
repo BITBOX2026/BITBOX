@@ -14,11 +14,14 @@ import { apiFetch, parseApiResponse } from "../api/client";
  */
 
 export type SpeechOutcome = "browser" | "server" | "unavailable";
+export const SPEECH_CANCEL_EVENT = "bitbox:speech-cancel";
 
 const VOICE_LOOKUP_TIMEOUT_MS = 1_500;
 
 let cachedKoreanVoice: SpeechSynthesisVoice | null | undefined;
 let activeAudio: HTMLAudioElement | null = null;
+let activeRequest: AbortController | null = null;
+let speechGeneration = 0;
 
 function synthesis(): SpeechSynthesis | null {
   return typeof window !== "undefined" && "speechSynthesis" in window
@@ -85,39 +88,62 @@ export function resetSpeechCapability(): void {
 
 /** 브라우저 음성과 서버 음성 재생을 모두 멈춥니다. */
 export function cancelSpeech(): void {
+  speechGeneration += 1;
+  if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+    window.dispatchEvent(new Event(SPEECH_CANCEL_EVENT));
+  }
+  activeRequest?.abort();
+  activeRequest = null;
   synthesis()?.cancel();
   if (activeAudio) {
+    activeAudio.onended = null;
+    activeAudio.onerror = null;
     activeAudio.pause();
     activeAudio.currentTime = 0;
     activeAudio = null;
   }
 }
 
-async function playServerSpeech(text: string, onEnd?: () => void): Promise<SpeechOutcome> {
+async function playServerSpeech(
+  text: string,
+  generation: number,
+  onEnd?: () => void,
+): Promise<SpeechOutcome> {
+  const controller = new AbortController();
+  activeRequest = controller;
   try {
     const response = await apiFetch("/api/speech", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text }),
+      signal: controller.signal,
     });
     const payload = await parseApiResponse<{ audio_base64?: string | null }>(
       response,
       "음성 안내를 준비하지 못했습니다.",
     );
+    if (speechGeneration !== generation || controller.signal.aborted) return "unavailable";
     if (!payload.audio_base64) return "unavailable";
 
     const audio = new Audio(`data:audio/wav;base64,${payload.audio_base64}`);
     activeAudio = audio;
     audio.onended = () => {
-      if (activeAudio === audio) activeAudio = null;
+      if (activeAudio !== audio || speechGeneration !== generation) return;
+      activeAudio = null;
       onEnd?.();
     };
     await audio.play();
+    if (speechGeneration !== generation || activeAudio !== audio) {
+      audio.pause();
+      return "unavailable";
+    }
     return "server";
   } catch {
     // 자동 재생 차단·네트워크 실패 등. 화면 안내는 그대로 남으므로 무음으로 처리합니다.
-    activeAudio = null;
+    if (activeAudio && speechGeneration === generation) activeAudio = null;
     return "unavailable";
+  } finally {
+    if (activeRequest === controller) activeRequest = null;
   }
 }
 
@@ -135,18 +161,22 @@ export async function speakKorean(
   if (!message) return "unavailable";
 
   cancelSpeech();
+  const generation = speechGeneration;
 
   const voice = await resolveKoreanVoice();
+  if (speechGeneration !== generation) return "unavailable";
   const speech = synthesis();
   if (voice && speech) {
     const utterance = new SpeechSynthesisUtterance(message);
     utterance.lang = "ko-KR";
     utterance.rate = options.rate ?? 0.9;
     utterance.voice = voice;
-    utterance.onend = () => options.onEnd?.();
+    utterance.onend = () => {
+      if (speechGeneration === generation) options.onEnd?.();
+    };
     speech.speak(utterance);
     return "browser";
   }
 
-  return playServerSpeech(message, options.onEnd);
+  return playServerSpeech(message, generation, options.onEnd);
 }

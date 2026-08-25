@@ -48,6 +48,25 @@ def test_repeated_announcements_reuse_the_cached_audio(monkeypatch) -> None:
     assert calls["count"] == 1, "같은 문장에 유료 TTS 를 두 번 호출했습니다"
 
 
+def test_concurrent_identical_announcements_share_one_paid_call(monkeypatch) -> None:
+    calls = {"count": 0}
+
+    async def fake_tts(_text: str) -> str:
+        calls["count"] += 1
+        await asyncio.sleep(0.02)
+        return "QUJD"
+
+    async def run_requests() -> list[httpx.Response]:
+        monkeypatch.setattr(speech_module, "generate_tts_audio", fake_tts)
+        return await asyncio.gather(*[
+            _post({"text": "3412번 버스가 곧 도착합니다."}) for _ in range(5)
+        ])
+
+    responses = asyncio.run(run_requests())
+    assert all(response.status_code == 200 for response in responses)
+    assert calls["count"] == 1
+
+
 def test_a_different_sentence_is_synthesized_separately(monkeypatch) -> None:
     calls: list[str] = []
 
@@ -92,6 +111,19 @@ def test_reports_silence_instead_of_failing_when_tts_is_unavailable(monkeypatch)
     response = asyncio.run(_post({"text": "3412번 버스가 곧 도착합니다."}))
     assert response.status_code == 200
     assert response.json()["audio_base64"] is None
+
+
+def test_production_reports_server_speech_failure(monkeypatch) -> None:
+    async def no_audio(_text: str) -> None:
+        return None
+
+    monkeypatch.setattr(speech_module, "generate_tts_audio", no_audio)
+    monkeypatch.setattr(speech_module.settings, "APP_ENV", "prod")
+    monkeypatch.setattr(speech_module.settings, "USE_MOCK_EXTERNALS", False)
+
+    response = asyncio.run(_post({"text": "3412번 버스가 곧 도착합니다."}))
+    assert response.status_code == 503
+    assert response.headers["retry-after"] == "5"
 
 
 def test_requires_the_proxy_token_when_one_is_configured(monkeypatch) -> None:

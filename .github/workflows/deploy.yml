@@ -116,12 +116,21 @@ jobs:
             set -euo pipefail
             cd /home/ubuntu/BITBOX
             git fetch origin merge-frontend-backend
+            previous_sha="$(curl --fail --silent --max-time 5 http://127.0.0.1:8001/health \
+              | .venv/bin/python -c 'import json, sys; print(json.load(sys.stdin).get("release_sha", ""))' \
+              2>/dev/null || true)"
+            if [[ -e /var/www/bitbox-current ]]; then
+              [[ "$previous_sha" =~ ^[0-9a-f]{40}$ ]]
+              git cat-file -e "${previous_sha}^{commit}"
+            fi
+            sudo install -d -m 700 /etc/bitbox
+            if [[ "$previous_sha" =~ ^[0-9a-f]{40}$ ]]; then
+              printf '%s\n' "$previous_sha" | sudo tee /etc/bitbox/previous_release_sha >/dev/null
+            else
+              sudo rm -f /etc/bitbox/previous_release_sha
+            fi
             git checkout merge-frontend-backend
-            # 배포 검증이 실패하면 되돌릴 커밋을 당겨오기 전에 기록합니다.
-            git rev-parse HEAD | sudo tee /etc/bitbox/previous_release_sha >/dev/null 2>&1 \
-              || { sudo install -d -m 700 /etc/bitbox; git rev-parse HEAD | sudo tee /etc/bitbox/previous_release_sha >/dev/null; }
             git pull --ff-only origin merge-frontend-backend
-            .venv/bin/pip install -r requirements-backend.txt -q
             if ! command -v nginx >/dev/null 2>&1 || ! command -v envsubst >/dev/null 2>&1 || ! command -v certbot >/dev/null 2>&1 || ! command -v rsync >/dev/null 2>&1; then
               sudo apt-get update -qq
               sudo apt-get install -y nginx gettext-base certbot rsync
@@ -188,6 +197,9 @@ jobs:
             # 검증 실패 시 되돌릴 대상을 전환 직전에 기록합니다.
             previous_release="$(readlink -f /var/www/bitbox-current 2>/dev/null || true)"
             previous_sha="$(sudo cat /etc/bitbox/previous_release_sha 2>/dev/null || true)"
+            printf '%s\n' "$previous_release" | sudo tee /etc/bitbox/previous_release_dir >/dev/null
+            printf '%s\n' "$RELEASE_SHA" | sudo tee /etc/bitbox/deployment_in_progress >/dev/null
+            .venv/bin/pip install -r requirements-backend.txt -q
             sudo install -d -o root -g root -m 755 "$release_dir"
             sudo rsync --archive --delete frontend/dist/ "$release_dir/"
             sudo chmod -R a+rX "$release_dir"
@@ -207,6 +219,8 @@ jobs:
               printf 'BITBOX_ALERT_WEBHOOK_URL=%s\n' "$BITBOX_ALERT_WEBHOOK_URL" \
                 | sudo tee /etc/bitbox/monitoring.env >/dev/null
               sudo chmod 600 /etc/bitbox/monitoring.env
+            else
+              sudo rm -f /etc/bitbox/monitoring.env
             fi
 
             BITBOX_API_AUTH_TOKEN="$API_AUTH_TOKEN" envsubst \
@@ -281,6 +295,7 @@ jobs:
             BITBOX_ROLLBACK_TO_RELEASE="$previous_release" \
             BITBOX_ALERT_WEBHOOK_URL="${BITBOX_ALERT_WEBHOOK_URL:-}" \
               sudo -E bash deploy/rollback.sh || echo 'Rollback script reported an error.' >&2
+            sudo rm -f /etc/bitbox/deployment_in_progress
             exit 1
 
       # 알림 채널이 없으면 배포는 성공해도 이후 장애를 아무도 모릅니다.
@@ -306,3 +321,36 @@ jobs:
           --url "https://$BITBOX_SERVER_NAME"
           --expected-release-sha "${{ github.sha }}"
           --check-transit
+
+      - name: Mark deployment verified
+        if: success()
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: sudo rm -f /etc/bitbox/deployment_in_progress
+
+      - name: Roll back a release that failed public verification
+        if: failure()
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+          BITBOX_ALERT_WEBHOOK_URL: ${{ secrets.BITBOX_ALERT_WEBHOOK_URL }}
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          envs: RELEASE_SHA,BITBOX_ALERT_WEBHOOK_URL
+          script: |
+            set -euo pipefail
+            marker="$(sudo cat /etc/bitbox/deployment_in_progress 2>/dev/null || true)"
+            [[ "$marker" == "$RELEASE_SHA" ]] || exit 0
+            previous_sha="$(sudo cat /etc/bitbox/previous_release_sha 2>/dev/null || true)"
+            previous_release="$(sudo cat /etc/bitbox/previous_release_dir 2>/dev/null || true)"
+            cd /home/ubuntu/BITBOX
+            BITBOX_ROLLBACK_TO_SHA="$previous_sha" \
+            BITBOX_ROLLBACK_TO_RELEASE="$previous_release" \
+            BITBOX_ALERT_WEBHOOK_URL="${BITBOX_ALERT_WEBHOOK_URL:-}" \
+              sudo -E bash deploy/rollback.sh
+            sudo rm -f /etc/bitbox/deployment_in_progress

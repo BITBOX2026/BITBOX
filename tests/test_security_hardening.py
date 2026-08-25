@@ -126,6 +126,13 @@ def test_healthcheck_does_not_restart_for_external_readiness_failure() -> None:
     assert "backend remains live and was not restarted" in readiness_branch
 
 
+def test_healthcheck_supports_discord_and_logs_delivery_failure() -> None:
+    script = Path("deploy/bitbox-healthcheck.sh").read_text(encoding="utf-8")
+    assert "discord.com/api/webhooks/" in script
+    assert "{\\\"content\\\"" in script
+    assert "alert delivery failed" in script
+
+
 def test_external_production_monitor_is_scheduled() -> None:
     workflow = Path(".github/workflows/production-monitor.yml").read_text(
         encoding="utf-8"

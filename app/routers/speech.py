@@ -14,6 +14,7 @@
 - 일일 한도와 동시 실행 한도는 다른 유료 경로와 동일하게 usage_slot 이 지킵니다.
 """
 
+import asyncio
 from collections import OrderedDict
 from threading import Lock
 
@@ -35,6 +36,8 @@ _CACHE_MAX_ENTRIES = 64
 
 _cache: OrderedDict[str, str] = OrderedDict()
 _cache_lock = Lock()
+_inflight: dict[str, asyncio.Task[str | None]] = {}
+_inflight_lock = Lock()
 
 
 class SpeechRequest(BaseModel):
@@ -66,6 +69,38 @@ def reset_speech_cache() -> None:
     """테스트에서 캐시 상태를 초기화합니다."""
     with _cache_lock:
         _cache.clear()
+    with _inflight_lock:
+        _inflight.clear()
+
+
+async def _generate_bounded_speech(text: str) -> str | None:
+    async with usage_slot(
+        "speech",
+        max_concurrent=settings.VOICE_MAX_CONCURRENT_REQUESTS,
+        daily_limit=settings.SPEECH_DAILY_REQUEST_LIMIT,
+    ):
+        return await generate_tts_audio(text)
+
+
+async def _get_or_generate_speech(text: str) -> str | None:
+    """Share one paid TTS call between concurrent requests for the same sentence."""
+    cached = _cache_get(text)
+    if cached is not None:
+        return cached
+
+    with _inflight_lock:
+        task = _inflight.get(text)
+        if task is None:
+            task = asyncio.create_task(_generate_bounded_speech(text))
+            _inflight[text] = task
+
+    try:
+        return await asyncio.shield(task)
+    finally:
+        if task.done():
+            with _inflight_lock:
+                if _inflight.get(text) is task:
+                    _inflight.pop(text, None)
 
 
 @router.post("", response_model=SpeechResponse)
@@ -86,17 +121,18 @@ async def synthesize_speech(request: Request, body: SpeechRequest) -> SpeechResp
     if cached is not None:
         return SpeechResponse(audio_base64=cached, cached=True)
 
-    async with usage_slot(
-        "speech",
-        max_concurrent=settings.VOICE_MAX_CONCURRENT_REQUESTS,
-        daily_limit=settings.SPEECH_DAILY_REQUEST_LIMIT,
-    ):
-        audio = await generate_tts_audio(text)
+    audio = await _get_or_generate_speech(text)
 
     if not audio:
-        # TTS 를 쓸 수 없는 환경(mock/키 미설정/제공자 오류)입니다. 프론트는 화면
-        # 안내로만 진행하면 되므로 실패가 아니라 "소리 없음"으로 알립니다.
-        logger.info("서버 음성 합성 결과 없음 — 화면 안내만 제공됩니다.")
+        # 테스트/mock에서는 화면 안내 계약을 유지하지만, 운영 키오스크에서는 한국어
+        # 음성 대체 기능의 상실이므로 HTTP 장애로 노출해 클라이언트와 지표가 감지합니다.
+        logger.warning("서버 음성 합성 결과 없음 — 기기 음성 대체 기능을 사용할 수 없습니다.")
+        if settings.APP_ENV == "prod" and not settings.USE_MOCK_EXTERNALS:
+            raise HTTPException(
+                status_code=503,
+                detail="음성 안내를 준비하지 못했습니다. 화면 안내를 확인해 주세요.",
+                headers={"Retry-After": "5"},
+            )
         return SpeechResponse(audio_base64=None)
 
     _cache_put(text, audio)

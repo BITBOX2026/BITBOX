@@ -806,8 +806,10 @@ test("shows why a route has no arrival time instead of hiding it", async ({ page
   const standbyRow = rows.filter({ hasText: "101" });
   await expect(standbyRow).not.toContainText("곧");
   await expect(standbyRow).toHaveAttribute("aria-label", /101번 버스, 출발 대기 중/);
+  await expect(standbyRow).toBeDisabled();
   const terminalRow = rows.filter({ hasText: "102" });
   await expect(terminalRow).toHaveAttribute("aria-label", /102번 버스, 운행 종료/);
+  await expect(terminalRow).toBeDisabled();
 
   // 실시간 차량은 그대로 앞에 옵니다.
   await expect(rows.first()).toContainText("3412");
@@ -968,11 +970,18 @@ async function installDeviceWithoutKoreanVoice(page: Page) {
     });
     // 재생 자체는 헤드리스에서 막히므로 호출만 기록합니다.
     const played: string[] = [];
+    const paused: string[] = [];
     (window as Window & { __playedAudio?: string[] }).__playedAudio = played;
+    (window as Window & { __pausedAudio?: string[] }).__pausedAudio = paused;
     const originalPlay = HTMLAudioElement.prototype.play;
+    const originalPause = HTMLAudioElement.prototype.pause;
     HTMLAudioElement.prototype.play = function play(this: HTMLAudioElement) {
-      played.push(this.src.slice(0, 32));
+      played.push(this.src);
       return Promise.resolve();
+    };
+    HTMLAudioElement.prototype.pause = function pause(this: HTMLAudioElement) {
+      paused.push(this.src);
+      originalPause.call(this);
     };
     void originalPlay;
   });
@@ -1038,6 +1047,68 @@ test("falls back to server speech for tracked-bus arrival announcements", async 
   // 브라우저 음성으로는 시도조차 하지 않아야 합니다(무음이 되므로).
   const silentCalls = await page.evaluate(() => (window as Window & { __silentSpeakCalls?: number }).__silentSpeakCalls || 0);
   expect(silentCalls).toBe(0);
+});
+
+test("a cancelled server speech request can never play after a newer announcement", async ({ page }) => {
+  await installDeviceWithoutKoreanVoice(page);
+  const requests: string[] = [];
+  let releaseOldResponse: () => void = () => {};
+  const oldResponseGate = new Promise<void>((resolve) => { releaseOldResponse = resolve; });
+  await page.route("**/api/speech", async (route) => {
+    const text = JSON.parse(route.request().postData() || "{}").text as string;
+    requests.push(text);
+    if (text === "이전 안내") await oldResponseGate;
+    await route.fulfill({ json: { audio_base64: text === "이전 안내" ? "T0xE" : "TkVX" } }).catch(() => {});
+  });
+
+  await page.goto("/");
+  await page.evaluate(async () => {
+    const speech = await import("/src/utils/speech.ts");
+    void speech.speakKorean("이전 안내");
+  });
+  await expect.poll(() => requests.length, { timeout: 4_000 }).toBe(1);
+
+  await page.evaluate(async () => {
+    const speech = await import("/src/utils/speech.ts");
+    void speech.speakKorean("새 안내");
+  });
+  await expect.poll(() => requests.length, { timeout: 4_000 }).toBe(2);
+  releaseOldResponse();
+  await expect.poll(() => page.evaluate(() => (
+    window as Window & { __playedAudio?: string[] }
+  ).__playedAudio || [])).toHaveLength(1);
+
+  const played = await page.evaluate(() => (
+    window as Window & { __playedAudio?: string[] }
+  ).__playedAudio || []);
+  expect(played[0]).toContain("TkVX");
+  expect(played[0]).not.toContain("T0xE");
+});
+
+test("a new announcement also stops pre-generated route audio", async ({ page }) => {
+  await installDeviceWithoutKoreanVoice(page);
+  await page.route("**/api/route", (route) => route.fulfill({
+    json: { ...routeResult, audio_base64: "UkFX" },
+  }));
+  await page.route("**/api/speech", (route) => route.fulfill({
+    json: { audio_base64: "TkVX" },
+  }));
+
+  await page.goto("/");
+  await page.getByRole("combobox", { name: "버스 목적지" }).fill("강남역");
+  await page.getByRole("button", { name: "버스 경로 검색" }).click();
+  await expect(page.getByText("강남역 2호선 방면")).toBeVisible();
+  await expect.poll(() => page.evaluate(() => (
+    window as Window & { __playedAudio?: string[] }
+  ).__playedAudio || [])).toContainEqual(expect.stringContaining("UkFX"));
+
+  await page.evaluate(async () => {
+    const speech = await import("/src/utils/speech.ts");
+    void speech.speakKorean("새 안내");
+  });
+  await expect.poll(() => page.evaluate(() => (
+    window as Window & { __pausedAudio?: string[] }
+  ).__pausedAudio || [])).toContainEqual(expect.stringContaining("UkFX"));
 });
 
 test("uses the browser voice and never calls the paid endpoint when one exists", async ({ page }) => {

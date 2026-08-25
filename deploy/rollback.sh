@@ -31,10 +31,23 @@ send_alert() {
     command -v logger >/dev/null 2>&1 && logger -t bitbox-rollback "$1"
     return 0
   fi
-  curl --fail --silent --show-error --max-time 5 \
+  local message="$1" payload webhook_url="$BITBOX_ALERT_WEBHOOK_URL"
+  message="${message//\\/\\\\}"
+  message="${message//\"/\\\"}"
+  message="${message//$'\n'/\\n}"
+  if [[ "$webhook_url" == *"discord.com/api/webhooks/"* && "$webhook_url" != */slack* ]]; then
+    payload="{\"content\":\"$message\"}"
+    [[ "$webhook_url" == *\?* ]] && webhook_url="${webhook_url}&wait=true" || webhook_url="${webhook_url}?wait=true"
+  else
+    payload="{\"text\":\"$message\"}"
+  fi
+  if ! curl --fail --silent --show-error --max-time 5 \
     -H 'Content-Type: application/json' \
-    --data "{\"text\":\"$1\"}" \
-    "$BITBOX_ALERT_WEBHOOK_URL" >/dev/null || true
+    --data "$payload" \
+    "$webhook_url" >/dev/null; then
+    log "failed to deliver rollback alert"
+    command -v logger >/dev/null 2>&1 && logger -t bitbox-rollback "alert delivery failed"
+  fi
 }
 
 if [[ -z "$target_sha" && -f /etc/bitbox/previous_release_sha ]]; then
@@ -44,9 +57,12 @@ fi
 if [[ -n "$target_sha" && ! "$target_sha" =~ ^[0-9a-f]{40}$ ]]; then
   log "ignoring malformed rollback SHA"
   target_sha=""
+  malformed_sha=1
+else
+  malformed_sha=0
 fi
 
-rollback_failures=0
+rollback_failures=$malformed_sha
 
 # --- 1) 정적 프론트엔드 -----------------------------------------------------
 restore_frontend() {
@@ -81,6 +97,7 @@ if [[ -n "$target_release" && -d "$target_release" ]]; then
   fi
 else
   log "no previous frontend release directory to restore"
+  rollback_failures=$((rollback_failures + 1))
 fi
 
 # --- 2) 백엔드 코드 ---------------------------------------------------------
@@ -89,11 +106,11 @@ if [[ -n "$target_sha" ]] && [[ -d "$REPO_DIR/.git" ]]; then
     if git -C "$REPO_DIR" checkout --quiet --force --detach "$target_sha"; then
       log "backend checked out at $target_sha"
       "$REPO_DIR/.venv/bin/pip" install -r "$REPO_DIR/requirements-backend.txt" -q \
-        || log "dependency reinstall reported an error; continuing"
+        || { log "dependency reinstall reported an error"; rollback_failures=$((rollback_failures + 1)); }
       if [[ -f "$ENV_FILE" ]]; then
         # /health 와 /ready 가 실제로 서비스 중인 커밋을 보고하도록 맞춥니다.
         sed -i "s/^RELEASE_SHA=.*/RELEASE_SHA=${target_sha}/" "$ENV_FILE" \
-          || log "failed to rewrite RELEASE_SHA"
+          || { log "failed to rewrite RELEASE_SHA"; rollback_failures=$((rollback_failures + 1)); }
       fi
     else
       log "git checkout of the previous commit failed"
@@ -105,6 +122,7 @@ if [[ -n "$target_sha" ]] && [[ -d "$REPO_DIR/.git" ]]; then
   fi
 else
   log "no previous backend commit to restore"
+  rollback_failures=$((rollback_failures + 1))
 fi
 
 # --- 3) 서비스 재기동 -------------------------------------------------------
@@ -113,7 +131,8 @@ systemctl reload-or-restart nginx || rollback_failures=$((rollback_failures + 1)
 
 restored=0
 for _ in $(seq 1 20); do
-  if curl --fail --silent --max-time 5 http://127.0.0.1:8001/health >/dev/null; then
+  if [[ -n "$target_sha" ]] && curl --fail --silent --max-time 5 http://127.0.0.1:8001/health \
+    | grep -q "\"release_sha\":\"$target_sha\""; then
     restored=1
     break
   fi

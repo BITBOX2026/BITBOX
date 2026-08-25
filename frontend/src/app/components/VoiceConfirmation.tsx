@@ -1,7 +1,7 @@
 import { Check, MapPin, Mic, TrainFront, Volume2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { PlaceSuggestion, SafetyDecision, TransitConfirmation } from "../../api/client";
-import { cancelSpeech, speakKorean } from "../../utils/speech";
+import { cancelSpeech, speakKorean, SPEECH_CANCEL_EVENT } from "../../utils/speech";
 
 interface VoiceConfirmationProps {
   confirmation: TransitConfirmation;
@@ -18,16 +18,28 @@ export function VoiceConfirmation({ confirmation, transcript, audioBase64, safet
   const candidateRef = useRef<HTMLButtonElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const playbackIdRef = useRef(0);
   const [playbackBlocked, setPlaybackBlocked] = useState(false);
 
-  const stopPrompt = useCallback(() => {
+  const stopRawPrompt = useCallback(() => {
+    playbackIdRef.current += 1;
     audioRef.current?.pause();
     audioRef.current = null;
-    cancelSpeech();
   }, []);
+
+  const stopPrompt = useCallback(() => {
+    stopRawPrompt();
+    cancelSpeech();
+  }, [stopRawPrompt]);
+
+  useEffect(() => {
+    window.addEventListener(SPEECH_CANCEL_EVENT, stopRawPrompt);
+    return () => window.removeEventListener(SPEECH_CANCEL_EVENT, stopRawPrompt);
+  }, [stopRawPrompt]);
 
   const playPrompt = useCallback(async () => {
     stopPrompt();
+    const playbackId = playbackIdRef.current;
     setPlaybackBlocked(false);
     if (audioBase64) {
       const source = audioBase64.startsWith("data:")
@@ -37,13 +49,19 @@ export function VoiceConfirmation({ confirmation, transcript, audioBase64, safet
       audioRef.current = audio;
       try {
         await audio.play();
+        if (playbackIdRef.current !== playbackId || audioRef.current !== audio) {
+          audio.pause();
+        }
         return;
       } catch {
-        audioRef.current = null;
+        if (playbackIdRef.current === playbackId && audioRef.current === audio) {
+          audioRef.current = null;
+        }
       }
     }
+    if (playbackIdRef.current !== playbackId) return;
     if (await speakKorean(confirmation.prompt) !== "unavailable") return;
-    setPlaybackBlocked(true);
+    if (playbackIdRef.current === playbackId) setPlaybackBlocked(true);
   }, [audioBase64, confirmation.prompt, stopPrompt]);
 
   useEffect(() => {

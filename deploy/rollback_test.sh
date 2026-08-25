@@ -39,7 +39,14 @@ echo "curl \$*" >> "$bin/../curl.log"
 prev=""
 for arg in "\$@"; do
   case "\$arg" in
-    *"/health") exit $([[ "$health_ok" == yes ]] && echo 0 || echo 7) ;;
+    *"/health")
+      if [[ "$health_ok" == yes ]]; then
+        release_sha="\$(sed -n 's/^RELEASE_SHA=//p' "\$BITBOX_ENV_FILE")"
+        printf '{"status":"ok","release_sha":"%s"}\n' "\$release_sha"
+        exit 0
+      fi
+      exit 7
+      ;;
   esac
   if [ "\$prev" = "--data" ]; then echo "\$arg" >> "$bin/../alert.log"; fi
   case "\$arg" in http*|https*) echo "URL \$arg" >> "$bin/../alert.log" ;; esac
@@ -134,7 +141,7 @@ note ""
 note "=== 시나리오 3: 잘못된 SHA 가 주어짐 ==="
 setup_case badsha yes
 RC="$(run_rollback "not-a-sha" )"
-check "종료코드 0 (프론트엔드만이라도 복구)" "0" "$RC"
+check "종료코드 1 (백엔드 미복구)" "1" "$RC"
 check "잘못된 SHA 무시 로그" "yes" "$(grep -q 'malformed rollback SHA' "$CASE_DIR/stderr.log" && echo yes || echo no)"
 check "저장소는 건드리지 않음" "new backend (broken)" "$(cat "$CASE_DIR/repo/app.py")"
 check "프론트엔드는 복구됨" "old frontend" "$(cat "$CASE_DIR/www/current/index.html" 2>/dev/null)"
@@ -143,7 +150,7 @@ note ""
 note "=== 시나리오 4: 직전 릴리스 디렉터리가 없음 ==="
 setup_case norelease yes
 RC="$(run_rollback "$OLD_SHA" "$CASE_DIR/www/releases/does-not-exist")"
-check "종료코드 0" "0" "$RC"
+check "종료코드 1 (프론트엔드 미복구)" "1" "$RC"
 check "없는 릴리스 로그" "yes" "$(grep -q 'no previous frontend release directory' "$CASE_DIR/stderr.log" && echo yes || echo no)"
 check "백엔드는 그래도 롤백" "old backend" "$(cat "$CASE_DIR/repo/app.py")"
 
@@ -154,6 +161,14 @@ RC="$(run_rollback "$OLD_SHA" "$CASE_DIR/www/releases/old" "")"
 check "종료코드 0" "0" "$RC"
 check "알림 없이도 롤백 성공" "old backend" "$(cat "$CASE_DIR/repo/app.py")"
 check "알림 시도 없음" "no" "$(test -s "$CASE_DIR/alert.log" 2>/dev/null && echo yes || echo no)"
+
+note ""
+note "=== 시나리오 6: 표준 Discord 웹훅 형식 ==="
+setup_case discord yes
+RC="$(run_rollback "$OLD_SHA" "$CASE_DIR/www/releases/old" "https://discord.com/api/webhooks/123/token")"
+check "종료코드 0" "0" "$RC"
+check "Discord content 필드" "yes" "$(grep -q '\"content\"' "$CASE_DIR/alert.log" 2>/dev/null && echo yes || echo no)"
+check "Discord 전송 확인 대기" "yes" "$(grep -q 'wait=true' "$CASE_DIR/alert.log" 2>/dev/null && echo yes || echo no)"
 
 note ""
 note "==================================================="

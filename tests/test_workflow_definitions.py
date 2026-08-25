@@ -61,3 +61,24 @@ def test_deployment_only_triggers_on_the_deployment_branch() -> None:
     # PyYAML 은 언쿼트된 `on:` 을 불리언 True 로 읽습니다.
     triggers = document.get("on") or document.get(True)
     assert triggers["push"]["branches"] == ["merge-frontend-backend"]
+
+
+def test_pull_requests_run_the_full_quality_gate() -> None:
+    document = yaml.safe_load((WORKFLOW_DIR / "ci.yml").read_text(encoding="utf-8"))
+    triggers = document.get("on") or document.get(True)
+    assert "pull_request" in triggers
+    commands = "\n".join(
+        str(step.get("run") or "")
+        for job in document["jobs"].values()
+        for step in job.get("steps", [])
+    )
+    for required in ("pytest", "ruff", "bandit", "pip_audit", "typecheck", "npm test", "npm run build", "npm run e2e"):
+        assert required in commands
+
+
+def test_public_verification_failure_has_a_guarded_rollback() -> None:
+    workflow = (WORKFLOW_DIR / "deploy.yml").read_text(encoding="utf-8")
+    assert "/etc/bitbox/deployment_in_progress" in workflow
+    assert "Roll back a release that failed public verification" in workflow
+    assert '[[ "$marker" == "$RELEASE_SHA" ]] || exit 0' in workflow
+    assert "previous_release_dir" in workflow

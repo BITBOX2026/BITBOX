@@ -76,8 +76,10 @@ sudo test -f /etc/bitbox/monitoring.env && echo configured || echo 'NOT configur
 sudo journalctl -t bitbox-healthcheck -t bitbox-rollback --since '-7d' --no-pager
 ```
 
-Enable it (any HTTPS endpoint that accepts `{"text": "..."}` — Slack incoming
-webhook, Discord webhook, or your own receiver):
+Enable it with a Slack-compatible webhook, a standard Discord incoming webhook,
+or your own HTTPS receiver. The scripts send `{"content":"..."}` to a standard
+Discord URL and `{"text":"..."}` to other receivers. Alert delivery failures are
+written to the system journal instead of being discarded:
 
 ```bash
 gh secret set BITBOX_ALERT_WEBHOOK_URL --repo BITBOX2026/BITBOX
@@ -113,8 +115,9 @@ being mistaken for a successful deployment. The deployment also verifies one
 real response from each transit integration and checks that the guided segment
 times never exceed the displayed total. The provider total can legitimately be
 larger because it includes waiting for the bus, so an exact-equality check would
-fail deployments on healthy data; the backend guarantees the upper bound. A failed public-boundary check fails the deployment run even
-when the EC2-local check passed.
+fail deployments on healthy data; the backend guarantees the upper bound. A
+failed public-boundary check rolls the marked release back and still fails the
+deployment run, even when the EC2-local check passed.
 
 Direct backend dependencies and frontend packages are pinned to tested versions.
 Dependabot proposes reviewed upgrades; do not loosen production version pins
@@ -122,12 +125,15 @@ without passing the full security, unit, build and E2E pipeline.
 
 ### Automatic rollback
 
-When the post-activation health loop fails, the deployment now rolls itself back
-instead of leaving a broken release live. `deploy/rollback.sh` restores the
+When either the post-activation health loop or the public production smoke fails,
+the deployment rolls the marked release back instead of leaving it live.
+`deploy/rollback.sh` restores the
 previous release directory through `/var/www/bitbox-current`, checks the backend
 work tree out at the commit recorded in `/etc/bitbox/previous_release_sha`,
 rewrites `RELEASE_SHA` in `/etc/bitbox/bitbox.env` so `/health` reports what is
-actually running, restarts the services, and waits for `/health` to answer. The
+actually running, restarts the services, and requires `/health.release_sha` to
+match the rollback commit. A missing frontend release, malformed commit,
+dependency restoration failure, or release mismatch makes rollback fail loudly. The
 deployment run still fails, so a red run always means "look at this", never
 "production is silently broken".
 

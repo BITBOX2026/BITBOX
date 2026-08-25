@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Home, Info, MapPin, Mic, Play, RotateCcw, ShieldCheck, Square, Volume2 } from "lucide-react";
 import type { SafetyDecision } from "../../../api/client";
 import type { BusOption } from "../../../types/bus";
-import { cancelSpeech, speakKorean } from "../../../utils/speech";
+import { cancelSpeech, speakKorean, SPEECH_CANCEL_EVENT } from "../../../utils/speech";
 import { BusList } from "./BusList";
 import { RouteDetailOverlay } from "./RouteDetail";
 
@@ -42,6 +42,7 @@ export function VoiceResult({
   const [selectedBus, setSelectedBus] = useState<BusOption | null>(buses[0] ?? null);
   const [playbackStatus, setPlaybackStatus] = useState<"idle" | "playing" | "blocked">("idle");
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const playbackIdRef = useRef(0);
   const rawAudioData = audio_base64 || audioBase64;
   const checkedAtLabel = formatCheckedAt(safetyDecision?.checked_at);
 
@@ -49,37 +50,58 @@ export function VoiceResult({
     setSelectedBus(buses[0] ?? null);
   }, [buses]);
 
-  const stopPlayback = useCallback(() => {
+  const stopRawPlayback = useCallback(() => {
+    if (!audioRef.current) return;
+    playbackIdRef.current += 1;
     audioRef.current?.pause();
     if (audioRef.current) audioRef.current.currentTime = 0;
     audioRef.current = null;
-    cancelSpeech();
     setPlaybackStatus("idle");
   }, []);
+
+  const stopPlayback = useCallback(() => {
+    stopRawPlayback();
+    cancelSpeech();
+    setPlaybackStatus("idle");
+  }, [stopRawPlayback]);
+
+  useEffect(() => {
+    window.addEventListener(SPEECH_CANCEL_EVENT, stopRawPlayback);
+    return () => window.removeEventListener(SPEECH_CANCEL_EVENT, stopRawPlayback);
+  }, [stopRawPlayback]);
 
   const playMessage = useCallback(async () => {
     if (!message) return;
     stopPlayback();
+    const playbackId = playbackIdRef.current;
     if (rawAudioData) {
       const audioUrl = rawAudioData.startsWith("data:")
         ? rawAudioData
         : `data:audio/wav;base64,${rawAudioData}`;
       const audio = new Audio(audioUrl);
       audioRef.current = audio;
-      audio.onended = () => setPlaybackStatus("idle");
-      audio.onerror = () => setPlaybackStatus("blocked");
+      audio.onended = () => {
+        if (playbackIdRef.current === playbackId) setPlaybackStatus("idle");
+      };
+      audio.onerror = () => {
+        if (playbackIdRef.current === playbackId) setPlaybackStatus("blocked");
+      };
       try {
         await audio.play();
-        setPlaybackStatus("playing");
+        if (playbackIdRef.current === playbackId && audioRef.current === audio) {
+          setPlaybackStatus("playing");
+        }
       } catch {
-        setPlaybackStatus("blocked");
+        if (playbackIdRef.current === playbackId) setPlaybackStatus("blocked");
       }
     } else {
       // 브라우저가 한국어를 말할 수 없는 기기(라즈베리파이 등)에서는 서버 음성으로
       // 대체됩니다. 둘 다 안 되면 화면에 재생 버튼을 남깁니다.
       setPlaybackStatus("playing");
       const outcome = await speakKorean(message, { onEnd: () => setPlaybackStatus("idle") });
-      if (outcome === "unavailable") setPlaybackStatus("blocked");
+      if (playbackIdRef.current === playbackId && outcome === "unavailable") {
+        setPlaybackStatus("blocked");
+      }
     }
   }, [message, rawAudioData, stopPlayback]);
 
