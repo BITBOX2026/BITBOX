@@ -285,10 +285,18 @@ jobs:
 
       # 알림 채널이 없으면 배포는 성공해도 이후 장애를 아무도 모릅니다.
       # 조용히 지나가지 않도록 Actions 요약에 경고를 남깁니다.
+      # `secrets` 컨텍스트는 step 의 `if:` 에서 사용할 수 없습니다(사용하면 워크플로
+      # 자체가 startup failure 로 죽습니다). env 로 받아 셸에서 판정합니다.
       - name: Warn when no alert channel is configured
-        if: ${{ secrets.BITBOX_ALERT_WEBHOOK_URL == '' }}
+        env:
+          BITBOX_ALERT_WEBHOOK_URL: ${{ secrets.BITBOX_ALERT_WEBHOOK_URL }}
+          REPOSITORY: ${{ github.repository }}
         run: |
-          echo "::warning title=BITBOX 장애 알림 비활성::BITBOX_ALERT_WEBHOOK_URL 시크릿이 없어 헬스체크·롤백 알림이 발송되지 않습니다. EC2 저널(journalctl -t bitbox-healthcheck / -t bitbox-rollback)에만 기록됩니다. 등록: gh secret set BITBOX_ALERT_WEBHOOK_URL --repo ${{ github.repository }}"
+          if [[ -z "${BITBOX_ALERT_WEBHOOK_URL:-}" ]]; then
+            echo "::warning title=BITBOX 장애 알림 비활성::BITBOX_ALERT_WEBHOOK_URL 시크릿이 없어 헬스체크·롤백 알림이 발송되지 않습니다. EC2 저널(journalctl -t bitbox-healthcheck / -t bitbox-rollback)에만 기록됩니다. 등록: gh secret set BITBOX_ALERT_WEBHOOK_URL --repo $REPOSITORY"
+          else
+            echo "Alert webhook is configured."
+          fi
 
       - name: Verify public production boundary
         env:
