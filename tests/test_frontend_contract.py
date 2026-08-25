@@ -40,6 +40,7 @@ from app.services.transit import transport_service
 from app.services.transit.odsay_service import (
     _extract_route_segments,
     _select_best_path,
+    _select_display_bus_number,
 )
 from app.services.transit.validate_service import validate_parsed_intent
 
@@ -179,6 +180,24 @@ def test_upload_compat_response_exposes_arrival_fields() -> None:
     assert serialized["arrival_time_2"] == "12분후"
     assert serialized["first_bus_time"] == "05:30"
     assert serialized["buses"][0]["arrivalMin"] == 3
+    assert serialized["buses"][0]["routeDetail"] is None
+
+
+def test_standby_arrival_is_not_serialized_as_imminent() -> None:
+    response = _build_upload_compat_response({
+        "status": "success",
+        "message": "출발 대기 중입니다.",
+        "data": {
+            "intent": "arrival",
+            "stop_name": "올림픽공원역",
+            "bus_number": "3412",
+            "arrival_time": "출발대기",
+        },
+    })
+    bus = response["buses"][0]
+    assert bus["arrivalMin"] == -1
+    assert bus["traTimeSec"] == -1
+    assert bus["arrivalMsg"] == "출발 대기 중"
 
 
 def test_upload_compat_route_exposes_route_detail_for_frontend() -> None:
@@ -688,6 +707,65 @@ def test_transfer_route_keeps_each_segment_time_and_order() -> None:
     assert [step["busNumber"] for step in steps if step["type"] == "bus"] == ["3412", "146"]
 
 
+def test_missing_segment_time_uses_only_unallocated_total() -> None:
+    response = _build_upload_compat_response({
+        "status": "success",
+        "message": "경로 안내",
+        "data": {
+            "intent": "route",
+            "destination": "강남역",
+            "bus_number": "3412",
+            "total_time_min": 45,
+            "route_segments": [
+                {"vehicle_type": "도보", "line": "도보", "time_min": 1},
+                {"vehicle_type": "버스", "line": "3412번", "time_min": 41},
+                {"vehicle_type": "도보", "line": "도보", "time_min": None},
+            ],
+        },
+    })
+
+    steps = response["buses"][0]["routeDetail"]["steps"]
+    assert [step["durationMin"] for step in steps] == [1, 41, 3]
+    assert sum(step["durationMin"] for step in steps) == 45
+
+
+def test_route_without_live_arrival_never_claims_the_bus_is_imminent() -> None:
+    response = _build_upload_compat_response({
+        "status": "success",
+        "message": "경로 안내",
+        "data": {
+            "intent": "route",
+            "destination": "강남역",
+            "bus_number": "3412",
+            "arrival_time": None,
+            "total_time_min": 45,
+            "route_segments": [
+                {"vehicle_type": "버스", "line": "3412번", "time_min": 45},
+            ],
+        },
+    })
+
+    bus = response["buses"][0]
+    assert bus["arrivalMin"] == -1
+    assert bus["traTimeSec"] == -1
+    assert bus["arrivalMsg"] == "3412 도착정보 없음"
+
+
+def test_display_bus_and_segment_use_the_same_preferred_lane() -> None:
+    sub_paths = [{
+        "trafficType": 2,
+        "startName": "출발 정류장",
+        "endName": "도착 정류장",
+        "sectionTime": 10,
+        "lane": [{"busNo": "N13"}, {"busNo": "3412"}],
+    }]
+
+    assert _select_display_bus_number(sub_paths) == "3412"
+    segments = _extract_route_segments(sub_paths)
+    assert segments is not None
+    assert segments[0].line == "3412번"
+
+
 def test_odsay_bus_mode_excludes_mixed_subway_path() -> None:
     mixed = {
         "info": {"totalTime": 10, "busTransitCount": 1, "subwayTransitCount": 1},
@@ -701,9 +779,9 @@ def test_odsay_bus_mode_excludes_mixed_subway_path() -> None:
     assert selected is bus_only
 
 
-def test_route_arrival_uses_first_boarding_bus_and_stop_fallback(monkeypatch) -> None:
-    async def no_default_arrival(_bus_number: str):
-        return None, None
+def test_route_arrival_uses_the_actual_boarding_stop(monkeypatch) -> None:
+    async def unexpected_default_lookup(_bus_number: str):
+        raise AssertionError("a different boarding stop must not use default-stop arrivals")
 
     async def arrival_at_boarding_stop(bus_number: str, stop_name: str):
         assert bus_number == "N13"
@@ -713,12 +791,17 @@ def test_route_arrival_uses_first_boarding_bus_and_stop_fallback(monkeypatch) ->
     monkeypatch.setattr(
         transport_service,
         "fetch_arrival_at_default_stop",
-        no_default_arrival,
+        unexpected_default_lookup,
     )
     monkeypatch.setattr(
         transport_service,
         "fetch_arrival_at_stop",
         arrival_at_boarding_stop,
+    )
+    monkeypatch.setattr(
+        transport_service,
+        "get_setting",
+        lambda name: "올림픽공원역" if name == "DEFAULT_BUS_STOP_NAME" else None,
     )
 
     result = TransportResult(
@@ -751,6 +834,38 @@ def test_route_arrival_uses_first_boarding_bus_and_stop_fallback(monkeypatch) ->
     assert enriched.stop_name == "서울역버스환승센터"
     assert enriched.arrival_time == "4분후"
     assert enriched.arrival_time_2 == "15분후"
+
+
+def test_route_arrival_uses_fast_default_lookup_only_for_the_same_stop(monkeypatch) -> None:
+    async def default_arrival(bus_number: str):
+        assert bus_number == "3412"
+        return "2분후", "9분후"
+
+    async def unexpected_named_lookup(_bus_number: str, _stop_name: str):
+        raise AssertionError("the exact default stop should use its direct lookup")
+
+    monkeypatch.setattr(transport_service, "fetch_arrival_at_default_stop", default_arrival)
+    monkeypatch.setattr(transport_service, "fetch_arrival_at_stop", unexpected_named_lookup)
+    monkeypatch.setattr(
+        transport_service,
+        "get_setting",
+        lambda name: "올림픽공원역" if name == "DEFAULT_BUS_STOP_NAME" else None,
+    )
+    result = TransportResult(
+        route_segments=[
+            RouteSegment("버스", "3412번", "올림픽공원역", "강남역")
+        ]
+    )
+
+    enriched = asyncio.run(
+        transport_service._enrich_arrival_time(
+            result,
+            ParsedIntent(intent="route", origin_text=None),
+            "test-request",
+        )
+    )
+    assert enriched.arrival_time == "2분후"
+    assert enriched.stop_name == "올림픽공원역"
 
 
 def test_arrival_intent_uses_stop_name_as_frontend_destination(monkeypatch) -> None:

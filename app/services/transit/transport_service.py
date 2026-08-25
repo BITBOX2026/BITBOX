@@ -19,7 +19,7 @@ from dataclasses import replace
 from app.core.logger import get_logger
 from app.services.core.exceptions import CoordinateResolveError, TransportAPIError
 from app.services.core.service_types import ParsedIntent, RouteSegment, TransportResult
-from app.services.core.settings_helper import is_mock_mode
+from app.services.core.settings_helper import get_setting, is_mock_mode
 from app.services.transit.kakao_service import resolve_origin, resolve_place_coordinates
 from app.services.transit.odsay_service import search_odsay_route
 from app.services.transit.public_bus_service import (
@@ -27,6 +27,7 @@ from app.services.transit.public_bus_service import (
     fetch_arrival_at_stop,
     search_bus_arrival,
 )
+from app.services.transit.seoul_bus_parser import equals_normalized
 
 logger = get_logger(__name__)
 
@@ -120,18 +121,18 @@ async def _enrich_arrival_time(
     )
 
     try:
-        if parsed.origin_text is None:
+        default_stop_name = str(get_setting("DEFAULT_BUS_STOP_NAME") or "").strip()
+        boards_at_default_stop = bool(
+            parsed.origin_text is None
+            and default_stop_name
+            and first_bus.start_name
+            and equals_normalized(default_stop_name, first_bus.start_name)
+        )
+        if boards_at_default_stop:
             arrival_time, arrival_time_2 = await asyncio.wait_for(
                 fetch_arrival_at_default_stop(bus_number),
                 timeout=5.0,
             )
-            # 기기 기본 위치와 ODsay가 선택한 실제 탑승 정류장이 다를 수 있습니다.
-            # 기본 정류장에서 노선을 찾지 못하면 실제 탑승 정류장으로 재조회합니다.
-            if not arrival_time and first_bus.start_name:
-                arrival_time, arrival_time_2 = await asyncio.wait_for(
-                    fetch_arrival_at_stop(bus_number, first_bus.start_name),
-                    timeout=5.0,
-                )
         else:
             arrival_time, arrival_time_2 = await asyncio.wait_for(
                 fetch_arrival_at_stop(bus_number, first_bus.start_name),

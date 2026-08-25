@@ -272,3 +272,4 @@ jobs:
           python scripts/production_smoke.py
           --url "https://$BITBOX_SERVER_NAME"
           --expected-release-sha "${{ github.sha }}"
+          --check-transit

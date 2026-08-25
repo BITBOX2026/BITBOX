@@ -1,17 +1,26 @@
 import { AlertCircle, ShieldCheck, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { DestinationSearch } from "./DestinationSearch";
-import { PrivacyNotice, VOICE_CONSENT_KEY } from "./PrivacyNotice";
+import { PrivacyNotice } from "./PrivacyNotice";
 import { VoiceLoading } from "./VoiceLoading";
 import { VoiceMicButton } from "./VoiceMicButton";
 import { VoiceRecording } from "./VoiceRecording";
 import { VoiceResult } from "./VoiceResult";
 import { VoiceConfirmation } from "./VoiceConfirmation";
 import { useVoiceRecorder } from "../../hooks/useVoiceRecorder";
+import {
+  clearRecentDestinationHistory,
+  readKioskStorage,
+  removeKioskStorage,
+  VOICE_CONSENT_KEY,
+  writeKioskStorage,
+} from "../../utils/kioskStorage";
 
 interface VoiceAssistantProps {
   onResultModeChange?: (isResult: boolean) => void;
 }
+
+const KIOSK_IDLE_RESET_MS = 90_000;
 
 export function VoiceAssistant({ onResultModeChange }: VoiceAssistantProps) {
   const [privacyOpen, setPrivacyOpen] = useState(false);
@@ -33,12 +42,40 @@ export function VoiceAssistant({ onResultModeChange }: VoiceAssistantProps) {
     reset,
   } = useVoiceRecorder();
 
+  const resetKioskSession = useCallback(() => {
+    clearRecentDestinationHistory();
+    removeKioskStorage(VOICE_CONSENT_KEY);
+    setPrivacyOpen(false);
+    setConsentRequired(false);
+    reset();
+  }, [reset]);
+
+  useEffect(() => {
+    // 공용 키오스크에서는 브라우저 재시작 뒤 이전 이용자의 목적지를 복원하지 않습니다.
+    clearRecentDestinationHistory();
+  }, []);
+
+  useEffect(() => {
+    let timer = window.setTimeout(resetKioskSession, KIOSK_IDLE_RESET_MS);
+    const rearm = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(resetKioskSession, KIOSK_IDLE_RESET_MS);
+    };
+    window.addEventListener("pointerdown", rearm);
+    window.addEventListener("keydown", rearm);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener("pointerdown", rearm);
+      window.removeEventListener("keydown", rearm);
+    };
+  }, [resetKioskSession]);
+
   useEffect(() => {
     onResultModeChange?.(status === "result");
   }, [onResultModeChange, status]);
 
   const requestRecording = () => {
-    if (localStorage.getItem(VOICE_CONSENT_KEY) !== "accepted") {
+    if (readKioskStorage(VOICE_CONSENT_KEY) !== "accepted") {
       setConsentRequired(true);
       setPrivacyOpen(true);
       return;
@@ -52,7 +89,7 @@ export function VoiceAssistant({ onResultModeChange }: VoiceAssistantProps) {
   };
 
   const acceptVoiceProcessing = () => {
-    localStorage.setItem(VOICE_CONSENT_KEY, "accepted");
+    writeKioskStorage(VOICE_CONSENT_KEY, "accepted");
     setPrivacyOpen(false);
     setConsentRequired(false);
     void startRecording();
@@ -68,7 +105,7 @@ export function VoiceAssistant({ onResultModeChange }: VoiceAssistantProps) {
           safetyDecision={safetyDecision}
           audio_base64={audioBase64}
           onReset={requestRecording}
-          onGoHome={reset}
+          onGoHome={resetKioskSession}
         />
         <PrivacyNotice open={privacyOpen} consentRequired={consentRequired} onAccept={acceptVoiceProcessing} onClose={() => { setPrivacyOpen(false); setConsentRequired(false); }} />
       </section>
@@ -102,7 +139,7 @@ export function VoiceAssistant({ onResultModeChange }: VoiceAssistantProps) {
               </span>
             )}
           </span>
-          <button type="button" onClick={reset} aria-label="오류 닫기" title="오류 닫기" className="grid size-7 shrink-0 place-items-center rounded hover:bg-red-100">
+          <button type="button" onClick={resetKioskSession} aria-label="오류 닫기" title="오류 닫기" className="grid size-7 shrink-0 place-items-center rounded hover:bg-red-100">
             <X className="size-4" />
           </button>
         </div>

@@ -1,12 +1,13 @@
 """Place suggestion API routes."""
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from app.core.auth import verify_api_token
 from app.core.config import settings
 from app.core.rate_limiter import limiter
 from app.core.usage_guard import usage_slot
+from app.services.core.exceptions import TransportAPIError
 from app.services.transit.kakao_service import search_place_suggestions
 
 router = APIRouter()
@@ -43,7 +44,13 @@ async def suggest_places(
         max_concurrent=settings.PLACE_MAX_CONCURRENT_REQUESTS,
         daily_limit=settings.PLACE_DAILY_REQUEST_LIMIT,
     ):
-        results = await search_place_suggestions(query, max_results=5)
+        try:
+            results = await search_place_suggestions(query, max_results=5)
+        except TransportAPIError as exc:
+            raise HTTPException(
+                status_code=int(getattr(exc, "http_status", 502)),
+                detail=exc.user_message,
+            ) from exc
     return PlaceSuggestResponse(
         suggestions=[PlaceSuggestion(**r) for r in results]
     )

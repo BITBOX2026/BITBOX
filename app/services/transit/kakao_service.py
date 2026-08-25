@@ -23,7 +23,11 @@ from app.services.core.constants import (
     KOREA_LONGITUDE_MAX,
     KOREA_LONGITUDE_MIN,
 )
-from app.services.core.exceptions import CoordinateResolveError, TransportAPIError
+from app.services.core.exceptions import (
+    CoordinateResolveError,
+    ExternalServiceError,
+    TransportAPIError,
+)
 from app.services.core.http_client import get_http_client
 from app.services.core.http_utils import http_retry as _http_retry
 from app.services.core.settings_helper import get_setting
@@ -64,8 +68,19 @@ async def _kakao_fetch(
         headers={"Authorization": f"KakaoAK {kakao_key}"},
         params=params,
     )
-    response.raise_for_status()
-    return response.json()
+    if response.status_code >= 400:
+        raise ExternalServiceError(
+            f"Kakao Local API HTTP 오류: {response.status_code}",
+            user_message="장소 검색 서비스를 사용할 수 없습니다. 잠시 후 다시 시도해 주세요.",
+            retryable=response.status_code == 429 or response.status_code >= 500,
+        )
+    try:
+        return response.json()
+    except ValueError as exc:
+        raise ExternalServiceError(
+            "Kakao Local API 응답을 파싱하지 못했습니다.",
+            user_message="장소 검색 서비스를 사용할 수 없습니다. 잠시 후 다시 시도해 주세요.",
+        ) from exc
 
 
 async def resolve_place_coordinates(
@@ -112,13 +127,11 @@ async def resolve_place_candidate(place_text: str, label: str = "목적지") -> 
     try:
         payload = await _kakao_fetch(kakao_key, place_text, device_x, device_y, size=5)
 
-    except httpx.HTTPStatusError as exc:
-        raise TransportAPIError(
-            f"Kakao Local API HTTP 오류: {exc.response.status_code}"
-        ) from exc
-
     except httpx.RequestError as exc:
-        raise TransportAPIError("Kakao Local API 요청 오류가 발생했습니다.") from exc
+        raise ExternalServiceError(
+            "Kakao Local API 요청 오류가 발생했습니다.",
+            user_message="장소 검색 서비스를 사용할 수 없습니다. 잠시 후 다시 시도해 주세요.",
+        ) from exc
 
     documents = payload.get("documents", [])
     if not documents:
@@ -152,7 +165,7 @@ async def search_place_suggestions(
 
     Kakao 키워드 검색으로 최대 max_results개 결과를 가져와
     [{"name": ..., "address": ..., "x": ..., "y": ...}, ...] 형태로 반환합니다.
-    결과가 없거나 API 오류면 빈 리스트를 반환합니다.
+    검색 결과가 없으면 빈 리스트를 반환하고, API 장애는 예외로 구분합니다.
     """
     kakao_key = get_setting("KAKAO_REST_API_KEY")
     if not kakao_key or not query.strip():
@@ -164,9 +177,11 @@ async def search_place_suggestions(
         payload = await _kakao_fetch(
             kakao_key, query.strip(), device_x, device_y, size=max_results
         )
-    except (httpx.HTTPStatusError, httpx.RequestError) as exc:
-        logger.warning("Kakao 장소 검색 실패: %s", exc)
-        return []
+    except httpx.RequestError as exc:
+        raise ExternalServiceError(
+            "Kakao Local API 요청 오류가 발생했습니다.",
+            user_message="장소 검색 서비스를 사용할 수 없습니다. 잠시 후 다시 시도해 주세요.",
+        ) from exc
 
     return [
         _place_document_to_candidate(doc)

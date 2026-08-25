@@ -25,6 +25,11 @@ organization Actions notifications. Application logs are available through
 `/var/log/nginx/bitbox_access.log` and `/var/log/nginx/bitbox_error.log` and are
 retained for 14 rotations.
 
+`/ready` is circuit-based rather than an active paid-provider probe. It can stay
+ready until traffic observes a provider failure. Each deployment therefore runs
+one bounded real request against the bus board, place suggestions and bus-only
+route, while the 15-minute scheduled monitor remains non-billable.
+
 The local `bitbox-healthcheck.timer` checks `/health` and `/ready` every minute.
 Three consecutive liveness (`/health`) failures restart the backend. Three
 consecutive readiness failures send an alert and log the external-dependency
@@ -78,8 +83,10 @@ After activation, CI also checks the public HTTPS path, `/health`, `/ready`,
 required security headers, external blocking of `/internal/status`, and at
 least 14 days of TLS certificate validity. `/health` and `/ready` must expose
 the exact deployed Git commit in `release_sha`, preventing a stale process from
-being mistaken for a successful deployment. A failed public-boundary check
-fails the deployment run even when the EC2-local check passed.
+being mistaken for a successful deployment. The deployment also verifies one
+real response from each transit integration and checks that route segment time
+equals total time. A failed public-boundary check fails the deployment run even
+when the EC2-local check passed.
 
 Direct backend dependencies and frontend packages are pinned to tested versions.
 Dependabot proposes reviewed upgrades; do not loosen production version pins
@@ -99,6 +106,9 @@ source files directly.
 - Define provider-side retention and regional processing settings with the service owner.
 - Replace the in-app generic notice with the operator's legal name, contact,
   provider retention terms and final counsel-reviewed policy before public launch.
+- Shared-kiosk route history is cleared on home, after 90 seconds of inactivity,
+  and on page startup. Voice consent is cleared when the active kiosk session
+  ends through home or inactivity.
 
 ## Capacity and scaling
 

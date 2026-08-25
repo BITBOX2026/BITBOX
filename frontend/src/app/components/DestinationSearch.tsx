@@ -1,12 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { BusFront, Clock3, LoaderCircle, MapPin, Search } from "lucide-react";
 import { suggestPlaces, type PlaceSuggestion, type RouteDestination } from "../../api/client";
-
-const RECENT_KEY = "bitbox.recentDestinations";
+import { RECENT_DESTINATIONS_KEY, readKioskStorage, writeKioskStorage } from "../../utils/kioskStorage";
 
 export function loadRecentDestinations(): RouteDestination[] {
   try {
-    const value = JSON.parse(localStorage.getItem(RECENT_KEY) || "[]");
+    const value = JSON.parse(readKioskStorage(RECENT_DESTINATIONS_KEY) || "[]");
     if (!Array.isArray(value)) return [];
     return value.flatMap((item): RouteDestination[] => {
       if (typeof item === "string" && item.trim()) return [{ name: item.trim() }];
@@ -87,7 +86,7 @@ export function DestinationSearch({ disabled, onSubmit }: DestinationSearchProps
     const normalizedDestination = { ...routeDestination, name: normalized };
     const nextRecent = [normalizedDestination, ...recent.filter((item) => item.name !== normalized)].slice(0, 3);
     setRecent(nextRecent);
-    localStorage.setItem(RECENT_KEY, JSON.stringify(nextRecent));
+    writeKioskStorage(RECENT_DESTINATIONS_KEY, JSON.stringify(nextRecent));
     setDestination(normalized);
     setSuggestions([]);
     setIsFocused(false);

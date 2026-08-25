@@ -17,11 +17,11 @@ export function selectRecordingMimeType(
 function normalizeBuses(rawBuses: BusOption[]): BusOption[] {
   return (rawBuses || []).map((bus) => ({
     ...bus,
-    routeDetail: bus.routeDetail || {
-      busNumber: bus.busNumber,
-      totalMin: bus.totalMin || bus.arrivalMin || 0,
-      steps: bus.steps || [],
-    },
+    routeDetail: bus.routeDetail || (
+      bus.steps?.length && bus.totalMin != null
+        ? { busNumber: bus.busNumber, totalMin: bus.totalMin, steps: bus.steps }
+        : undefined
+    ),
   }));
 }
 
@@ -42,11 +42,10 @@ export function useVoiceRecorder() {
   const maxDurationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const requestControllerRef = useRef<AbortController | null>(null);
+  const requestKeyRef = useRef<string | null>(null);
   const recordingStartIdRef = useRef(0);
   const isStartingRef = useRef(false);
-  const audioChunks = useRef<Blob[]>([]);
   const hasDetectedSound = useRef(false);
-  const isTimeoutRef = useRef(false);
 
   const applyResult = (result: Awaited<ReturnType<typeof uploadVoiceAudio>>) => {
     setTranscript(result.text || "");
@@ -102,16 +101,22 @@ export function useVoiceRecorder() {
     setStatus("result");
   };
 
-  const beginRequest = () => {
+  const beginRequest = (requestKey: string) => {
+    if (requestControllerRef.current && requestKeyRef.current === requestKey) {
+      return null;
+    }
     requestControllerRef.current?.abort();
     const controller = new AbortController();
     requestControllerRef.current = controller;
+    requestKeyRef.current = requestKey;
     const timeoutId = window.setTimeout(() => controller.abort("timeout"), REQUEST_TIMEOUT_MS);
     return { controller, timeoutId };
   };
 
   const uploadAudioToServer = async (blob: Blob) => {
-    const { controller, timeoutId } = beginRequest();
+    const request = beginRequest("voice-upload");
+    if (!request) return;
+    const { controller, timeoutId } = request;
     try {
       const result = await uploadVoiceAudio(blob, controller.signal);
       if (requestControllerRef.current !== controller) return;
@@ -123,12 +128,19 @@ export function useVoiceRecorder() {
       setStatus("idle");
     } finally {
       window.clearTimeout(timeoutId);
-      if (requestControllerRef.current === controller) requestControllerRef.current = null;
+      if (requestControllerRef.current === controller) {
+        requestControllerRef.current = null;
+        requestKeyRef.current = null;
+      }
     }
   };
 
   const submitTextRoute = async (value: RouteDestination) => {
-    const { controller, timeoutId } = beginRequest();
+    const normalizedName = value.name.trim();
+    const requestKey = `route:${normalizedName}:${value.x ?? ""}:${value.y ?? ""}`;
+    const request = beginRequest(requestKey);
+    if (!request) return;
+    const { controller, timeoutId } = request;
     setStatus("loading");
     setError("");
     setMessage("");
@@ -136,7 +148,7 @@ export function useVoiceRecorder() {
     setSafetyDecision(null);
     try {
       const result = await requestTextRoute(
-        { ...value, name: value.name.trim() },
+        { ...value, name: normalizedName },
         undefined,
         controller.signal,
       );
@@ -149,7 +161,10 @@ export function useVoiceRecorder() {
       setStatus("idle");
     } finally {
       window.clearTimeout(timeoutId);
-      if (requestControllerRef.current === controller) requestControllerRef.current = null;
+      if (requestControllerRef.current === controller) {
+        requestControllerRef.current = null;
+        requestKeyRef.current = null;
+      }
     }
   };
 
@@ -164,18 +179,18 @@ export function useVoiceRecorder() {
     });
   };
 
-  const clearTimers = () => {
+  const clearTimers = useCallback(() => {
     if (timerRef.current) clearTimeout(timerRef.current);
     if (maxDurationTimerRef.current) clearTimeout(maxDurationTimerRef.current);
     if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
     timerRef.current = null;
     maxDurationTimerRef.current = null;
     silenceTimerRef.current = null;
-  };
+  }, []);
 
   const stopRecording = useCallback((isTimeout = false) => {
     clearTimers();
-    isTimeoutRef.current = isTimeout;
+    if (isTimeout) recordingStartIdRef.current += 1;
 
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
       mediaRecorderRef.current.stop();
@@ -192,7 +207,7 @@ export function useVoiceRecorder() {
     } else {
       setStatus("loading");
     }
-  }, []);
+  }, [clearTimers]);
 
   const startRecording = async () => {
     if (isStartingRef.current || mediaRecorderRef.current?.state === "recording") return;
@@ -218,8 +233,7 @@ export function useVoiceRecorder() {
         stream.getTracks().forEach((track) => track.stop());
         return;
       }
-      audioChunks.current = [];
-      isTimeoutRef.current = false;
+      const audioChunks: Blob[] = [];
       hasDetectedSound.current = false;
       setConfirmation(null);
       setSafetyDecision(null);
@@ -250,15 +264,15 @@ export function useVoiceRecorder() {
 
       mediaRecorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
-          audioChunks.current.push(event.data);
+          audioChunks.push(event.data);
         }
       };
 
       mediaRecorder.onstop = async () => {
-        if (isTimeoutRef.current) return;
+        if (recordingStartIdRef.current !== startId) return;
 
-        if (audioChunks.current.length > 0) {
-          const audioBlob = new Blob(audioChunks.current, { type: mediaRecorder.mimeType || mimeType || "application/octet-stream" });
+        if (audioChunks.length > 0) {
+          const audioBlob = new Blob(audioChunks, { type: mediaRecorder.mimeType || mimeType || "application/octet-stream" });
           await uploadAudioToServer(audioBlob);
         } else {
           setStatus("idle");
@@ -306,13 +320,13 @@ export function useVoiceRecorder() {
     }
   };
 
-  const reset = () => {
+  const reset = useCallback(() => {
     clearTimers();
     recordingStartIdRef.current += 1;
     isStartingRef.current = false;
-    isTimeoutRef.current = true;
     requestControllerRef.current?.abort("reset");
     requestControllerRef.current = null;
+    requestKeyRef.current = null;
     if (mediaRecorderRef.current?.state !== "inactive") {
       mediaRecorderRef.current?.stop();
     }
@@ -328,14 +342,15 @@ export function useVoiceRecorder() {
     setError("");
     setConfirmation(null);
     setSafetyDecision(null);
-  };
+  }, [clearTimers]);
 
   useEffect(() => () => {
     clearTimers();
     recordingStartIdRef.current += 1;
     isStartingRef.current = false;
-    isTimeoutRef.current = true;
     requestControllerRef.current?.abort("unmount");
+    requestControllerRef.current = null;
+    requestKeyRef.current = null;
     if (mediaRecorderRef.current?.state !== "inactive") {
       mediaRecorderRef.current?.stop();
     }

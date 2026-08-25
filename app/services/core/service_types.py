@@ -46,7 +46,7 @@ class RouteSegment:
     line: str               # 예: "740번"
     start_name: str         # 탑승 정류장 이름
     end_name: str           # 하차 정류장 이름
-    time_min: int | None = None  # ODsay subPath.time — 해당 구간 소요 시간(분)
+    time_min: int | None = None  # ODsay subPath.sectionTime — 해당 구간 소요 시간(분)
     start_x: float | None = None  # 탑승 정류장 경도 (Kakao 지도용)
     start_y: float | None = None  # 탑승 정류장 위도
     end_x: float | None = None    # 하차 정류장 경도

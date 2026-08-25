@@ -8,7 +8,7 @@ interface BusListProps {
 }
 
 function formatArrival(value: number): string {
-  if (!Number.isFinite(value)) return "정보 없음";
+  if (!Number.isFinite(value) || value < 0) return "정보 없음";
   return value <= 1 ? "곧 도착" : `${value}분`;
 }
 

@@ -13,11 +13,19 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 
-def _request(url: str) -> tuple[int, dict[str, str], bytes]:
+def _request(
+    url: str,
+    *,
+    method: str = "GET",
+    body: bytes | None = None,
+) -> tuple[int, dict[str, str], bytes]:
     parsed = urlparse(url)
     if parsed.scheme != "https" or not parsed.hostname:
         raise ValueError("production smoke requests require HTTPS")
-    request = Request(url, headers={"User-Agent": "BITBOX-production-smoke/1.0"})
+    headers = {"User-Agent": "BITBOX-production-smoke/1.0"}
+    if body is not None:
+        headers["Content-Type"] = "application/json; charset=utf-8"
+    request = Request(url, data=body, headers=headers, method=method)
     try:
         # The URL is constrained to HTTPS immediately above.
         with urlopen(request, timeout=15) as response:  # nosec B310
@@ -41,6 +49,7 @@ def verify(
     base_url: str,
     minimum_certificate_days: int,
     expected_release_sha: str | None = None,
+    check_transit: bool = False,
 ) -> list[str]:
     parsed = urlparse(base_url)
     if parsed.scheme != "https" or not parsed.hostname or parsed.path not in ("", "/"):
@@ -90,6 +99,9 @@ def verify(
     if internal_status != 404:
         errors.append(f"/internal/status must be hidden externally, got {internal_status}")
 
+    if check_transit:
+        _verify_transit_apis(origin, errors)
+
     certificate_days = _certificate_days_remaining(parsed.hostname, parsed.port or 443)
     if certificate_days < minimum_certificate_days:
         errors.append(
@@ -102,11 +114,83 @@ def verify(
     return errors
 
 
+def _verify_transit_apis(origin: str, errors: list[str]) -> None:
+    """Run one bounded real-data check per deployment, never in the schedule."""
+    bus_status, _, bus_body = _request(f"{origin}/api/bus/default")
+    try:
+        bus_payload = json.loads(bus_body)
+    except json.JSONDecodeError:
+        bus_payload = None
+    if (
+        bus_status != 200
+        or not isinstance(bus_payload, dict)
+        or bus_payload.get("success") is not True
+    ):
+        errors.append("bus arrival API did not return a successful live response")
+
+    place_status, _, place_body = _request(
+        f"{origin}/api/places/suggest?query=%EA%B0%95%EB%82%A8%EC%97%AD"
+    )
+    try:
+        suggestions = json.loads(place_body).get("suggestions", [])
+    except (json.JSONDecodeError, AttributeError):
+        suggestions = []
+    if (
+        place_status != 200
+        or not suggestions
+        or suggestions[0].get("category_code") != "SW8"
+    ):
+        errors.append("place suggestion API did not prioritize the expected station")
+
+    route_request = json.dumps(
+        {
+            "destination": "강남역 2호선",
+            "destination_x": 127.0276,
+            "destination_y": 37.4979,
+            "transport_mode": "bus",
+        },
+        ensure_ascii=False,
+    ).encode("utf-8")
+    route_status, _, route_body = _request(
+        f"{origin}/api/route",
+        method="POST",
+        body=route_request,
+    )
+    try:
+        route_payload = json.loads(route_body)
+        route_option = route_payload.get("buses", [])[0]
+        detail = route_option.get("routeDetail") or {}
+        steps = detail.get("steps") or []
+        total_minutes = detail.get("totalMin")
+        segment_minutes = sum(int(step.get("durationMin") or 0) for step in steps)
+        has_bus = any(step.get("type") == "bus" for step in steps)
+        bus_only = all(step.get("type") in {"walk", "bus"} for step in steps)
+    except (json.JSONDecodeError, AttributeError, IndexError, TypeError, ValueError):
+        route_payload = {}
+        total_minutes = None
+        segment_minutes = -1
+        has_bus = False
+        bus_only = False
+    if (
+        route_status != 200
+        or route_payload.get("success") is not True
+        or not has_bus
+        or not bus_only
+        or segment_minutes != total_minutes
+    ):
+        errors.append("route API did not return a consistent bus-only route")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--url", required=True, help="Production HTTPS origin")
     parser.add_argument("--minimum-certificate-days", type=int, default=14)
     parser.add_argument("--expected-release-sha")
+    parser.add_argument(
+        "--check-transit",
+        action="store_true",
+        help="Call each real transit integration once after a deployment",
+    )
     args = parser.parse_args()
 
     try:
@@ -114,6 +198,7 @@ def main() -> int:
             args.url,
             args.minimum_certificate_days,
             args.expected_release_sha,
+            args.check_transit,
         )
     except (OSError, TimeoutError, ssl.SSLError) as exc:
         errors = [f"production connection failed: {exc}"]

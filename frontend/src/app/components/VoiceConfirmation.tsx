@@ -1,5 +1,5 @@
 import { Check, MapPin, Mic, TrainFront, Volume2 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { PlaceSuggestion, SafetyDecision, TransitConfirmation } from "../../api/client";
 
 interface VoiceConfirmationProps {
@@ -15,6 +15,7 @@ export function VoiceConfirmation({ confirmation, transcript, audioBase64, safet
   const candidate = confirmation.candidate;
   const alternatives = confirmation.alternatives || [];
   const candidateRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [playbackBlocked, setPlaybackBlocked] = useState(false);
 
@@ -57,8 +58,25 @@ export function VoiceConfirmation({ confirmation, transcript, audioBase64, safet
     return stopPrompt;
   }, [playPrompt, stopPrompt]);
 
+  const trapFocus = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "Tab") return;
+    const focusable = Array.from(
+      dialogRef.current?.querySelectorAll<HTMLElement>("button:not(:disabled), [href], [tabindex]:not([tabindex='-1'])") ?? [],
+    );
+    if (focusable.length === 0) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+
   return (
-    <div className="fade-enter min-w-0" role="dialog" aria-modal="true" aria-labelledby="place-confirmation-title">
+    <div ref={dialogRef} onKeyDown={trapFocus} className="fade-enter min-w-0" role="dialog" aria-modal="true" aria-labelledby="place-confirmation-title">
       <p className="mb-1 text-xs font-extrabold text-[#F0C929]">장소 확인</p>
       <h2 id="place-confirmation-title" className="text-[clamp(22px,4vw,34px)] font-black leading-tight">
         {confirmation.prompt}

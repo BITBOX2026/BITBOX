@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { BusOption as BusInfo } from "../../types/bus";
 import { getDefaultArrivals, getCongestionLabel, getCongestionColor } from "../../api/busService";
-import { Accessibility, BusFront, MapPin, Radio, RefreshCw, Volume2, Wifi, ZoomIn } from "lucide-react";
+import { Accessibility, BusFront, ChevronLeft, ChevronRight, MapPin, Pause, Play, Radio, RefreshCw, Volume2, Wifi, ZoomIn } from "lucide-react";
 import { useAccessibilityDisplay } from "../../hooks/useAccessibilityDisplay";
 
 const STATION_NAME = import.meta.env.VITE_STATION_NAME ?? "정류장";
@@ -165,21 +165,34 @@ function useBusArrivals() {
   const [loading, setLoading]         = useState(true);
   const [error, setError]             = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const inFlightRef = useRef(false);
+  const mountedRef = useRef(true);
 
   const fetchData = useCallback(async () => {
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
     try {
       const { stationName, buses: data } = await getDefaultArrivals();
+      if (!mountedRef.current) return;
       setBuses(data);
       setLiveStationName(stationName); // 가져온 실시간 서버 정류소 이름을 저장
       setError(null);
       setLastUpdated(new Date());
     } catch (err) {
+      if (!mountedRef.current) return;
       setError(err instanceof Error ? err.message : "도착 정보를 불러오지 못했습니다.");
     } finally {
-      setLoading(false);
+      inFlightRef.current = false;
+      if (mountedRef.current) setLoading(false);
     }
   }, []);
 
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
   useEffect(() => { fetchData(); }, [fetchData]);
   useEffect(() => {
     const id = setInterval(fetchData, REFRESH_MS);
@@ -195,6 +208,7 @@ export function BusInfoList() {
   const [soonPage, setSoonPage] = useState(0);
   const [accessibleMode, setAccessibleMode] = useState(false);
   const [largeTextMode, toggleLargeTextMode] = useAccessibilityDisplay();
+  const [autoRotate, setAutoRotate] = useState(true);
   const [trackedBusId, setTrackedBusId] = useState<string | null>(null);
   const lastRemainingStopsRef = useRef<number | null>(null);
   const approachUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
@@ -277,16 +291,16 @@ export function BusInfoList() {
   const mainTotalPages = Math.max(1, Math.ceil(rankedBuses.length / MAIN_PER_PAGE));
 
   useEffect(() => {
-    if (soonTotalPages <= 1 || trackedBusId) return;
+    if (!autoRotate || soonTotalPages <= 1 || trackedBusId) return;
     const id = setInterval(() => setSoonPage((p) => (p + 1) % soonTotalPages), 5000);
     return () => clearInterval(id);
-  }, [soonTotalPages, trackedBusId]);
+  }, [autoRotate, soonTotalPages, trackedBusId]);
 
   useEffect(() => {
-    if (mainTotalPages <= 1 || trackedBusId) return;
+    if (!autoRotate || mainTotalPages <= 1 || trackedBusId) return;
     const id = setInterval(() => setMainPage((p) => (p + 1) % mainTotalPages), 5000);
     return () => clearInterval(id);
-  }, [mainTotalPages, trackedBusId]);
+  }, [autoRotate, mainTotalPages, trackedBusId]);
 
   const curSoonPage = Math.min(soonPage, soonTotalPages - 1);
   const curMainPage = Math.min(mainPage, mainTotalPages - 1);
@@ -478,10 +492,19 @@ export function BusInfoList() {
             </button>
             {trackedBusId && <span className="hidden items-center gap-1 truncate text-[12px] font-black text-[#145466] sm:inline-flex"><Volume2 className="size-3.5" /> 선택 차량 도착 알림 중</span>}
           </div>
-          <div className="flex gap-1.5 items-center">
+          <div className="flex items-center gap-1.5" aria-label="버스 목록 페이지 제어">
+            {mainTotalPages > 1 && (
+              <button type="button" onClick={() => { setAutoRotate(false); setMainPage((page) => (page - 1 + mainTotalPages) % mainTotalPages); }} className="grid size-7 place-items-center rounded border border-slate-300 bg-white text-slate-700" aria-label="이전 버스 목록"><ChevronLeft className="size-4" /></button>
+            )}
+            {(mainTotalPages > 1 || soonTotalPages > 1) && (
+              <button type="button" onClick={() => setAutoRotate((enabled) => !enabled)} aria-pressed={!autoRotate} className="grid size-7 place-items-center rounded border border-slate-300 bg-white text-slate-700" aria-label={autoRotate ? "자동 페이지 넘김 중지" : "자동 페이지 넘김 시작"}>{autoRotate ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}</button>
+            )}
             {Array.from({ length: mainTotalPages }).map((_, i) => (
-              <div key={i} className={`h-2 rounded-full transition-all duration-300 ${i === curMainPage ? "w-6 bg-[#475569]" : "w-2 bg-[#CBD5E1]"}`} />
+              <button key={i} type="button" onClick={() => { setAutoRotate(false); setMainPage(i); }} aria-label={`버스 목록 ${i + 1}페이지`} aria-current={i === curMainPage ? "page" : undefined} className={`h-2 rounded-full transition-all duration-300 ${i === curMainPage ? "w-6 bg-[#475569]" : "w-2 bg-[#CBD5E1]"}`} />
             ))}
+            {mainTotalPages > 1 && (
+              <button type="button" onClick={() => { setAutoRotate(false); setMainPage((page) => (page + 1) % mainTotalPages); }} className="grid size-7 place-items-center rounded border border-slate-300 bg-white text-slate-700" aria-label="다음 버스 목록"><ChevronRight className="size-4" /></button>
+            )}
           </div>
         </div>
       </div>

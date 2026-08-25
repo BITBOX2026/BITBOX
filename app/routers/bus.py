@@ -1,6 +1,6 @@
 """Bus arrival API routes."""
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, Response
 
 from app.core.auth import verify_api_token
 from app.core.rate_limiter import limiter
@@ -18,6 +18,12 @@ router = APIRouter()
     response_model_exclude_none=True,
 )
 @limiter.limit("30/minute")
-async def get_default_bus_arrival(request: Request) -> DefaultBusArrivalResponse:
+async def get_default_bus_arrival(
+    request: Request,
+    response: Response,
+) -> DefaultBusArrivalResponse:
     verify_api_token(request)
-    return await get_default_bus_arrivals()
+    result = await get_default_bus_arrivals()
+    if not result.success:
+        response.status_code = 502
+    return result

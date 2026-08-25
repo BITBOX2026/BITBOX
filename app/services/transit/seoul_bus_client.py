@@ -16,7 +16,7 @@ from urllib.parse import unquote
 import httpx
 
 from app.core.logger import get_logger
-from app.services.core.exceptions import TransportAPIError
+from app.services.core.exceptions import ExternalServiceError
 from app.services.core.http_client import get_http_client
 from app.services.core.http_utils import http_retry as _http_retry
 from app.services.core.settings_helper import get_setting
@@ -35,14 +35,14 @@ NO_RESULT_CODES = {"4"}
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 
 
-@_http_retry
 async def _seoul_bus_get(url: str, params: dict[str, str]) -> httpx.Response:
-    """서울버스 API GET 요청. 재시도 가능한 오류는 자동 재시도합니다."""
+    """서울버스 API GET 요청. 재시도·회로 관리는 업무 응답 경계에서 수행합니다."""
     response = await get_http_client().get(url, params=params)
     response.raise_for_status()
     return response
 
 
+@_http_retry
 async def request_seoul_bus_payload(
     url: str,
     params: dict[str, str],
@@ -61,8 +61,10 @@ async def request_seoul_bus_payload(
     """
     service_key = _get_first_service_key(service_key_setting_names)
     if not service_key:
-        raise TransportAPIError(
-            f"{' or '.join(service_key_setting_names)} is not configured"
+        raise ExternalServiceError(
+            f"{' or '.join(service_key_setting_names)} is not configured",
+            user_message="버스 도착정보 서비스를 사용할 수 없습니다.",
+            retryable=False,
         )
 
     last_auth_error: tuple[str, str] | None = None
@@ -93,27 +95,40 @@ async def request_seoul_bus_payload(
                     last_auth_error = (code, message)
                     continue
 
-                raise TransportAPIError(
-                    f"공공데이터 API 오류({stage}): resultCode={code}, resultMsg={message}"
+                raise ExternalServiceError(
+                    f"공공데이터 API 오류({stage}): resultCode={code}, resultMsg={message}",
+                    user_message="버스 도착정보 서비스를 사용할 수 없습니다. 잠시 후 다시 시도해 주세요.",
+                    retryable=not is_service_key_error(code, message),
                 )
 
             return payload
 
     except httpx.HTTPStatusError as exc:
-        raise TransportAPIError(
-            f"공공데이터 API HTTP 오류({stage}): status={exc.response.status_code}"
+        status_code = exc.response.status_code
+        raise ExternalServiceError(
+            f"공공데이터 API HTTP 오류({stage}): status={status_code}",
+            user_message="버스 도착정보 서비스를 사용할 수 없습니다. 잠시 후 다시 시도해 주세요.",
+            retryable=status_code == 429 or status_code >= 500,
         ) from exc
 
     except httpx.RequestError as exc:
-        raise TransportAPIError(f"공공데이터 API 요청 오류({stage})") from exc
+        raise ExternalServiceError(
+            f"공공데이터 API 요청 오류({stage})",
+            user_message="버스 도착정보 서비스를 사용할 수 없습니다. 잠시 후 다시 시도해 주세요.",
+        ) from exc
 
     if last_auth_error:
         code, message = last_auth_error
-        raise TransportAPIError(
-            f"공공데이터 API 인증 오류({stage}): resultCode={code}, resultMsg={message}"
+        raise ExternalServiceError(
+            f"공공데이터 API 인증 오류({stage}): resultCode={code}, resultMsg={message}",
+            user_message="버스 도착정보 서비스를 사용할 수 없습니다.",
+            retryable=False,
         )
 
-    raise TransportAPIError(f"공공데이터 API 오류({stage})")
+    raise ExternalServiceError(
+        f"공공데이터 API 오류({stage})",
+        user_message="버스 도착정보 서비스를 사용할 수 없습니다.",
+    )
 
 
 def _get_first_service_key(setting_names: tuple[str, ...]) -> str:
@@ -127,7 +142,11 @@ def _get_first_service_key(setting_names: tuple[str, ...]) -> str:
 def _parse_response_payload(response: httpx.Response, stage: str) -> Any:
     """응답을 JSON 우선으로 파싱합니다. JSON 실패 시 XML을 시도합니다."""
     if len(response.content) > MAX_RESPONSE_BYTES:
-        raise TransportAPIError(f"공공데이터 API 응답 크기 초과({stage})")
+        raise ExternalServiceError(
+            f"공공데이터 API 응답 크기 초과({stage})",
+            user_message="버스 도착정보 서비스를 사용할 수 없습니다.",
+            retryable=False,
+        )
 
     try:
         return response.json()
@@ -137,7 +156,10 @@ def _parse_response_payload(response: httpx.Response, stage: str) -> Any:
     try:
         return parse_untrusted_xml(response.text)
     except XML_PARSE_ERRORS as exc:
-        raise TransportAPIError(f"공공데이터 API 응답 해석 오류({stage})") from exc
+        raise ExternalServiceError(
+            f"공공데이터 API 응답 해석 오류({stage})",
+            user_message="버스 도착정보 서비스를 사용할 수 없습니다. 잠시 후 다시 시도해 주세요.",
+        ) from exc
 
 
 def _normalize_service_key(service_key: object) -> str:

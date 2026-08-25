@@ -212,12 +212,22 @@ def _calculate_transfer_count(bus_transit_count: int | None) -> int | None:
 
 
 def _select_display_bus_number(sub_paths: list[dict[str, Any]]) -> str | None:
-    """일반 버스를 야간버스보다 우선해 대표 버스 번호를 선택합니다."""
-    bus_numbers = _extract_bus_numbers(sub_paths)
-    for n in bus_numbers:
-        if not is_night_bus_number(n):
-            return n
-    return bus_numbers[0] if bus_numbers else None
+    """첫 탑승 구간에서 실제로 안내할 대표 버스 번호를 선택합니다."""
+    for sub_path in sub_paths:
+        if sub_path.get("trafficType") != 2:
+            continue
+        selected = _select_lane_bus_number(sub_path.get("lane") or [])
+        if selected:
+            return selected
+    return None
+
+
+def _select_lane_bus_number(lanes: list[dict[str, Any]]) -> str | None:
+    """같은 구간의 대체 노선 중 일반 버스를 우선하되 표시값을 일관되게 유지합니다."""
+    numbers = [str(lane.get("busNo")) for lane in lanes if lane.get("busNo")]
+    return next((number for number in numbers if not is_night_bus_number(number)), None) or (
+        numbers[0] if numbers else None
+    )
 
 
 def _extract_bus_numbers(sub_paths: list[dict[str, Any]]) -> list[str]:
@@ -279,7 +289,7 @@ def _extract_route_segments(sub_paths: list[dict[str, Any]]) -> list[RouteSegmen
             continue
 
         if traffic_type == 2:  # 버스
-            bus_no = str(lanes[0].get("busNo", "")) if lanes else ""
+            bus_no = _select_lane_bus_number(lanes) or ""
             if bus_no:
                 segments.append(RouteSegment(
                     vehicle_type="버스",

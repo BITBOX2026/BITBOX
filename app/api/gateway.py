@@ -240,13 +240,30 @@ def _build_buses_from_route(data: dict) -> list[dict]:
     if not bus_number and not route_segments:
         return []
 
-    n_segs = len(route_segments) or 1
+    missing_time_indexes = [
+        index for index, segment in enumerate(route_segments)
+        if segment.get("time_min") is None
+    ]
+    known_time = sum(
+        max(int(segment.get("time_min") or 0), 0)
+        for segment in route_segments
+        if segment.get("time_min") is not None
+    )
+    remaining_time = max(total_time_min - known_time, 0)
+    missing_durations: dict[int, int] = {}
+    if missing_time_indexes:
+        quotient, remainder = divmod(remaining_time, len(missing_time_indexes))
+        missing_durations = {
+            index: quotient + (1 if order < remainder else 0)
+            for order, index in enumerate(missing_time_indexes)
+        }
+
     steps: list[dict] = []
-    for seg in route_segments:
+    for index, seg in enumerate(route_segments):
         line = seg.get("line", "")
         seg_bus_number = line.replace("번", "").strip()
         seg_time = seg.get("time_min")
-        duration = seg_time if seg_time is not None else round(total_time_min / n_segs)
+        duration = max(int(seg_time), 0) if seg_time is not None else missing_durations[index]
         is_walk = seg.get("vehicle_type") == "도보"
         steps.append({
             "type": "walk" if is_walk else "bus",
@@ -270,8 +287,7 @@ def _build_buses_from_route(data: dict) -> list[dict]:
     origin_stop = first_bus_step["fromStop"] if first_bus_step else (data.get("origin") or "")
 
     arrival_time = data.get("arrival_time") or ""
-    m = re.search(r"(\d+)\s*분", arrival_time)
-    arrival_min = int(m.group(1)) if m else 0
+    arrival_min = _arrival_minutes_for_display(arrival_time)
 
     route_detail = {
         "busNumber": display_bus,
@@ -289,8 +305,8 @@ def _build_buses_from_route(data: dict) -> list[dict]:
         "id": f"route-{display_bus}-0",
         "busNumber": display_bus,
         "arrivalMin": arrival_min,
-        "traTimeSec": max(arrival_min * 60, 60),
-        "arrivalMsg": arrival_time or f"{display_bus} 탑승 예정",
+        "traTimeSec": arrival_min * 60 if arrival_min >= 0 else -1,
+        "arrivalMsg": arrival_time or f"{display_bus} 도착정보 없음",
         "currentStationName": origin_stop,
         "remainingStops": 0,
         "busType": 0,
@@ -309,6 +325,19 @@ def _build_buses_from_route(data: dict) -> list[dict]:
 # 버스가 운행을 마쳤거나 아직 차고지에서 출발 전인 상태 코드
 _TERMINAL_ARRIVAL_STATES = {"운행종료"}
 _STANDBY_ARRIVAL_STATES = {"출발대기"}
+
+
+def _arrival_minutes_for_display(arrival_time: str) -> int:
+    """Parse a live arrival value without turning unknown states into zero."""
+    compact = arrival_time.replace(" ", "")
+    if "곧" in arrival_time or "잠시후" in compact:
+        return 0
+    minute_match = re.search(r"(\d+)\s*분", arrival_time)
+    if minute_match:
+        return int(minute_match.group(1))
+    if re.search(r"\d+\s*초", arrival_time):
+        return 1
+    return -1
 
 
 def _build_buses_from_arrival(data: dict) -> list[dict]:
@@ -346,8 +375,8 @@ def _make_arrival_bus_entry(
         return {
             "id": f"arrival-{bus_number}{suffix}",
             "busNumber": bus_number,
-            "arrivalMin": 0,
-            "traTimeSec": 30,
+            "arrivalMin": -1,
+            "traTimeSec": -1,
             "arrivalMsg": "출발 대기 중",
             "currentStationName": stop_name,
             "remainingStops": 0,
@@ -357,18 +386,15 @@ def _make_arrival_bus_entry(
             "isLastBus": False,
             "plainNo": "",
             "isSecond": is_second,
-            "totalMin": 0,
-            "steps": [],
         }
 
-    m = re.search(r"(\d+)\s*분", arrival_time)
-    arrival_min = int(m.group(1)) if m else 0
+    arrival_min = _arrival_minutes_for_display(arrival_time)
 
     return {
         "id": f"arrival-{bus_number}{suffix}",
         "busNumber": bus_number,
         "arrivalMin": arrival_min,
-        "traTimeSec": max(arrival_min * 60, 30),
+        "traTimeSec": max(arrival_min * 60, 30) if arrival_min >= 0 else -1,
         "arrivalMsg": arrival_time or f"{bus_number}번 도착 정보",
         "currentStationName": stop_name,
         "remainingStops": 0,
@@ -378,8 +404,6 @@ def _make_arrival_bus_entry(
         "isLastBus": False,
         "plainNo": "",
         "isSecond": is_second,
-        "totalMin": arrival_min,
-        "steps": [],
     }
 
 

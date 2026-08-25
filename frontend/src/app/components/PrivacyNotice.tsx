@@ -1,8 +1,12 @@
 import { Database, Mic, ShieldCheck, ShieldX, Trash2, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import {
+  clearRecentDestinationHistory,
+  removeKioskStorage,
+  VOICE_CONSENT_KEY,
+} from "../../utils/kioskStorage";
 
-export const VOICE_CONSENT_KEY = "bitbox.voiceConsent.v1";
-const RECENT_DESTINATIONS_KEY = "bitbox.recentDestinations";
+export { VOICE_CONSENT_KEY } from "../../utils/kioskStorage";
 
 interface PrivacyNoticeProps {
   open: boolean;
@@ -18,24 +22,41 @@ export function PrivacyNotice({ open, consentRequired, onAccept, onClose }: Priv
 
   useEffect(() => {
     if (!open) return;
+    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     dialogRef.current?.focus();
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose();
+      if (event.key !== "Tab") return;
+      const focusable = Array.from(
+        dialogRef.current?.querySelectorAll<HTMLElement>("button:not(:disabled), [href], [tabindex]:not([tabindex='-1'])") ?? [],
+      );
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
     };
     window.addEventListener("keydown", closeOnEscape);
-    return () => window.removeEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("keydown", closeOnEscape);
+      previouslyFocused?.focus();
+    };
   }, [onClose, open]);
 
   if (!open) return null;
 
   const clearRecentDestinations = () => {
-    localStorage.removeItem(RECENT_DESTINATIONS_KEY);
-    window.dispatchEvent(new Event("bitbox:recent-cleared"));
+    clearRecentDestinationHistory();
     setRecentCleared(true);
   };
 
   const revokeVoiceConsent = () => {
-    localStorage.removeItem(VOICE_CONSENT_KEY);
+    removeKioskStorage(VOICE_CONSENT_KEY);
     setConsentRevoked(true);
   };
 
@@ -66,7 +87,7 @@ export function PrivacyNotice({ open, consentRequired, onAccept, onClose }: Priv
           </div>
           <div className="flex gap-3">
             <Database className="mt-0.5 size-5 shrink-0 text-[#145466]" />
-            <div><strong className="block">경로와 기기 기록</strong><p className="text-slate-600">목적지와 좌표는 경로 조회를 위해 Kakao·ODsay·공공데이터 API로 전송될 수 있습니다. 최근 목적지 최대 3개는 이 브라우저에만 저장됩니다.</p></div>
+            <div><strong className="block">경로와 기기 기록</strong><p className="text-slate-600">목적지와 좌표는 경로 조회를 위해 외부 교통·장소 API로 전송될 수 있습니다. 최근 목적지 최대 3개는 현재 기기 세션에서만 사용하며, 홈 이동·90초 무활동·화면 재시작 시 삭제됩니다.</p></div>
           </div>
           <p className="rounded bg-amber-50 px-3 py-2 font-bold text-amber-900">버스 도착 시각과 혼잡도는 외부 제공기관의 실시간 데이터로, 교통 상황에 따라 실제와 다를 수 있습니다.</p>
 
@@ -78,7 +99,7 @@ export function PrivacyNotice({ open, consentRequired, onAccept, onClose }: Priv
               <ShieldX className="size-4" /> {consentRevoked ? "음성 동의를 철회했습니다" : "음성 처리 동의 철회"}
             </button>}
           </div>
-          <p className="text-xs text-slate-500">시행일: 2026-08-08 · 음성 동의는 이 기기에만 저장되며 언제든 브라우저 데이터 삭제로 철회할 수 있습니다.</p>
+          <p className="text-xs text-slate-500">시행일: 2026-08-08 · 음성 동의는 홈 이동 또는 90초 무활동으로 현재 이용 세션이 끝나면 삭제됩니다.</p>
         </div>
 
         <footer className="flex items-center justify-end gap-2 border-t border-slate-200 px-4 py-3 sm:px-5">

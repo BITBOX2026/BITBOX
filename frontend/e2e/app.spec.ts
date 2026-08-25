@@ -217,8 +217,11 @@ async function expectNoHorizontalOverflow(page: Page) {
   expect(overflow).toBe(false);
 }
 
-async function installFakeRecorder(page: Page) {
-  await page.addInitScript(() => {
+async function installFakeRecorder(
+  page: Page,
+  options: { quiet?: boolean; stopDelayMs?: number } = {},
+) {
+  await page.addInitScript((recorderOptions) => {
     localStorage.setItem("bitbox.voiceConsent.v1", "accepted");
 
     const trackedWindow = window as Window & {
@@ -239,7 +242,7 @@ async function installFakeRecorder(page: Page) {
       createAnalyser() {
         return {
           fftSize: 32,
-          getByteFrequencyData(data: Uint8Array) { data.fill(12); },
+          getByteFrequencyData(data: Uint8Array) { data.fill(recorderOptions.quiet ? 0 : 12); },
         };
       }
       createMediaStreamSource() { return { connect() {} }; }
@@ -262,10 +265,14 @@ async function installFakeRecorder(page: Page) {
       start() { this.state = "recording"; }
       stop() {
         this.state = "inactive";
-        this.ondataavailable?.({
-          data: new Blob([new Uint8Array([0x1a, 0x45, 0xdf, 0xa3])], { type: "audio/webm" }),
-        });
-        this.onstop?.();
+        const finish = () => {
+          this.ondataavailable?.({
+            data: new Blob([new Uint8Array([0x1a, 0x45, 0xdf, 0xa3])], { type: "audio/webm" }),
+          });
+          this.onstop?.();
+        };
+        if (recorderOptions.stopDelayMs) window.setTimeout(finish, recorderOptions.stopDelayMs);
+        else finish();
       }
     }
 
@@ -282,7 +289,7 @@ async function installFakeRecorder(page: Page) {
     Object.defineProperty(window, "AudioContext", { configurable: true, value: FakeAudioContext });
     Object.defineProperty(window, "webkitAudioContext", { configurable: true, value: FakeAudioContext });
     Object.defineProperty(window, "MediaRecorder", { configurable: true, value: FakeMediaRecorder });
-  });
+  }, options);
 }
 
 test.beforeEach(async ({ page }) => {
@@ -465,6 +472,77 @@ test("supports keyboard autocomplete selection", async ({ page }) => {
   await expect(page.getByText("강남역 2호선 방면")).toBeVisible();
 });
 
+test("shows a place provider failure instead of an empty suggestion list", async ({ page }) => {
+  await page.route("**/api/places/suggest?**", (route) => route.fulfill({
+    status: 502,
+    json: { detail: "장소 검색 서비스를 사용할 수 없습니다." },
+  }));
+
+  await page.goto("/");
+  await page.getByLabel("버스 목적지").fill("강남역");
+  await expect(page.getByRole("alert")).toContainText("장소 검색 서비스를 사용할 수 없습니다.");
+});
+
+test("coalesces two identical route submissions in the same interaction", async ({ page }) => {
+  let routeCalls = 0;
+  await page.route("**/api/route", async (route) => {
+    routeCalls += 1;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    await route.fulfill({ json: routeResult });
+  });
+
+  await page.goto("/");
+  await page.getByLabel("버스 목적지").fill("강남역");
+  await page.getByRole("button", { name: "버스 경로 검색" }).evaluate((button) => {
+    button.click();
+    button.click();
+  });
+  await expect(page.getByText("강남역 2호선 방면")).toBeVisible();
+  expect(routeCalls).toBe(1);
+});
+
+test("lets a user pause automatic bus page rotation", async ({ page }) => {
+  await page.clock.install();
+  await page.unroute("**/api/bus/default");
+  await page.route("**/api/bus/default", (route) => route.fulfill({ json: fiveRowArrivals }));
+  await page.goto("/");
+  await expect(page.getByText("3500", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "자동 페이지 넘김 중지" }).click();
+  await page.clock.fastForward(10_000);
+  await expect(page.getByText("3500", { exact: true })).toBeVisible();
+  await expect(page.getByText("3505", { exact: true })).toHaveCount(0);
+});
+
+test("clears a shared kiosk session after inactivity", async ({ page }) => {
+  await page.clock.install();
+  await page.route("**/api/route", (route) => route.fulfill({ json: routeResult }));
+  await page.goto("/");
+  await page.evaluate(() => localStorage.setItem("bitbox.voiceConsent.v1", "accepted"));
+  await page.getByLabel("버스 목적지").fill("강남역");
+  await page.getByRole("button", { name: "버스 경로 검색" }).click();
+  await expect(page.getByText("강남역 2호선 방면")).toBeVisible();
+  expect(await page.evaluate(() => localStorage.getItem("bitbox.recentDestinations"))).not.toBeNull();
+
+  await page.clock.fastForward(90_000);
+  await expect(page.getByRole("heading", { name: "어디로 갈까요?" })).toBeVisible();
+  expect(await page.evaluate(() => localStorage.getItem("bitbox.recentDestinations"))).toBeNull();
+  expect(await page.evaluate(() => localStorage.getItem("bitbox.voiceConsent.v1"))).toBeNull();
+});
+
+test("clears voice consent after inactivity even when microphone permission fails", async ({ page, context }) => {
+  await page.clock.install();
+  await context.clearPermissions();
+  await page.goto("/");
+  await page.getByRole("button", { name: "음성 입력 시작" }).click();
+  await page.getByRole("button", { name: "동의하고 마이크 사용" }).click();
+  await expect(page.getByRole("alert")).toContainText("마이크를 사용할 수 없습니다");
+  await expect.poll(() => page.evaluate(() => localStorage.getItem("bitbox.voiceConsent.v1"))).toBe("accepted");
+
+  await page.clock.fastForward(90_000);
+
+  await expect.poll(() => page.evaluate(() => localStorage.getItem("bitbox.voiceConsent.v1"))).toBeNull();
+});
+
 test("confirms an ambiguous station before requesting its route", async ({ page }) => {
   const requestBodies: Record<string, unknown>[] = [];
   await page.route("**/api/route", async (route) => {
@@ -553,6 +631,27 @@ test("starts only one recorder when the microphone button is activated twice qui
   await expect.poll(() => page.evaluate(() => (
     window as Window & { __closedAudioContexts?: number }
   ).__closedAudioContexts || 0)).toBe(1);
+});
+
+test("does not upload a timed-out recording after a new recording starts", async ({ page }) => {
+  await installFakeRecorder(page, { quiet: true, stopDelayMs: 500 });
+  await page.clock.install();
+  let uploadCalls = 0;
+  await page.route("**/api/upload", (route) => {
+    uploadCalls += 1;
+    return route.fulfill({ json: terminalArrivalResult });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "음성 입력 시작" }).click();
+  await page.clock.fastForward(200);
+  await expect(page.getByRole("button", { name: "음성 입력 완료" })).toBeVisible();
+  await page.clock.fastForward(8_000);
+  await expect(page.getByRole("alert")).toContainText("음성이 감지되지 않았습니다");
+
+  await page.getByRole("button", { name: "음성 입력 시작" }).click();
+  await page.clock.fastForward(500);
+  expect(uploadCalls).toBe(0);
 });
 
 test("renders terminal arrival as information instead of an error", async ({ page }) => {

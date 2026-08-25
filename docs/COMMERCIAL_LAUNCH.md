@@ -2,7 +2,8 @@
 
 ## Implemented in the repository
 
-- Voice processing consent, withdrawal and local recent-search deletion.
+- Voice processing consent, withdrawal, shared-kiosk idle reset and session
+  recent-search deletion.
 - Stale arrival-data warning and last-successful-data behavior.
 - Per-IP rate limits, in-process concurrency guards and restart-persistent
   single-instance daily cost guards.
@@ -10,7 +11,8 @@
 - Privacy-safe request IDs, local runtime counters and optional alert webhook.
 - HTTPS, CSP, strict host handling, cross-site request blocking and security headers.
 - Bandit, pip-audit, npm audit, CodeQL, unit, build and browser E2E checks.
-- Pinned direct dependencies, automated deployment, health recovery and rollback path.
+- Pinned direct dependencies, automated deployment, health recovery and a
+  documented manual rollback path.
 
 ## Owner actions required before unrestricted public launch
 
@@ -19,6 +21,10 @@ information or real users. They cannot be truthfully completed by a code change.
 
 - Put CloudFront or an Application Load Balancer and AWS WAF in front of the app.
   Configure managed rules, provider-side quotas and AWS Budget alarms.
+- Restrict production API access to managed kiosk devices or an approved network
+  using a device-aware gateway, VPN, mTLS or equivalent control. The current
+  reverse-proxy token protects the backend port but does not authenticate public
+  browser clients.
 - Remove the single-EC2 failure point with at least two instances and shared
   Redis-backed rate limits/cache, or formally accept single-instance availability.
 - Store and rotate provider keys with AWS Secrets Manager or Parameter Store and
@@ -39,6 +45,8 @@ information or real users. They cannot be truthfully completed by a code change.
   sequence fallback instead of a blank map.
 - Define and test RTO/RPO, incident ownership and restoration from a fresh EC2
   instance before advertising an availability commitment.
+- Replace the manual backend revert procedure with an atomic backend release and
+  tested automatic rollback before claiming zero-downtime deployment.
 
 The service is not commercially approved until every applicable owner action has
 an accountable person, evidence and an acceptance date.

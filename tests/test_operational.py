@@ -1,6 +1,7 @@
 """Operational behavior tests."""
 
 import asyncio
+import json
 import re
 
 import httpx
@@ -101,6 +102,31 @@ def test_production_smoke_rejects_a_stale_release(monkeypatch) -> None:
     )
     assert "/health release_sha does not match the deployment commit" in errors
     assert "/ready release_sha does not match the deployment commit" in errors
+
+
+def test_production_transit_smoke_rejects_inconsistent_route_time(monkeypatch) -> None:
+    def fake_request(url: str, **_kwargs):
+        if url.endswith("/api/bus/default"):
+            return 200, {}, b'{"success":true,"items":[]}'
+        if "/api/places/suggest" in url:
+            return 200, {}, b'{"suggestions":[{"category_code":"SW8"}]}'
+        return 200, {}, json.dumps({
+            "success": True,
+            "buses": [{
+                "routeDetail": {
+                    "totalMin": 45,
+                    "steps": [
+                        {"type": "walk", "durationMin": 1},
+                        {"type": "bus", "durationMin": 41},
+                    ],
+                }
+            }],
+        }).encode()
+
+    monkeypatch.setattr(production_smoke, "_request", fake_request)
+    errors: list[str] = []
+    production_smoke._verify_transit_apis("https://example.com", errors)
+    assert errors == ["route API did not return a consistent bus-only route"]
 
 
 def test_readiness_fails_while_external_circuit_is_open(monkeypatch) -> None:
