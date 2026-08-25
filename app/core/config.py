@@ -6,6 +6,8 @@ pydantic-settings의 BaseSettings를 사용합니다.
 설정 항목 설명은 .env.example 파일을 참고하세요.
 """
 
+import re
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -62,6 +64,8 @@ class Settings(BaseSettings):
     CORS_ALLOWED_ORIGINS: str = "http://localhost:5173,http://127.0.0.1:5173"
     RATE_LIMIT_ENABLED: bool = True
     API_AUTH_TOKEN: str | None = None   # 설정 시 /api/process 호출에 토큰 필요
+    RELEASE_SHA: str | None = None
+    USAGE_DB_PATH: str | None = None
     TTS_TIMEOUT_SECONDS: int = 8        # TTS 단독 타임아웃 (초)
     ALLOW_KNOWN_PLACE_FALLBACK: bool | None = None
     VOICE_MAX_CONCURRENT_REQUESTS: int = 4
@@ -110,6 +114,11 @@ def validate_required_settings() -> None:
             raise RuntimeError(
                 f"APP_ENV={settings.APP_ENV!r}에서는 CORS_ALLOWED_ORIGINS='*'를 사용할 수 없습니다."
             )
+
+    if settings.APP_ENV == "prod" and not re.fullmatch(
+        r"[0-9a-f]{40}", settings.RELEASE_SHA or ""
+    ):
+        raise RuntimeError("APP_ENV='prod'에서는 유효한 RELEASE_SHA가 필요합니다.")
 
     if settings.USE_MOCK_EXTERNALS:
         return

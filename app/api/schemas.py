@@ -160,6 +160,7 @@ class HealthResponse(BaseModel):
     env: str
     mock_mode: bool
     version: str
+    release_sha: str | None = None
     capabilities: list[str]
     api_keys_configured: dict[str, bool] | None = None
 
@@ -167,3 +168,4 @@ class HealthResponse(BaseModel):
 class ReadinessResponse(BaseModel):
     status: Literal["ready"]
     version: str
+    release_sha: str | None = None

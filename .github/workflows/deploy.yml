@@ -187,8 +187,9 @@ jobs:
             sudo mv -Tf /var/www/bitbox-current.next /var/www/bitbox-current
 
             sudo install -d -m 700 /etc/bitbox
-            printf 'APP_ENV=prod\nUSE_MOCK_EXTERNALS=false\nCORS_ALLOWED_ORIGINS=\nAPI_AUTH_TOKEN=%s\nOPENAI_API_KEY=%s\nKAKAO_REST_API_KEY=%s\nODSAY_API_KEY=%s\nPUBLIC_DATA_SERVICE_KEY=%s\nDEFAULT_ORIGIN_NAME=올림픽공원역\nDEFAULT_BUS_STOP_NAME=올림픽공원역\nDEFAULT_BUS_STATION_ID=24245\n' \
-              "$API_AUTH_TOKEN" "$OPENAI_API_KEY" "$KAKAO_REST_API_KEY" "$ODSAY_API_KEY" "$PUBLIC_DATA_SERVICE_KEY" \
+            sudo install -d -o ubuntu -g ubuntu -m 750 /var/lib/bitbox
+            printf 'APP_ENV=prod\nUSE_MOCK_EXTERNALS=false\nCORS_ALLOWED_ORIGINS=\nAPI_AUTH_TOKEN=%s\nOPENAI_API_KEY=%s\nKAKAO_REST_API_KEY=%s\nODSAY_API_KEY=%s\nPUBLIC_DATA_SERVICE_KEY=%s\nRELEASE_SHA=%s\nUSAGE_DB_PATH=/var/lib/bitbox/usage.sqlite3\nDEFAULT_ORIGIN_NAME=올림픽공원역\nDEFAULT_BUS_STOP_NAME=올림픽공원역\nDEFAULT_BUS_STATION_ID=24245\n' \
+              "$API_AUTH_TOKEN" "$OPENAI_API_KEY" "$KAKAO_REST_API_KEY" "$ODSAY_API_KEY" "$PUBLIC_DATA_SERVICE_KEY" "$RELEASE_SHA" \
               | sudo tee /etc/bitbox/bitbox.env >/dev/null
             sudo chmod 600 /etc/bitbox/bitbox.env
 
@@ -267,4 +268,7 @@ jobs:
       - name: Verify public production boundary
         env:
           BITBOX_SERVER_NAME: ${{ secrets.BITBOX_SERVER_NAME }}
-        run: python scripts/production_smoke.py --url "https://$BITBOX_SERVER_NAME"
+        run: >-
+          python scripts/production_smoke.py
+          --url "https://$BITBOX_SERVER_NAME"
+          --expected-release-sha "${{ github.sha }}"

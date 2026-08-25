@@ -113,6 +113,7 @@ def health_check() -> HealthResponse:
         "env": settings.APP_ENV,
         "mock_mode": is_mock_mode(),
         "version": app.version,
+        "release_sha": settings.RELEASE_SHA,
         "capabilities": [
             "bus_arrivals",
             "bus_only_routes",
@@ -142,7 +143,11 @@ def readiness_check() -> ReadinessResponse:
             status_code=503,
             detail="외부 교통 서비스 연결이 일시적으로 불안정합니다.",
         )
-    return ReadinessResponse(status="ready", version=app.version)
+    return ReadinessResponse(
+        status="ready",
+        version=app.version,
+        release_sha=settings.RELEASE_SHA,
+    )
 
 
 @app.get("/internal/status", include_in_schema=False)
@@ -154,6 +159,7 @@ async def internal_status(request: Request) -> dict[str, object]:
     return {
         "status": "ok",
         "version": app.version,
+        "release_sha": settings.RELEASE_SHA,
         "runtime": runtime_snapshot(),
         "usage": usage_snapshot(),
         "circuits": circuit_snapshot(),

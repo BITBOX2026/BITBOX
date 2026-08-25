@@ -1,5 +1,5 @@
 [Unit]
-Description=Run BITBOX readiness check every minute
+Description=Run BITBOX liveness and readiness checks every minute
 
 [Timer]
 OnBootSec=2min

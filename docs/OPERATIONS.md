@@ -3,37 +3,49 @@
 ## Service objectives
 
 - Public HTTPS and `/health`: available during normal operation.
-- `/ready`: returns `200` only after application startup validation succeeds.
+- `/ready`: returns `200` only after startup validation succeeds and no monitored
+  external-provider circuit is open.
 - Bus arrival board: refreshes every 15 seconds and keeps the last successful data on transient failure.
 - Route requests: backend timeout 30 seconds, browser timeout 35 seconds, proxy timeout 40 seconds.
 
 ## Monitoring
 
-Monitor these endpoints from outside EC2 at one-minute intervals:
+Monitor these endpoints from outside EC2:
 
 - `GET https://<domain>/health`
 - `GET https://<domain>/ready`
 - `GET https://<domain>/`
 
-Alert after two consecutive failures. Application logs are available through
+The `Production Monitor` GitHub Actions workflow checks them every 15 minutes
+after that workflow exists on the repository default branch. A scheduled
+workflow present only on a non-default branch does not run. GitHub records a
+failed run, but an actual paging notification still requires repository or
+organization Actions notifications. Application logs are available through
 `journalctl -u bitbox-backend.service`; Nginx JSON access and error logs are in
 `/var/log/nginx/bitbox_access.log` and `/var/log/nginx/bitbox_error.log` and are
 retained for 14 rotations.
 
-The local `bitbox-healthcheck.timer` checks `/ready` every minute. Three
-consecutive failures restart the backend and write an event to the system log.
-This is self-recovery, not external uptime monitoring; an independent monitor
-must still alert when the whole instance or network is unavailable.
+The local `bitbox-healthcheck.timer` checks `/health` and `/ready` every minute.
+Three consecutive liveness (`/health`) failures restart the backend. Three
+consecutive readiness failures send an alert and log the external-dependency
+degradation without restarting a healthy process. This local check cannot
+detect a whole-instance or network outage.
 
 For a Slack-compatible alert webhook, add the HTTPS URL as the repository
 Actions secret `BITBOX_ALERT_WEBHOOK_URL`. The deployment writes it to
 `/etc/bitbox/monitoring.env` with mode `600`. The local healthcheck sends an
-alert after three failures before restarting the backend. Keep this value out
-of Git and rotate the webhook if it is exposed.
+alert after three failures. Keep this value out of Git and rotate the webhook
+if it is exposed.
 
 Local runtime counters, paid-request usage and external circuit states are
 available only from EC2 with `curl http://127.0.0.1:8001/internal/status`.
 Nginx returns `404` for every external `/internal/` request.
+
+Production stores daily paid-request counts in
+`/var/lib/bitbox/usage.sqlite3`, so those limits survive application restarts on
+the single EC2 instance. Active concurrency, runtime metrics, circuit state and
+cache state remain process-local. SQLite is not a distributed counter and must
+be replaced by a shared store before running multiple application instances.
 
 The runtime snapshot also aggregates privacy-safe counts for safety decision
 levels (`verified`, `confirm`, `retry`), pipeline intent and provider source.
@@ -64,8 +76,10 @@ through `/var/www/bitbox-current` atomically.
 
 After activation, CI also checks the public HTTPS path, `/health`, `/ready`,
 required security headers, external blocking of `/internal/status`, and at
-least 14 days of TLS certificate validity. A failed public-boundary check fails
-the deployment run even when the EC2-local check passed.
+least 14 days of TLS certificate validity. `/health` and `/ready` must expose
+the exact deployed Git commit in `release_sha`, preventing a stale process from
+being mistaken for a successful deployment. A failed public-boundary check
+fails the deployment run even when the EC2-local check passed.
 
 Direct backend dependencies and frontend packages are pinned to tested versions.
 Dependabot proposes reviewed upgrades; do not loosen production version pins
@@ -99,6 +113,6 @@ add at least two instances behind an Application Load Balancer, shared Redis for
 distributed rate limits/cache, managed monitoring, and automated instance health
 replacement. Provider quotas and billing alerts must be configured independently.
 
-The in-process daily limits are emergency cost guards, not billing controls. They
-reset on process restart and are not shared across instances. Use API Gateway/WAF
-and provider-side hard quotas before horizontal scaling.
+The SQLite-backed daily limits are emergency single-instance cost guards, not
+billing controls, and are not shared across instances. Use API Gateway/WAF and
+provider-side hard quotas before horizontal scaling.

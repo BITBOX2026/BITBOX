@@ -37,7 +37,11 @@ def _certificate_days_remaining(hostname: str, port: int) -> int:
     return (expires_at - datetime.now(UTC)).days
 
 
-def verify(base_url: str, minimum_certificate_days: int) -> list[str]:
+def verify(
+    base_url: str,
+    minimum_certificate_days: int,
+    expected_release_sha: str | None = None,
+) -> list[str]:
     parsed = urlparse(base_url)
     if parsed.scheme != "https" or not parsed.hostname or parsed.path not in ("", "/"):
         return ["base URL must be an HTTPS origin without a path"]
@@ -50,8 +54,11 @@ def verify(base_url: str, minimum_certificate_days: int) -> list[str]:
         errors.append(f"/health returned {health_status}")
     else:
         try:
-            if json.loads(health_body).get("status") != "ok":
+            health_payload = json.loads(health_body)
+            if health_payload.get("status") != "ok":
                 errors.append("/health did not report status=ok")
+            if expected_release_sha and health_payload.get("release_sha") != expected_release_sha:
+                errors.append("/health release_sha does not match the deployment commit")
         except (json.JSONDecodeError, AttributeError):
             errors.append("/health did not return the expected JSON")
 
@@ -71,8 +78,11 @@ def verify(base_url: str, minimum_certificate_days: int) -> list[str]:
         errors.append(f"/ready returned {ready_status}")
     else:
         try:
-            if json.loads(ready_body).get("status") != "ready":
+            ready_payload = json.loads(ready_body)
+            if ready_payload.get("status") != "ready":
                 errors.append("/ready did not report status=ready")
+            if expected_release_sha and ready_payload.get("release_sha") != expected_release_sha:
+                errors.append("/ready release_sha does not match the deployment commit")
         except (json.JSONDecodeError, AttributeError):
             errors.append("/ready did not return the expected JSON")
 
@@ -96,10 +106,15 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--url", required=True, help="Production HTTPS origin")
     parser.add_argument("--minimum-certificate-days", type=int, default=14)
+    parser.add_argument("--expected-release-sha")
     args = parser.parse_args()
 
     try:
-        errors = verify(args.url, args.minimum_certificate_days)
+        errors = verify(
+            args.url,
+            args.minimum_certificate_days,
+            args.expected_release_sha,
+        )
     except (OSError, TimeoutError, ssl.SSLError) as exc:
         errors = [f"production connection failed: {exc}"]
 

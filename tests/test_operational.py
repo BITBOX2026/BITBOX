@@ -13,6 +13,7 @@ import app.main as main_module
 from app.core.request_context import request_context_middleware, request_id_for
 from app.core.runtime_metrics import record_safety_decision, runtime_snapshot
 from app.main import readiness_check
+from scripts import production_smoke
 
 
 def _request(headers: list[tuple[bytes, bytes]] | None = None) -> Request:
@@ -61,9 +62,45 @@ def test_runtime_metrics_count_privacy_safe_pipeline_dimensions() -> None:
 
 def test_readiness_contract(monkeypatch) -> None:
     monkeypatch.setattr(main_module, "circuit_snapshot", dict)
+    monkeypatch.setattr(main_module.settings, "RELEASE_SHA", "a" * 40)
     response = readiness_check()
     assert response.status == "ready"
     assert response.version
+    assert response.release_sha == "a" * 40
+
+
+def test_health_contract_includes_release_sha(monkeypatch) -> None:
+    monkeypatch.setattr(main_module.settings, "RELEASE_SHA", "b" * 40)
+    response = main_module.health_check()
+    assert response.release_sha == "b" * 40
+
+
+def test_production_smoke_rejects_a_stale_release(monkeypatch) -> None:
+    headers = {
+        "Content-Security-Policy": "default-src 'self'",
+        "Strict-Transport-Security": "max-age=31536000",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY",
+        "X-Request-ID": "test-request",
+    }
+
+    def fake_request(url: str):
+        if url.endswith("/health"):
+            return 200, headers, b'{"status":"ok","release_sha":"old"}'
+        if url.endswith("/ready"):
+            return 200, headers, b'{"status":"ready","release_sha":"old"}'
+        return 404, headers, b"{}"
+
+    monkeypatch.setattr(production_smoke, "_request", fake_request)
+    monkeypatch.setattr(production_smoke, "_certificate_days_remaining", lambda *_: 30)
+
+    errors = production_smoke.verify(
+        "https://example.com",
+        minimum_certificate_days=14,
+        expected_release_sha="c" * 40,
+    )
+    assert "/health release_sha does not match the deployment commit" in errors
+    assert "/ready release_sha does not match the deployment commit" in errors
 
 
 def test_readiness_fails_while_external_circuit_is_open(monkeypatch) -> None:

@@ -10,7 +10,7 @@ from fastapi import HTTPException
 from starlette.requests import Request
 
 from app.api.gateway import _safe_audio_filename
-from app.core import usage_guard
+from app.core import config, usage_guard
 from app.main import internal_status
 from app.services.core import http_utils
 from app.services.core.exceptions import TransportAPIError
@@ -79,6 +79,73 @@ def test_paid_usage_guard_enforces_concurrency_and_daily_limits() -> None:
         assert daily_error.value.status_code == 429
 
     asyncio.run(scenario())
+
+
+def test_paid_usage_guard_survives_process_state_reset(monkeypatch, tmp_path) -> None:
+    name = f"persistent-{uuid4().hex}"
+    monkeypatch.setattr(usage_guard.settings, "USAGE_DB_PATH", str(tmp_path / "usage.db"))
+
+    async def use_once() -> None:
+        async with usage_guard.usage_slot(name, max_concurrent=1, daily_limit=2):
+            pass
+
+    asyncio.run(use_once())
+    asyncio.run(use_once())
+    usage_guard._states.pop(name, None)
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(use_once())
+    assert exc_info.value.status_code == 429
+    assert usage_guard.usage_snapshot()[name]["used"] == 2
+
+
+def test_paid_usage_guard_fails_closed_when_storage_is_unavailable(
+    monkeypatch, tmp_path
+) -> None:
+    name = f"unavailable-{uuid4().hex}"
+    monkeypatch.setattr(usage_guard.settings, "USAGE_DB_PATH", str(tmp_path))
+
+    async def scenario() -> None:
+        async with usage_guard.usage_slot(name, max_concurrent=1, daily_limit=2):
+            pass
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(scenario())
+    assert exc_info.value.status_code == 503
+
+
+def test_healthcheck_does_not_restart_for_external_readiness_failure() -> None:
+    script = Path("deploy/bitbox-healthcheck.sh").read_text(encoding="utf-8")
+    health_branch, readiness_branch = script.split(
+        "if curl --fail --silent --show-error --max-time 5 "
+        "http://127.0.0.1:8001/ready",
+        maxsplit=1,
+    )
+    assert "systemctl restart bitbox-backend.service" in health_branch
+    assert "systemctl restart bitbox-backend.service" not in readiness_branch
+    assert "backend remains live and was not restarted" in readiness_branch
+
+
+def test_external_production_monitor_is_scheduled() -> None:
+    workflow = Path(".github/workflows/production-monitor.yml").read_text(
+        encoding="utf-8"
+    )
+    assert 'cron: "*/15 * * * *"' in workflow
+    assert "scripts/production_smoke.py" in workflow
+
+
+def test_production_requires_a_full_release_sha(monkeypatch) -> None:
+    monkeypatch.setattr(config.settings, "APP_ENV", "prod")
+    monkeypatch.setattr(config.settings, "USE_MOCK_EXTERNALS", True)
+    monkeypatch.setattr(config.settings, "API_AUTH_TOKEN", "test-token")
+    monkeypatch.setattr(config.settings, "CORS_ALLOWED_ORIGINS", "")
+    monkeypatch.setattr(config.settings, "RELEASE_SHA", None)
+
+    with pytest.raises(RuntimeError, match="RELEASE_SHA"):
+        config.validate_required_settings()
+
+    monkeypatch.setattr(config.settings, "RELEASE_SHA", "d" * 40)
+    config.validate_required_settings()
 
 
 def test_external_circuit_opens_after_final_retry(monkeypatch) -> None:

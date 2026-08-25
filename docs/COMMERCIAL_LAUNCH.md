@@ -4,7 +4,8 @@
 
 - Voice processing consent, withdrawal and local recent-search deletion.
 - Stale arrival-data warning and last-successful-data behavior.
-- Per-IP rate limits plus in-process concurrency and daily cost guards.
+- Per-IP rate limits, in-process concurrency guards and restart-persistent
+  single-instance daily cost guards.
 - Retry, timeout, response-size validation and external API circuit breakers.
 - Privacy-safe request IDs, local runtime counters and optional alert webhook.
 - HTTPS, CSP, strict host handling, cross-site request blocking and security headers.
@@ -24,7 +25,9 @@ information or real users. They cannot be truthfully completed by a code change.
   use a least-privilege instance/deployment role.
 - Add the real alert webhook as the GitHub Actions secret
   `BITBOX_ALERT_WEBHOOK_URL`; deployment installs it on EC2 automatically. Add
-  an independent uptime check for `/ready`, 5xx rate and latency.
+  paging notifications for the scheduled external uptime workflow, 5xx rate
+  and latency. Ensure the monitor workflow is merged to the default branch so
+  GitHub actually schedules it.
 - Replace generic in-app privacy text with the operator's legal name, contact,
   provider retention terms and counsel-reviewed privacy policy.
 - Run field tests with wheelchair users, older adults and screen-reader users;
