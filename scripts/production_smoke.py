@@ -144,13 +144,11 @@ def _verify_transit_apis(origin: str, errors: list[str]) -> None:
     )
     try:
         suggestions = json.loads(place_body).get("suggestions", [])
-    except (json.JSONDecodeError, AttributeError):
+        top_category = suggestions[0].get("category_code")
+    except (json.JSONDecodeError, AttributeError, IndexError, TypeError):
         suggestions = []
-    if (
-        place_status != 200
-        or not suggestions
-        or suggestions[0].get("category_code") != "SW8"
-    ):
+        top_category = None
+    if place_status != 200 or not suggestions or top_category != "SW8":
         errors.append("place suggestion API did not prioritize the expected station")
 
     route_request = json.dumps(
@@ -182,12 +180,21 @@ def _verify_transit_apis(origin: str, errors: list[str]) -> None:
         segment_minutes = -1
         has_bus = False
         bus_only = False
+    # 화면에 보이는 계약은 "구간시간 합이 총시간을 넘지 않는다"입니다. ODsay의 총시간은
+    # 버스 대기시간을 포함할 수 있어 구간합과 정확히 같지 않을 수 있으므로, 정상 데이터에서
+    # 배포가 실패하지 않도록 등호 대신 상한 비교를 사용합니다. 백엔드가 total_time_min을
+    # 구간합 이상으로 올려 주므로 이 조건이 깨지면 실제 계약 위반입니다.
+    consistent_durations = (
+        isinstance(total_minutes, int)
+        and total_minutes > 0
+        and 0 <= segment_minutes <= total_minutes
+    )
     if (
         route_status != 200
         or route_payload.get("success") is not True
         or not has_bus
         or not bus_only
-        or segment_minutes != total_minutes
+        or not consistent_durations
     ):
         errors.append("route API did not return a consistent bus-only route")
 

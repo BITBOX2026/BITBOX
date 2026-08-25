@@ -150,3 +150,66 @@ def test_bus_route_search_selects_only_exact_number(monkeypatch) -> None:
     monkeypatch.setattr(public_bus_service, "request_seoul_bus_payload", fake_payload)
     selected = asyncio.run(public_bus_service.search_bus_route("3400"))
     assert selected and selected["busRouteId"] == "2"
+
+
+# ---------------------------------------------------------------------------
+# 한국어 횟수·지시 표현이 버스 번호로 오변환되지 않는지
+#
+# 문장 단위 정규화는 LLM 호출 전에 실행되므로, 여기서 한 번 잘못 바꾸면 LLM이
+# 원래 표현을 복원할 수 없습니다. 한국어에서 노선 번호는 언제나 한자어로 읽고
+# ("삼사이삼"), 고유어 수사 + `번`은 횟수를 뜻합니다("다시 한 번").
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "transcript",
+    [
+        "다시 한 번 말할게요",
+        "한 번만 더 알려주세요",
+        "두 번 눌렀어요",
+        "세 번째 정류장이요",
+        "네 번 정도 기다렸어요",
+        "열 번 넘게 기다렸어요",
+        "이번에 오는 버스가 뭐예요",
+        "이번 버스 놓쳤어요",
+        "오번 출구로 나가면 되나요",
+        "몇 번 버스가 와요",
+        "이 버스가 와요",
+    ],
+)
+def test_counting_and_demonstrative_speech_is_not_turned_into_a_route(transcript: str) -> None:
+    from app.services.ai.korean_number_normalizer import normalize_spoken_bus_numbers
+
+    assert normalize_spoken_bus_numbers(transcript) == transcript
+
+
+@pytest.mark.parametrize(
+    ("transcript", "expected"),
+    [
+        ("삼사이삼번 버스", "3423번 버스"),
+        ("삼천사백이십삼번", "3423번"),
+        ("삼번 버스 언제 와요", "3번 버스 언제 와요"),
+        ("일번 버스", "1번 버스"),
+        ("십번 노선", "10번 노선"),
+    ],
+)
+def test_sino_korean_route_readings_are_still_normalized(transcript: str, expected: str) -> None:
+    from app.services.ai.korean_number_normalizer import normalize_spoken_bus_numbers
+
+    assert normalize_spoken_bus_numbers(transcript) == expected
+
+
+def test_counting_speech_does_not_become_an_arrival_request() -> None:
+    """오변환이 사라지면 규칙 기반 분석도 버스 번호를 만들어 내지 않아야 합니다."""
+    for transcript in ("다시 한 번 말할게요", "세 번째 정류장이요", "이번에 오는 버스가 뭐예요"):
+        parsed = llm_service._mock_parse_transit_intent(
+            llm_service.normalize_spoken_bus_numbers(transcript)
+        )
+        assert parsed.bus_number is None, transcript
+
+
+def test_native_korean_reading_is_never_a_route_number_token() -> None:
+    """LLM이 고유어 수사를 버스 번호로 넘겨도 숫자로 확정하지 않습니다."""
+    for value in ("한", "두", "세", "네", "열"):
+        assert normalize_bus_number_token(value) == value
+    # "이번"에서 뽑힌 `이`도 2번 노선으로 확정하지 않습니다.
+    assert normalize_bus_number_token("이") == "이"

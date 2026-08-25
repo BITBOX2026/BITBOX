@@ -1,5 +1,5 @@
 import { Check, MapPin, Mic, TrainFront, Volume2 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { PlaceSuggestion, SafetyDecision, TransitConfirmation } from "../../api/client";
 
 interface VoiceConfirmationProps {
@@ -58,25 +58,16 @@ export function VoiceConfirmation({ confirmation, transcript, audioBase64, safet
     return stopPrompt;
   }, [playPrompt, stopPrompt]);
 
-  const trapFocus = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key !== "Tab") return;
-    const focusable = Array.from(
-      dialogRef.current?.querySelectorAll<HTMLElement>("button:not(:disabled), [href], [tabindex]:not([tabindex='-1'])") ?? [],
-    );
-    if (focusable.length === 0) return;
-    const first = focusable[0];
-    const last = focusable[focusable.length - 1];
-    if (event.shiftKey && document.activeElement === first) {
-      event.preventDefault();
-      last.focus();
-    } else if (!event.shiftKey && document.activeElement === last) {
-      event.preventDefault();
-      first.focus();
-    }
-  };
-
+  /*
+    이 확인 단계는 화면 하단 음성 패널 안에 그려지는 인라인 영역이며 모달이 아닙니다.
+    이전에는 `role="dialog" aria-modal="true"`를 선언했는데, 그러면 스크린리더가
+    이 영역 바깥 전체 — 즉 실시간 버스 전광판 — 를 숨겨 버립니다. 확인 중에도
+    전광판은 계속 유효한 정보이므로 숨기면 안 됩니다. 또한 배경을 실제로 막지
+    않으면서 포커스만 가두면 키보드 이용자가 전광판에 접근할 수 없게 됩니다.
+    따라서 이름이 붙은 그룹으로 선언하고, 초기 포커스만 후보 버튼에 둡니다.
+  */
   return (
-    <div ref={dialogRef} onKeyDown={trapFocus} className="fade-enter min-w-0" role="dialog" aria-modal="true" aria-labelledby="place-confirmation-title">
+    <div ref={dialogRef} className="fade-enter min-w-0" role="group" aria-labelledby="place-confirmation-title">
       <p className="mb-1 text-xs font-extrabold text-[#F0C929]">장소 확인</p>
       <h2 id="place-confirmation-title" className="text-[clamp(22px,4vw,34px)] font-black leading-tight">
         {confirmation.prompt}

@@ -1,10 +1,14 @@
 import { Database, Mic, ShieldCheck, ShieldX, Trash2, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   clearRecentDestinationHistory,
   removeKioskStorage,
   VOICE_CONSENT_KEY,
 } from "../../utils/kioskStorage";
+
+const FOCUSABLE_SELECTOR =
+  "button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex='-1'])";
 
 export { VOICE_CONSENT_KEY } from "../../utils/kioskStorage";
 
@@ -24,26 +28,63 @@ export function PrivacyNotice({ open, consentRequired, onAccept, onClose }: Priv
     if (!open) return;
     const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     dialogRef.current?.focus();
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+
+    // 배경을 실제로 비활성화합니다. `aria-modal`만으로는 배경 버튼이 계속
+    // 클릭·포커스되므로, 화면 밖으로 포커스가 새는 것을 막지 못합니다.
+    const appRoot = document.getElementById("root");
+    const supportsInert = typeof HTMLElement !== "undefined" && "inert" in HTMLElement.prototype;
+    if (appRoot && supportsInert) appRoot.inert = true;
+
+    const handleKeydown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        onClose();
+        return;
+      }
       if (event.key !== "Tab") return;
-      const focusable = Array.from(
-        dialogRef.current?.querySelectorAll<HTMLElement>("button:not(:disabled), [href], [tabindex]:not([tabindex='-1'])") ?? [],
-      );
-      if (focusable.length === 0) return;
+      const dialog = dialogRef.current;
+      if (!dialog) return;
+      const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR));
+      if (focusable.length === 0) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
-      if (event.shiftKey && document.activeElement === first) {
+      const active = document.activeElement;
+
+      // 포커스가 어떤 이유로든 dialog 밖에 있으면 되돌립니다. 이전 구현은
+      // 첫/마지막 요소일 때만 개입해서, 한 번 새어 나가면 복귀하지 못했습니다.
+      if (!(active instanceof HTMLElement) || !dialog.contains(active)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+        return;
+      }
+      if (event.shiftKey && active === first) {
         event.preventDefault();
         last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
+      } else if (!event.shiftKey && active === last) {
         event.preventDefault();
         first.focus();
       }
     };
-    window.addEventListener("keydown", closeOnEscape);
+
+    // 배경을 눌러 포커스가 빠져나가는 경우까지 복구합니다(inert 미지원 대비).
+    const handleFocusIn = (event: FocusEvent) => {
+      const dialog = dialogRef.current;
+      if (!dialog) return;
+      const target = event.target;
+      if (target instanceof Node && !dialog.contains(target)) {
+        dialog.focus();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeydown);
+    document.addEventListener("focusin", handleFocusIn);
     return () => {
-      window.removeEventListener("keydown", closeOnEscape);
+      window.removeEventListener("keydown", handleKeydown);
+      document.removeEventListener("focusin", handleFocusIn);
+      if (appRoot && supportsInert) appRoot.inert = false;
       previouslyFocused?.focus();
     };
   }, [onClose, open]);
@@ -60,8 +101,10 @@ export function PrivacyNotice({ open, consentRequired, onAccept, onClose }: Priv
     setConsentRevoked(true);
   };
 
-  return (
-    <div className="absolute inset-0 z-[80] grid place-items-center bg-black/65 p-3" role="presentation">
+  // 화면 전체를 덮어야 배경(버스 전광판)이 클릭되지 않습니다. 이전에는 음성 패널
+  // 안에 갇혀 있어 상단 전광판이 모달 중에도 눌렸습니다.
+  return createPortal(
+    <div className="fixed inset-0 z-[80] grid place-items-center bg-black/65 p-3" role="presentation">
       <section
         ref={dialogRef}
         tabIndex={-1}
@@ -99,7 +142,7 @@ export function PrivacyNotice({ open, consentRequired, onAccept, onClose }: Priv
               <ShieldX className="size-4" /> {consentRevoked ? "음성 동의를 철회했습니다" : "음성 처리 동의 철회"}
             </button>}
           </div>
-          <p className="text-xs text-slate-500">시행일: 2026-08-08 · 음성 동의는 홈 이동 또는 90초 무활동으로 현재 이용 세션이 끝나면 삭제됩니다.</p>
+          <p className="text-xs text-slate-500">시행일: 2026-08-08 · 음성 동의는 홈 이동, 90초 무활동, 화면 재시작 중 하나로 현재 이용 세션이 끝나면 삭제됩니다.</p>
         </div>
 
         <footer className="flex items-center justify-end gap-2 border-t border-slate-200 px-4 py-3 sm:px-5">
@@ -107,6 +150,7 @@ export function PrivacyNotice({ open, consentRequired, onAccept, onClose }: Priv
           {consentRequired && <button type="button" onClick={onAccept} className="rounded bg-[#145466] px-4 py-2 text-sm font-black text-white hover:bg-[#0F4655]">동의하고 마이크 사용</button>}
         </footer>
       </section>
-    </div>
+    </div>,
+    document.body,
   );
 }

@@ -1,4 +1,5 @@
 import { BusFront, Clock } from "lucide-react";
+import { describeArrivalStatus } from "../../../api/busService";
 import type { BusOption } from "../../../types/bus";
 
 interface BusListProps {
@@ -7,9 +8,12 @@ interface BusListProps {
   onBusClick: (bus: BusOption) => void;
 }
 
-function formatArrival(value: number): string {
-  if (!Number.isFinite(value) || value < 0) return "정보 없음";
-  return value <= 1 ? "곧 도착" : `${value}분`;
+function formatArrival(bus: BusOption): string {
+  // 출발대기·운행종료를 뭉뚱그려 "정보 없음"으로 보여 주면 백엔드가 안내하는
+  // 이유와 화면이 어긋납니다. 상태별 문구를 그대로 씁니다.
+  if (bus.status !== "live") return describeArrivalStatus(bus.status);
+  if (!Number.isFinite(bus.arrivalMin) || bus.arrivalMin < 0) return "정보 없음";
+  return bus.arrivalMin <= 1 ? "곧 도착" : `${bus.arrivalMin}분`;
 }
 
 export function BusList({ buses, selectedId, onBusClick }: BusListProps) {
@@ -29,9 +33,9 @@ export function BusList({ buses, selectedId, onBusClick }: BusListProps) {
               aria-pressed={isSelected}
               className={`flex min-h-[64px] flex-col items-center justify-center border-r border-slate-300 px-4 py-2 text-[#171D23] transition-colors sm:min-h-[112px] sm:w-full sm:min-w-0 sm:border-b sm:border-r-0 sm:px-2 sm:py-3 ${buses.length === 1 ? "w-full" : "min-w-[112px]"} ${isSelected ? "bg-[#F0C929] shadow-[inset_0_-4px_0_#171D23] sm:shadow-[inset_4px_0_0_#171D23]" : "bg-white hover:bg-slate-50"}`}
             >
-              <span className="max-w-full truncate font-mono text-xl font-black sm:text-3xl">{bus.busNumber}</span>
+              <span className="max-w-full truncate font-mono text-xl font-black leading-normal sm:text-3xl">{bus.busNumber}</span>
               <span className="mt-0.5 flex items-center gap-1 whitespace-nowrap text-xs font-black sm:mt-1 sm:text-base">
-                <Clock className="size-3.5 sm:size-4" /> {formatArrival(bus.arrivalMin)}
+                <Clock className="size-3.5 sm:size-4" /> {formatArrival(bus)}
               </span>
             </button>
           );

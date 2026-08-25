@@ -58,6 +58,32 @@ These counters never store transcripts, destinations, bus numbers or audio.
 They are process-local and reset on restart, so export snapshots externally
 before using them in a longitudinal report.
 
+### Alert channel
+
+`bitbox-healthcheck` restarts the backend after three consecutive liveness
+failures and reports readiness degradation without restarting. Both paths, and
+the deployment rollback, call `send_alert`.
+
+`send_alert` posts to `BITBOX_ALERT_WEBHOOK_URL`. **When that repository secret is
+not set, no notification leaves the host.** The scripts then write to the system
+journal instead of failing silently, and the deployment run adds a GitHub
+Actions warning annotation so the gap is visible on every deploy.
+
+Check whether alerting is configured:
+
+```bash
+sudo test -f /etc/bitbox/monitoring.env && echo configured || echo 'NOT configured'
+sudo journalctl -t bitbox-healthcheck -t bitbox-rollback --since '-7d' --no-pager
+```
+
+Enable it (any HTTPS endpoint that accepts `{"text": "..."}` — Slack incoming
+webhook, Discord webhook, or your own receiver):
+
+```bash
+gh secret set BITBOX_ALERT_WEBHOOK_URL --repo BITBOX2026/BITBOX
+# then redeploy so the value reaches /etc/bitbox/monitoring.env
+```
+
 ## Incident checks
 
 ```bash
@@ -84,18 +110,42 @@ required security headers, external blocking of `/internal/status`, and at
 least 14 days of TLS certificate validity. `/health` and `/ready` must expose
 the exact deployed Git commit in `release_sha`, preventing a stale process from
 being mistaken for a successful deployment. The deployment also verifies one
-real response from each transit integration and checks that route segment time
-equals total time. A failed public-boundary check fails the deployment run even
+real response from each transit integration and checks that the guided segment
+times never exceed the displayed total. The provider total can legitimately be
+larger because it includes waiting for the bus, so an exact-equality check would
+fail deployments on healthy data; the backend guarantees the upper bound. A failed public-boundary check fails the deployment run even
 when the EC2-local check passed.
 
 Direct backend dependencies and frontend packages are pinned to tested versions.
 Dependabot proposes reviewed upgrades; do not loosen production version pins
 without passing the full security, unit, build and E2E pipeline.
 
-To restore an earlier frontend release, point `/var/www/bitbox-current` to a
-known release under `/var/www/bitbox-releases` and reload Nginx. Backend rollback
-uses a reviewed revert commit on the deployment branch; do not edit production
-source files directly.
+### Automatic rollback
+
+When the post-activation health loop fails, the deployment now rolls itself back
+instead of leaving a broken release live. `deploy/rollback.sh` restores the
+previous release directory through `/var/www/bitbox-current`, checks the backend
+work tree out at the commit recorded in `/etc/bitbox/previous_release_sha`,
+rewrites `RELEASE_SHA` in `/etc/bitbox/bitbox.env` so `/health` reports what is
+actually running, restarts the services, and waits for `/health` to answer. The
+deployment run still fails, so a red run always means "look at this", never
+"production is silently broken".
+
+The rollback path is exercised on every CI run by `deploy/rollback_test.sh`
+(wrapped by `tests/test_rollback_script.py`), which stubs `systemctl`, `curl` and
+`pip` and runs the real script against a temporary repository. It covers a
+healthy rollback, a rollback whose backend never recovers, a malformed commit
+value, a missing previous release, and a host with no alert webhook.
+
+To roll back manually:
+
+```bash
+sudo BITBOX_ROLLBACK_TO_SHA=<40-character commit>      BITBOX_ROLLBACK_TO_RELEASE=/var/www/bitbox-releases/<commit>      bash /home/ubuntu/BITBOX/deploy/rollback.sh
+```
+
+Only the immediately previous release is guaranteed to still exist; the cleanup
+step keeps it even when it is older than the 14-day retention window. Do not
+edit production source files directly.
 
 ## Privacy and retention
 
@@ -109,6 +159,44 @@ source files directly.
 - Shared-kiosk route history is cleared on home, after 90 seconds of inactivity,
   and on page startup. Voice consent is cleared when the active kiosk session
   ends through home or inactivity.
+
+## Single-host recovery
+
+Everything runs on one EC2 instance: Nginx, the Uvicorn backend, the SQLite
+usage counter, and the TLS certificate. That host is a single point of failure
+and losing it takes the kiosk offline. There is no automatic failover; recovery
+is a rebuild. Rehearse it before relying on it.
+
+State that must survive the instance:
+
+| Path | Contents | Recoverable from |
+| --- | --- | --- |
+| `/etc/bitbox/bitbox.env` | API keys, `RELEASE_SHA`, station defaults | GitHub Actions secrets (redeploy regenerates it) |
+| `/etc/letsencrypt/` | TLS certificate and private key | Certbot reissues on a fresh host |
+| `/var/lib/bitbox/usage.sqlite3` | Daily paid-request counters | Not recoverable; resets the daily budget |
+| `/var/www/bitbox-releases/` | Built frontend releases | Rebuilt by a deployment |
+| `/home/ubuntu/BITBOX` | Deployment work tree | `git clone` |
+
+Rebuild procedure:
+
+1. Launch a fresh Ubuntu instance and allow inbound `80/443` in the security
+   group.
+2. Point `BITBOX_SERVER_NAME` at the new address, and update the `EC2_HOST`
+   secret. The deployment refuses to request a certificate when the name does
+   not resolve to the host, so DNS must settle first.
+3. `git clone` the repository to `/home/ubuntu/BITBOX` and create `.venv`.
+4. Re-run the `Deploy merged app to EC2` workflow. It installs Nginx, Certbot and
+   rsync, issues the certificate, writes `/etc/bitbox/bitbox.env` from secrets,
+   installs the systemd units and timers, and verifies the public boundary.
+5. Confirm `release_sha` on `/health` matches the deployed commit, and that
+   `certbot.timer` and `bitbox-healthcheck.timer` are active.
+
+The daily usage counter starts from zero on the new host, so paid-provider spend
+for that day is effectively reset. Reduce `VOICE_DAILY_REQUEST_LIMIT` for the
+remainder of the day if that matters.
+
+Until a second instance exists, treat the recovery time objective as "manual
+rebuild", not "minutes".
 
 ## Capacity and scaling
 

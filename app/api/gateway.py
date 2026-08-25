@@ -18,6 +18,7 @@ from app.core.config import settings
 from app.core.logger import get_logger
 from app.core.rate_limiter import limiter
 from app.core.request_context import request_id_for
+from app.core.runtime_metrics import record_business_error
 from app.core.usage_guard import usage_slot
 from app.services.pipeline import (
     build_timeout_error_response,
@@ -182,6 +183,12 @@ def _apply_result_http_status(response: Response, result: dict) -> None:
     status_code = result.get("_http_status")
     if isinstance(status_code, int) and 400 <= status_code <= 599:
         response.status_code = status_code
+        return
+
+    # 재입력 요청처럼 HTTP 200으로 나가는 업무 오류가 성공 지표에 묻히지 않도록
+    # 별도 카운터에 기록합니다.
+    if result.get("status") == "error":
+        record_business_error(str(result.get("error_kind") or "request"))
 
 
 def _build_upload_compat_response(result: dict) -> dict:
@@ -249,6 +256,10 @@ def _build_buses_from_route(data: dict) -> list[dict]:
         for segment in route_segments
         if segment.get("time_min") is not None
     )
+    # 안내된 구간시간의 합이 화면의 총시간보다 큰 역방향 모순을 막습니다.
+    # 총시간을 줄이면 소요시간을 실제보다 짧게 안내하게 되므로, 항상 큰 쪽으로
+    # 올립니다(과소 안내 금지). 이렇게 하면 sum(steps) <= totalMin 이 항상 성립합니다.
+    total_time_min = max(total_time_min, known_time)
     remaining_time = max(total_time_min - known_time, 0)
     missing_durations: dict[int, int] = {}
     if missing_time_indexes:
@@ -304,6 +315,7 @@ def _build_buses_from_route(data: dict) -> list[dict]:
     return [{
         "id": f"route-{display_bus}-0",
         "busNumber": display_bus,
+        "status": "live" if arrival_min >= 0 else "unknown",
         "arrivalMin": arrival_min,
         "traTimeSec": arrival_min * 60 if arrival_min >= 0 else -1,
         "arrivalMsg": arrival_time or f"{display_bus} 도착정보 없음",
@@ -375,6 +387,7 @@ def _make_arrival_bus_entry(
         return {
             "id": f"arrival-{bus_number}{suffix}",
             "busNumber": bus_number,
+            "status": "standby",
             "arrivalMin": -1,
             "traTimeSec": -1,
             "arrivalMsg": "출발 대기 중",
@@ -393,6 +406,7 @@ def _make_arrival_bus_entry(
     return {
         "id": f"arrival-{bus_number}{suffix}",
         "busNumber": bus_number,
+        "status": "live" if arrival_min >= 0 else "unknown",
         "arrivalMin": arrival_min,
         "traTimeSec": max(arrival_min * 60, 30) if arrival_min >= 0 else -1,
         "arrivalMsg": arrival_time or f"{bus_number}번 도착 정보",

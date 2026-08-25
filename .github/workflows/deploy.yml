@@ -117,6 +117,9 @@ jobs:
             cd /home/ubuntu/BITBOX
             git fetch origin merge-frontend-backend
             git checkout merge-frontend-backend
+            # 배포 검증이 실패하면 되돌릴 커밋을 당겨오기 전에 기록합니다.
+            git rev-parse HEAD | sudo tee /etc/bitbox/previous_release_sha >/dev/null 2>&1 \
+              || { sudo install -d -m 700 /etc/bitbox; git rev-parse HEAD | sudo tee /etc/bitbox/previous_release_sha >/dev/null; }
             git pull --ff-only origin merge-frontend-backend
             .venv/bin/pip install -r requirements-backend.txt -q
             if ! command -v nginx >/dev/null 2>&1 || ! command -v envsubst >/dev/null 2>&1 || ! command -v certbot >/dev/null 2>&1 || ! command -v rsync >/dev/null 2>&1; then
@@ -155,6 +158,8 @@ jobs:
           KAKAO_REST_API_KEY: ${{ secrets.KAKAO_REST_API_KEY }}
           ODSAY_API_KEY: ${{ secrets.ODSAY_API_KEY }}
           PUBLIC_DATA_SERVICE_KEY: ${{ secrets.PUBLIC_DATA_SERVICE_KEY }}
+          # 이 값이 없으면 EC2의 헬스체크가 알림을 보내지 못하고 조용히 넘어갑니다.
+          BITBOX_ALERT_WEBHOOK_URL: ${{ secrets.BITBOX_ALERT_WEBHOOK_URL }}
           RELEASE_SHA: ${{ github.sha }}
           BITBOX_SERVER_NAME: ${{ secrets.BITBOX_SERVER_NAME }}
           BITBOX_TLS_CERT_PATH: ${{ secrets.BITBOX_TLS_CERT_PATH }}
@@ -180,6 +185,9 @@ jobs:
             sudo test -f "$BITBOX_TLS_KEY_PATH"
 
             release_dir="/var/www/bitbox-releases/$RELEASE_SHA"
+            # 검증 실패 시 되돌릴 대상을 전환 직전에 기록합니다.
+            previous_release="$(readlink -f /var/www/bitbox-current 2>/dev/null || true)"
+            previous_sha="$(sudo cat /etc/bitbox/previous_release_sha 2>/dev/null || true)"
             sudo install -d -o root -g root -m 755 "$release_dir"
             sudo rsync --archive --delete frontend/dist/ "$release_dir/"
             sudo chmod -R a+rX "$release_dir"
@@ -256,14 +264,31 @@ jobs:
             done
             if [[ "$deployment_healthy" == 1 ]]; then
               while IFS= read -r stale_release; do
+                # 직전 릴리스는 롤백 대상이므로 오래되었더라도 남깁니다.
                 [[ -n "$stale_release" && "$stale_release" != "$release_dir" ]] || continue
+                [[ "$stale_release" != "$previous_release" ]] || continue
                 sudo rm -rf -- "$stale_release"
               done < <(sudo find /var/www/bitbox-releases -mindepth 1 -maxdepth 1 -type d -mtime +14 -print)
               sudo systemctl is-active --quiet bitbox-backend.service bitbox-healthcheck.timer nginx certbot.timer
               exit 0
             fi
-            sudo systemctl status bitbox-backend.service nginx --no-pager
+
+            # 여기까지 왔다면 새 릴리스가 기동에 실패했습니다. 깨진 릴리스를 그대로
+            # 두지 않고 직전 릴리스로 되돌린 뒤 실패로 종료합니다.
+            echo 'Deployment verification failed; rolling back to the previous release.' >&2
+            sudo systemctl status bitbox-backend.service nginx --no-pager || true
+            BITBOX_ROLLBACK_TO_SHA="$previous_sha" \
+            BITBOX_ROLLBACK_TO_RELEASE="$previous_release" \
+            BITBOX_ALERT_WEBHOOK_URL="${BITBOX_ALERT_WEBHOOK_URL:-}" \
+              sudo -E bash deploy/rollback.sh || echo 'Rollback script reported an error.' >&2
             exit 1
+
+      # 알림 채널이 없으면 배포는 성공해도 이후 장애를 아무도 모릅니다.
+      # 조용히 지나가지 않도록 Actions 요약에 경고를 남깁니다.
+      - name: Warn when no alert channel is configured
+        if: ${{ secrets.BITBOX_ALERT_WEBHOOK_URL == '' }}
+        run: |
+          echo "::warning title=BITBOX 장애 알림 비활성::BITBOX_ALERT_WEBHOOK_URL 시크릿이 없어 헬스체크·롤백 알림이 발송되지 않습니다. EC2 저널(journalctl -t bitbox-healthcheck / -t bitbox-rollback)에만 기록됩니다. 등록: gh secret set BITBOX_ALERT_WEBHOOK_URL --repo ${{ github.repository }}"
 
       - name: Verify public production boundary
         env:

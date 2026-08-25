@@ -26,6 +26,7 @@ _SINO_DIGITS = {
     "사": "4", "오": "5", "육": "6", "칠": "7", "팔": "8", "구": "9",
 }
 _SINO_UNITS = {"십": 10, "백": 100, "천": 1000}
+_SINO_CHARS = {*_SINO_DIGITS, *_SINO_UNITS}
 _NUMBER_WORDS = sorted(
     {*_NATIVE_TENS, *_NATIVE_ONES, *_SINO_DIGITS, *_SINO_UNITS}, key=len, reverse=True
 )
@@ -36,6 +37,15 @@ _MIXED_BUS_PATTERN = re.compile(
 _PURE_BUS_PATTERN = re.compile(
     rf"(?P<words>(?:{_WORD_PATTERN}){{1,8}})\s*번"
 )
+
+# `번`을 횟수·차례 조사로 만드는 접미사 — 노선 번호가 아닙니다.
+# 예: "세 번째", "몇 번쯤", "두 번씩"
+_COUNTER_SUFFIX = re.compile(r"^[째쯤씩]")
+# 뒤에 이어지면 노선 번호로 볼 수 있는 문맥 (한 글자 수사에만 요구합니다).
+_BUS_CONTEXT = re.compile(r"^\s*(?:버스|노선|차량|차)")
+# "이번"은 실제 발화에서 거의 언제나 '이번(this time)'이며 2번 노선이 아닙니다.
+# 노선 2번을 말하는 이용자의 발화는 STT가 사실상 항상 `2번`으로 받아씁니다.
+_AMBIGUOUS_SINGLE_SINO = {"이"}
 
 
 _THOUSANDS_SEPARATOR = re.compile(r"(?<=\d),(?=\d{3}(?!\d))")
@@ -92,6 +102,20 @@ def parse_korean_number(words: str) -> int | None:
     return None
 
 
+def parse_sino_number(words: str) -> int | None:
+    """한자어 수사만 정수로 변환합니다.
+
+    한국어에서 버스 노선 번호는 언제나 한자어로 읽습니다("삼사이삼", "삼천사백이십삼").
+    고유어 수사(한/두/세/네/열/스물…)가 `번` 앞에 오면 그것은 노선 번호가 아니라
+    횟수입니다("다시 한 번", "두 번 눌렀어요"). 따라서 문장 단위 정규화는
+    한자어 읽기만 숫자로 바꿔야 합니다.
+    """
+    compact = re.sub(r"\s+", "", words)
+    if not compact or not all(char in _SINO_CHARS for char in compact):
+        return None
+    return parse_korean_number(compact)
+
+
 def _merge_digit_prefix(digits: str, suffix: int) -> str | None:
     """STT의 `3400 열두`를 `3412`처럼 안전하게 합칩니다."""
     if suffix < 0 or suffix > 99:
@@ -125,8 +149,11 @@ def normalize_bus_number_token(value: str | None) -> str | None:
     if candidate.isdigit():
         return candidate
 
-    parsed = parse_korean_number(candidate)
-    if parsed is not None and 0 < parsed <= 9999:
+    # 고유어 읽기는 노선 번호가 아니므로 여기서도 변환하지 않습니다. LLM이 "이번"에서
+    # `이`를 버스 번호로 잘못 뽑아낸 경우도 2번 노선으로 확정하지 않고 그대로 두어,
+    # 이후 정확 일치 조회에서 실패해 재확인 안내로 이어지게 합니다.
+    parsed = parse_sino_number(candidate)
+    if parsed is not None and 0 < parsed <= 9999 and candidate not in _AMBIGUOUS_SINGLE_SINO:
         return str(parsed)
 
     # "3400 열두"처럼 숫자 뒤에 수사가 붙은 혼합 표기도 복구합니다.
@@ -142,8 +169,20 @@ def normalize_bus_number_token(value: str | None) -> str | None:
 
 
 def normalize_spoken_bus_numbers(text: str) -> str:
-    """문장 안의 혼합 표기 버스 번호만 치환하고 나머지 발화는 보존합니다."""
+    """문장 안의 혼합 표기 버스 번호만 치환하고 나머지 발화는 보존합니다.
+
+    이 함수는 발화 전체를 훑으므로 오변환의 대가가 큽니다. STT 문장은 LLM에
+    전달되기 전에 여기를 통과하기 때문에, 한 번 잘못 바꾸면 LLM이 원래 표현을
+    복원할 수 없습니다. 따라서 다음 발화는 그대로 보존합니다.
+
+    - 고유어 횟수 표현: "다시 한 번", "두 번 눌렀어요", "열 번 넘게"
+    - 차례 표현: "세 번째", "몇 번쯤", "두 번씩"
+    - 지시 표현: "이번에 오는 버스", "이번 버스"
+    - 문맥 없는 한 글자 한자어: "오번 출구"(지하철 출구)
+    """
     def replace(match: re.Match[str]) -> str:
+        if _COUNTER_SUFFIX.match(match.string[match.end():]):
+            return match.group(0)
         suffix = parse_korean_number(match.group("words"))
         merged = _merge_digit_prefix(match.group("digits"), suffix) if suffix is not None else None
         return f"{merged}번" if merged else match.group(0)
@@ -151,7 +190,20 @@ def normalize_spoken_bus_numbers(text: str) -> str:
     normalized = _MIXED_BUS_PATTERN.sub(replace, strip_thousands_separators(text))
 
     def replace_pure(match: re.Match[str]) -> str:
-        value = parse_korean_number(match.group("words"))
-        return f"{value}번" if value is not None and 0 < value <= 9999 else match.group(0)
+        value = parse_sino_number(match.group("words"))
+        if value is None or not 0 < value <= 9999:
+            return match.group(0)
+
+        tail = match.string[match.end():]
+        if _COUNTER_SUFFIX.match(tail):
+            return match.group(0)
+
+        compact = re.sub(r"\s+", "", match.group("words"))
+        if len(compact) == 1 and (
+            compact in _AMBIGUOUS_SINGLE_SINO or not _BUS_CONTEXT.match(tail)
+        ):
+            return match.group(0)
+
+        return f"{value}번"
 
     return _PURE_BUS_PATTERN.sub(replace_pure, normalized)

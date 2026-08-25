@@ -17,6 +17,7 @@
     "react-kakao-maps-sdk": "^1.2.1"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.13.0",
     "@playwright/test": "^1.62.1",
     "@tailwindcss/vite": "4.1.12",
     "@types/node": "^25.6.2",

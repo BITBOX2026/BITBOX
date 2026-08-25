@@ -1,9 +1,55 @@
 @import './tailwind.css';
 
+/*
+  한글 글꼴을 앱과 함께 배포합니다.
+
+  키오스크는 라즈베리파이/리눅스에서 동작하며 어떤 글꼴이 설치돼 있을지 확정할 수
+  없습니다. CSP(font-src 'self' data:)가 외부 폰트 CDN을 막으므로 웹폰트를 받아올
+  수도 없습니다. 설치 글꼴에만 기대면 CJK 글꼴이 없는 기기에서 정류장 이름이
+  두부(□□□)로 보일 수 있는데, 정류장 이름을 읽지 못하는 것은 이 제품에서
+  치명적인 실패입니다.
+
+  Noto Sans KR (SIL Open Font License 1.1, 라이선스 전문은 assets/fonts/OFL.txt)을
+  현대 한글 전체(U+AC00–D7A3, 11,172 음절) + 라틴/구두점으로 서브셋해 세 굵기만
+  포함했습니다. 세 파일 합계 약 1.8MB이며 nginx가 /assets/ 를 1년 캐시합니다.
+  Vite 가 파일명에 해시를 붙이므로 갱신 시 캐시가 자동으로 무효화됩니다.
+*/
+@font-face {
+  font-family: 'Noto Sans KR';
+  src: url('../assets/fonts/NotoSansKR-400.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Noto Sans KR';
+  src: url('../assets/fonts/NotoSansKR-700.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Noto Sans KR';
+  src: url('../assets/fonts/NotoSansKR-900.woff2') format('woff2');
+  font-weight: 900;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
   color: #171d23;
   background: #dce3e6;
-  font-family: "Noto Sans KR", "Malgun Gothic", Arial, sans-serif;
+  /*
+    번들한 Noto Sans KR 을 우선 사용하고, 로드 전(font-display: swap)이나 로드 실패
+    시를 대비해 설치 글꼴을 뒤에 둡니다.
+  */
+  font-family: "Noto Sans KR", "Noto Sans CJK KR", "NanumGothic", "Nanum Gothic",
+    "Malgun Gothic", "Apple SD Gothic Neo", "Source Han Sans KR", system-ui, Arial, sans-serif;
+  /*
+    400/700/900 만 번들했으므로 500·600·800 은 브라우저가 가장 가까운 굵기로
+    대체합니다. 합성(synthesis)을 켜면 굵기를 인위적으로 늘려 한글 획이 뭉개지므로
+    끄고, 실제 굵기 파일만 쓰게 합니다.
+  */
   font-synthesis: none;
   text-rendering: optimizeLegibility;
 }

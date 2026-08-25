@@ -101,9 +101,18 @@ class FrontendRouteDetail(BaseModel):
     route_segments: list[RouteSegmentResponse] | None = None
 
 
+# 도착 상태 — 백엔드와 프론트가 같은 낱말로 해석하도록 명시합니다.
+#   live     실시간 도착 예정 시간이 있음
+#   standby  차고지 출발대기 (아직 출발 전)
+#   terminal 오늘 운행 종료
+#   unknown  제공기관이 도착정보를 주지 않음
+BusArrivalStatus = Literal["live", "standby", "terminal", "unknown"]
+
+
 class FrontendBusOption(BaseModel):
     id: str
     busNumber: str
+    status: BusArrivalStatus = "live"
     arrivalMin: int
     traTimeSec: int
     arrivalMsg: str

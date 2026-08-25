@@ -93,8 +93,16 @@ export function VoiceResult({
 
   return (
     <div className="relative flex h-full w-full flex-col overflow-hidden bg-[#123E49] font-['Noto_Sans_KR']">
-      {/* 음성으로만 전달되던 안내 문구를 스크린리더 사용자에게도 동일하게 전달 */}
-      <p aria-live="polite" className="sr-only">{message}</p>
+      {/*
+        안내 문구는 이 화면에서 소리로 재생됩니다. 같은 문장을 aria-live에도 넣으면
+        스크린리더 낭독과 TTS가 겹쳐 두 번 들립니다. 그래서 본문에는 자동 낭독을
+        일으키지 않는 sr-only 문단으로 두어 필요할 때 탐색해 읽을 수 있게 하고,
+        소리 재생이 차단된 경우에만 aria-live로 알립니다.
+      */}
+      <p className="sr-only">{message}</p>
+      <p aria-live="polite" className="sr-only">
+        {playbackStatus === "blocked" ? message : ""}
+      </p>
 
       <header className="z-10 flex min-h-14 shrink-0 items-center justify-between gap-2 border-b border-white/15 px-3 py-2 sm:px-5">
         <div className="flex min-w-0 items-center gap-2 sm:gap-4">

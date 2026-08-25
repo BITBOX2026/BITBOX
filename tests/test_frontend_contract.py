@@ -977,3 +977,111 @@ def test_frontend_http_endpoints_share_the_expected_contract(monkeypatch) -> Non
     assert route_response.json()["buses"][0]["routeDetail"]["steps"][0]["type"] == "bus"
     assert board_response.status_code == 200
     assert board_response.json()["items"][0]["bus_number"] == "3412"
+
+
+# ---------------------------------------------------------------------------
+# 구간시간 합과 총시간의 일관성
+#
+# 화면은 각 구간의 소요시간과 총시간을 함께 보여 줍니다. 구간합이 총시간보다
+# 크면 이용자에게 모순된 숫자를 보이게 되고, 배포 스모크의 계약 검사도 깨집니다.
+# ---------------------------------------------------------------------------
+
+def _route_data(total_time_min: int, segment_times: list[int | None]) -> dict:
+    return {
+        "intent": "route",
+        "bus_number": "3412",
+        "total_time_min": total_time_min,
+        "origin": "올림픽공원역",
+        "route_segments": [
+            {
+                "vehicle_type": "도보" if index % 2 == 0 else "버스",
+                "line": "" if index % 2 == 0 else "3412번",
+                "start_name": f"S{index}",
+                "end_name": f"E{index}",
+                "time_min": value,
+            }
+            for index, value in enumerate(segment_times)
+        ],
+    }
+
+
+def test_segment_durations_never_exceed_the_displayed_total() -> None:
+    """제공자 총시간이 구간합보다 작아도 화면 숫자는 모순되지 않아야 합니다."""
+    buses = gateway_module._build_buses_from_route(_route_data(10, [8, 9, 4]))
+    detail = buses[0]["routeDetail"]
+    step_sum = sum(step["durationMin"] for step in detail["steps"])
+    assert step_sum == 21
+    assert detail["totalMin"] >= step_sum
+    assert buses[0]["totalMin"] == detail["totalMin"]
+
+
+def test_missing_segment_durations_are_distributed_to_match_the_total() -> None:
+    buses = gateway_module._build_buses_from_route(_route_data(30, [3, None, None]))
+    detail = buses[0]["routeDetail"]
+    assert sum(step["durationMin"] for step in detail["steps"]) == detail["totalMin"] == 30
+
+
+# ---------------------------------------------------------------------------
+# 도착 상태 계약 — 백엔드와 프론트가 같은 낱말을 씁니다.
+# ---------------------------------------------------------------------------
+
+def test_standby_arrival_is_labelled_instead_of_looking_like_an_eta() -> None:
+    buses = gateway_module._build_buses_from_arrival(
+        {"intent": "arrival", "bus_number": "3412", "arrival_time": "출발대기", "stop_name": "차고지"}
+    )
+    assert len(buses) == 1
+    assert buses[0]["status"] == "standby"
+    assert buses[0]["arrivalMin"] == -1
+    assert buses[0]["traTimeSec"] == -1
+
+
+def test_live_arrival_reports_a_live_status() -> None:
+    buses = gateway_module._build_buses_from_arrival(
+        {"intent": "arrival", "bus_number": "3412", "arrival_time": "3분 후", "stop_name": "올림픽공원역"}
+    )
+    assert buses[0]["status"] == "live"
+    assert buses[0]["arrivalMin"] == 3
+
+
+def test_frontend_bus_option_rejects_an_unknown_status() -> None:
+    from app.api.schemas import FrontendBusOption
+
+    base = {
+        "id": "x", "busNumber": "3412", "arrivalMin": 1, "traTimeSec": 60,
+        "arrivalMsg": "1분 후", "currentStationName": "몽촌토성역", "remainingStops": 1,
+        "busType": 0, "congestion": 0, "isFullFlag": False, "isLastBus": False,
+        "plainNo": "", "isSecond": False,
+    }
+    assert FrontendBusOption(**base).status == "live"
+    with pytest.raises(ValidationError):
+        FrontendBusOption(**base, status="곧도착")
+
+
+# ---------------------------------------------------------------------------
+# HTTP 200 으로 나가는 업무 오류가 성공 지표에 묻히지 않는지
+# ---------------------------------------------------------------------------
+
+def test_http_200_business_error_is_counted_separately_from_success() -> None:
+    from starlette.responses import Response as StarletteResponse
+
+    from app.core.runtime_metrics import runtime_snapshot
+
+    before = runtime_snapshot()["business_errors"].get("request", 0)
+    gateway_module._apply_result_http_status(
+        StarletteResponse(),
+        {"status": "error", "error_kind": "request", "message": "목적지를 말씀해 주세요."},
+    )
+    after = runtime_snapshot()["business_errors"].get("request", 0)
+    assert after == before + 1
+
+
+def test_successful_result_is_not_counted_as_a_business_error() -> None:
+    from starlette.responses import Response as StarletteResponse
+
+    from app.core.runtime_metrics import runtime_snapshot
+
+    before = runtime_snapshot()["business_errors"]
+    gateway_module._apply_result_http_status(
+        StarletteResponse(), {"status": "success", "message": "ok"}
+    )
+    assert runtime_snapshot()["business_errors"] == before

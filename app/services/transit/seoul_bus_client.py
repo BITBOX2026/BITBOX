@@ -65,6 +65,7 @@ async def request_seoul_bus_payload(
             f"{' or '.join(service_key_setting_names)} is not configured",
             user_message="버스 도착정보 서비스를 사용할 수 없습니다.",
             retryable=False,
+            provider_down=True,
         )
 
     last_auth_error: tuple[str, str] | None = None
@@ -95,10 +96,12 @@ async def request_seoul_bus_payload(
                     last_auth_error = (code, message)
                     continue
 
+                auth_failed = is_service_key_error(code, message)
                 raise ExternalServiceError(
                     f"공공데이터 API 오류({stage}): resultCode={code}, resultMsg={message}",
                     user_message="버스 도착정보 서비스를 사용할 수 없습니다. 잠시 후 다시 시도해 주세요.",
-                    retryable=not is_service_key_error(code, message),
+                    retryable=not auth_failed,
+                    provider_down=auth_failed,
                 )
 
             return payload
@@ -109,6 +112,7 @@ async def request_seoul_bus_payload(
             f"공공데이터 API HTTP 오류({stage}): status={status_code}",
             user_message="버스 도착정보 서비스를 사용할 수 없습니다. 잠시 후 다시 시도해 주세요.",
             retryable=status_code == 429 or status_code >= 500,
+            provider_down=status_code in {401, 403},
         ) from exc
 
     except httpx.RequestError as exc:
@@ -123,6 +127,7 @@ async def request_seoul_bus_payload(
             f"공공데이터 API 인증 오류({stage}): resultCode={code}, resultMsg={message}",
             user_message="버스 도착정보 서비스를 사용할 수 없습니다.",
             retryable=False,
+            provider_down=True,
         )
 
     raise ExternalServiceError(
