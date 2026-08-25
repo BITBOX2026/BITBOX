@@ -331,6 +331,24 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           script: sudo rm -f /etc/bitbox/deployment_in_progress
 
+      - name: Send deployment success alert
+        if: success()
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          envs: RELEASE_SHA
+          script: |
+            if sudo /usr/local/sbin/bitbox-healthcheck \
+              --test-alert "BITBOX deployment succeeded (${RELEASE_SHA:0:7})."; then
+              echo "Deployment alert delivered."
+            else
+              echo "::warning title=BITBOX alert delivery failed::Deployment succeeded, but the Discord test alert was not delivered."
+            fi
+
       - name: Roll back a release that failed public verification
         if: failure()
         uses: appleboy/ssh-action@v1.0.3

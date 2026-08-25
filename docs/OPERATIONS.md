@@ -86,6 +86,16 @@ gh secret set BITBOX_ALERT_WEBHOOK_URL --repo BITBOX2026/BITBOX
 # then redeploy so the value reaches /etc/bitbox/monitoring.env
 ```
 
+Each successful deployment sends one confirmation alert from the EC2 host. You
+can also test the stored webhook without causing a health failure:
+
+```bash
+sudo /usr/local/sbin/bitbox-healthcheck --test-alert
+```
+
+The command exits non-zero when the webhook is absent or Discord rejects the
+request. It never prints the webhook URL.
+
 ## Incident checks
 
 ```bash

@@ -80,5 +80,8 @@ def test_public_verification_failure_has_a_guarded_rollback() -> None:
     workflow = (WORKFLOW_DIR / "deploy.yml").read_text(encoding="utf-8")
     assert "/etc/bitbox/deployment_in_progress" in workflow
     assert "Roll back a release that failed public verification" in workflow
+    assert "Send deployment success alert" in workflow
+    assert "/usr/local/sbin/bitbox-healthcheck" in workflow
+    assert "--test-alert" in workflow
     assert '[[ "$marker" == "$RELEASE_SHA" ]] || exit 0' in workflow
     assert "previous_release_dir" in workflow
