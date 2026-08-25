@@ -31,6 +31,7 @@ logs/
 
 # Editor and OS files
 .vscode/
+.claude/
 .DS_Store
 Thumbs.db
 
@@ -38,6 +39,8 @@ Thumbs.db
 recorded_audio.wav
 test_audio.mp3
 test_audio.wav
+voice-samples/
+evaluation-results/
 
 # Temporary files
 tmp/

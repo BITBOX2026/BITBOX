@@ -6,7 +6,10 @@ from openai import AsyncOpenAI
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_fixed
 
 from app.core.logger import get_logger
-from app.services.ai.korean_number_normalizer import normalize_spoken_bus_numbers
+from app.services.ai.korean_number_normalizer import (
+    normalize_bus_number_token,
+    normalize_spoken_bus_numbers,
+)
 from app.services.core.constants import DEFAULT_LLM_MODEL, TRANSIT_INTENT_SYSTEM_PROMPT
 from app.services.core.exceptions import LLMParsingError
 from app.services.core.openai_client import get_openai_client as _get_openai_client
@@ -140,7 +143,7 @@ async def _call_llm(client: AsyncOpenAI, llm_model: str, transcript: str) -> Par
         destination_text=parsed_json.get("destination_text"),
         stop_text=parsed_json.get("stop_text"),
         transport_mode=_normalize_transport_mode(parsed_json.get("transport_mode")),
-        bus_number=parsed_json.get("bus_number"),
+        bus_number=normalize_bus_number_token(parsed_json.get("bus_number")),
         confidence=_safe_confidence(parsed_json.get("confidence")),
     )
 
@@ -154,6 +157,10 @@ async def parse_transit_intent(transcript: str, request_id: str = "") -> ParsedI
     logger.info("[%s] LLM 분석 시작: transcript_length=%d", request_id, len(transcript))
 
     normalized_transcript = normalize_spoken_bus_numbers(transcript)
+    if _has_ambiguous_bus_number_expression(normalized_transcript):
+        logger.info("[%s] 복수 또는 비정상 버스 번호 발화 감지: 재확인 필요", request_id)
+        return ParsedIntent()
+
     deterministic = _mock_parse_transit_intent(normalized_transcript)
     if get_bool_setting("INTENT_FAST_PATH_ENABLED", True) and _is_unambiguous(deterministic):
         logger.info(
@@ -187,6 +194,31 @@ def _is_unambiguous(parsed: ParsedIntent) -> bool:
     if parsed.intent == "arrival":
         return bool(parsed.bus_number and parsed.confidence >= 0.8)
     return False
+
+
+def _has_ambiguous_bus_number_expression(text: str) -> bool:
+    """Reject lists and overlong values instead of selecting a plausible suffix."""
+
+    # A five-or-more digit value is not a supported Seoul route number.  In
+    # particular, `12345번` must never be truncated to the suffix `2345번`.
+    if re.search(r"(?<!\d)\d{5,}\s*번", text):
+        return True
+
+    explicit_numbers = re.findall(
+        r"(?<![0-9A-Za-z])(\d{1,4})(?!\d)\s*번",
+        text,
+    )
+    if len(explicit_numbers) > 1:
+        return True
+
+    # STT often writes a choice such as "3, 4번 중에" with `번` only after
+    # the last item.  This is a choice request, not a confident request for 4.
+    return bool(
+        re.search(
+            r"(?<!\d)\d{1,4}\s*[,/·]\s*\d{1,4}\s*번(?:\s*중(?:에|에서)?)?",
+            text,
+        )
+    )
 
 
 def _mock_parse_transit_intent(transcript: str) -> ParsedIntent:
@@ -282,12 +314,17 @@ def _extract_transport_mode(text: str, bus_number: str | None) -> str:
 def _extract_bus_number(text: str) -> str | None:
     """문장에서 146번, 740 번 같은 버스 번호를 추출합니다."""
 
-    match = re.search(r"(\d{1,4})\s*번", text)
-
-    if not match:
+    if _has_ambiguous_bus_number_expression(text):
         return None
 
-    return match.group(1)
+    matches = list(
+        re.finditer(r"(?<![0-9A-Za-z])(\d{1,4})(?!\d)\s*번", text)
+    )
+
+    if len(matches) != 1:
+        return None
+
+    return matches[0].group(1)
 
 
 def _extract_route_places(text: str) -> tuple[str | None, str | None]:
