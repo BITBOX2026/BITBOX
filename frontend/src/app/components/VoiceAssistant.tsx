@@ -8,6 +8,7 @@ import { VoiceRecording } from "./VoiceRecording";
 import { VoiceResult } from "./VoiceResult";
 import { VoiceConfirmation } from "./VoiceConfirmation";
 import { useVoiceRecorder } from "../../hooks/useVoiceRecorder";
+import { SPEECH_ACTIVITY_EVENT } from "../../utils/speech";
 import {
   clearRecentDestinationHistory,
   readKioskStorage,
@@ -20,12 +21,12 @@ interface VoiceAssistantProps {
   onResultModeChange?: (isResult: boolean) => void;
 }
 
+// 공용 키오스크에서 이전 이용자의 흔적이 남는 시간입니다. 개인정보 보장이므로
+// 늘리지 않습니다. 대신 "무엇이 유휴인가"를 정확히 셉니다 — 안내를 듣는 중이거나
+// 요청이 진행 중인 것은 유휴가 아닙니다.
 const KIOSK_IDLE_RESET_MS = 90_000;
-// 결과 화면에서는 화면을 만지지 않고 안내를 듣고 읽는 시간이 필요합니다.
-// 90초로는 긴 경로 안내를 다 듣기도 전에 결과가 사라집니다.
-const KIOSK_RESULT_IDLE_RESET_MS = 240_000;
 // 마이크·조회가 진행 중인 상태. 이용자가 화면을 만지지 않는 것이 정상이므로
-// 유휴로 보고 세션을 지우면 안 됩니다.
+// 유휴로 보고 세션을 지우면 안 됩니다. 각 상태는 자체 상한이 있어 멈추지 않습니다.
 const ACTIVE_STATUSES = new Set(["starting", "listening", "loading", "confirming"]);
 
 export function VoiceAssistant({ onResultModeChange }: VoiceAssistantProps) {
@@ -73,18 +74,21 @@ export function VoiceAssistant({ onResultModeChange }: VoiceAssistantProps) {
     // 그동안은 유휴 타이머를 멈춰 둡니다.
     if (ACTIVE_STATUSES.has(status)) return;
 
-    const idleMs = status === "result" ? KIOSK_RESULT_IDLE_RESET_MS : KIOSK_IDLE_RESET_MS;
-    let timer = window.setTimeout(resetKioskSession, idleMs);
+    let timer = window.setTimeout(resetKioskSession, KIOSK_IDLE_RESET_MS);
     const rearm = () => {
       window.clearTimeout(timer);
-      timer = window.setTimeout(resetKioskSession, idleMs);
+      timer = window.setTimeout(resetKioskSession, KIOSK_IDLE_RESET_MS);
     };
     window.addEventListener("pointerdown", rearm);
     window.addEventListener("keydown", rearm);
+    // 안내를 듣는 것도 이용입니다. 화면을 만지지 않았다는 이유로 낭독 도중
+    // 결과가 사라지면 안 됩니다.
+    window.addEventListener(SPEECH_ACTIVITY_EVENT, rearm);
     return () => {
       window.clearTimeout(timer);
       window.removeEventListener("pointerdown", rearm);
       window.removeEventListener("keydown", rearm);
+      window.removeEventListener(SPEECH_ACTIVITY_EVENT, rearm);
     };
   }, [resetKioskSession, status]);
 

@@ -15,6 +15,21 @@ import { apiFetch, parseApiResponse } from "../api/client";
 
 export type SpeechOutcome = "browser" | "server" | "unavailable";
 export const SPEECH_CANCEL_EVENT = "bitbox:speech-cancel";
+/**
+ * 안내 음성이 재생되기 시작했거나 끝났음을 알립니다.
+ *
+ * 공용 키오스크의 유휴 초기화는 화면 조작만 보고 있어서, 이용자가 안내를 듣는
+ * 동안은 "아무것도 안 하는 중"으로 취급됐습니다. 듣는 것도 이용이므로 이 신호로
+ * 유휴 시간을 다시 셉니다. 초기화 자체를 미루지는 않으므로 자리를 뜬 기기는
+ * 그대로 90초 뒤 지워집니다.
+ */
+export const SPEECH_ACTIVITY_EVENT = "bitbox:speech-activity";
+
+export function signalSpeechActivity(): void {
+  if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+    window.dispatchEvent(new Event(SPEECH_ACTIVITY_EVENT));
+  }
+}
 
 const VOICE_LOOKUP_TIMEOUT_MS = 1_500;
 // "한국어 음성 없음" 판정을 영구히 굳히지 않습니다. 기기 부팅 직후에는 음성
@@ -158,6 +173,7 @@ async function playServerSpeech(
     audio.onended = () => {
       if (activeAudio !== audio || speechGeneration !== generation) return;
       activeAudio = null;
+      signalSpeechActivity();
       onEnd?.();
     };
     await audio.play();
@@ -165,6 +181,7 @@ async function playServerSpeech(
       audio.pause();
       return "unavailable";
     }
+    signalSpeechActivity();
     return "server";
   } catch {
     // 자동 재생 차단·네트워크 실패 등. 화면 안내는 그대로 남으므로 무음으로 처리합니다.
@@ -229,11 +246,16 @@ export async function speakKorean(
     utterance.rate = options.rate ?? 0.9;
     utterance.voice = voice;
     utterance.onend = () => {
-      if (speechGeneration === generation) options.onEnd?.();
+      if (speechGeneration !== generation) return;
+      signalSpeechActivity();
+      options.onEnd?.();
     };
     const started = await speakWithBrowser(utterance, speech);
     if (speechGeneration !== generation) return "unavailable";
-    if (started) return "browser";
+    if (started) {
+      signalSpeechActivity();
+      return "browser";
+    }
 
     // 브라우저 음성이 실패했습니다. 이 기기는 말할 수 없다고 보고 서버 음성으로
     // 넘깁니다. 판정을 다시 하도록 캐시도 비웁니다.
