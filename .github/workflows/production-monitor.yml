@@ -19,7 +19,7 @@ jobs:
     env:
       BITBOX_SERVER_NAME: ${{ secrets.BITBOX_SERVER_NAME }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Verify production from outside EC2
         run: |
           test -n "$BITBOX_SERVER_NAME"
