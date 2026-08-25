@@ -3,6 +3,7 @@ import { BusOption as BusInfo } from "../../types/bus";
 import { getDefaultArrivals, getCongestionLabel, getCongestionColor, describeArrivalStatus } from "../../api/busService";
 import { Accessibility, BusFront, ChevronLeft, ChevronRight, MapPin, Pause, Play, Radio, RefreshCw, Volume2, Wifi, ZoomIn } from "lucide-react";
 import { useAccessibilityDisplay } from "../../hooks/useAccessibilityDisplay";
+import { cancelSpeech, speakKorean } from "../../utils/speech";
 
 const STATION_NAME = import.meta.env.VITE_STATION_NAME ?? "정류장";
 
@@ -240,15 +241,22 @@ export function BusInfoList() {
   const [autoRotate, setAutoRotate] = useState(true);
   const [trackedBusId, setTrackedBusId] = useState<string | null>(null);
   const lastRemainingStopsRef = useRef<number | null>(null);
-  const approachUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+  // 진행 중인 도착 알림의 세대 번호. 브라우저 음성과 서버 음성 어느 쪽으로 나가든
+  // 같은 방식으로 소유권을 판단하기 위해 객체 대신 숫자를 씁니다.
+  const approachSpeechIdRef = useRef(0);
+  const approachSpeakingRef = useRef(false);
+  const approachReleaseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const now = useLiveClock();
   const { buses, liveStationName, loading, error, lastUpdated, refetch } = useBusArrivals();
 
   const cancelApproachSpeech = useCallback(() => {
-    if (approachUtteranceRef.current && "speechSynthesis" in window) {
-      window.speechSynthesis.cancel();
-      approachUtteranceRef.current = null;
+    approachSpeechIdRef.current += 1;
+    approachSpeakingRef.current = false;
+    if (approachReleaseTimerRef.current) {
+      clearTimeout(approachReleaseTimerRef.current);
+      approachReleaseTimerRef.current = null;
     }
+    cancelSpeech();
   }, []);
 
   useEffect(() => {
@@ -265,11 +273,8 @@ export function BusInfoList() {
       lastRemainingStopsRef.current = tracked.remainingStops;
       return;
     }
-    if (!("speechSynthesis" in window)) {
-      lastRemainingStopsRef.current = tracked.remainingStops;
-      return;
-    }
-    if (window.speechSynthesis.speaking) {
+    // 안내가 재생 중이면 잘라내지 않고 이번 임계값은 넘깁니다.
+    if (approachSpeakingRef.current) {
       lastRemainingStopsRef.current = tracked.remainingStops;
       return;
     }
@@ -280,20 +285,28 @@ export function BusInfoList() {
       : crossed === 1
         ? `${tracked.busNumber}번 버스가 한 정거장 전입니다.`
         : `${tracked.busNumber}번 버스가 세 정거장 이내로 접근했습니다.`;
-    const utterance = new SpeechSynthesisUtterance(message);
-    utterance.lang = "ko-KR";
-    utterance.rate = 0.9;
-    approachUtteranceRef.current = utterance;
-    const releaseUtterance = () => {
-      if (approachUtteranceRef.current === utterance) {
-        approachUtteranceRef.current = null;
+
+    const speechId = ++approachSpeechIdRef.current;
+    approachSpeakingRef.current = true;
+    const release = () => {
+      if (approachSpeechIdRef.current !== speechId) return;
+      approachSpeakingRef.current = false;
+      if (approachReleaseTimerRef.current) {
+        clearTimeout(approachReleaseTimerRef.current);
+        approachReleaseTimerRef.current = null;
       }
     };
-    utterance.onend = releaseUtterance;
-    utterance.onerror = releaseUtterance;
-    window.speechSynthesis.speak(utterance);
+    // 재생 종료 신호가 오지 않는 경우에도 다음 알림이 영영 막히지 않도록 상한을 둡니다.
+    approachReleaseTimerRef.current = setTimeout(release, 15_000);
+
+    // 기기에 한국어 음성이 없으면 서버 음성으로 대체됩니다. 둘 다 안 되면
+    // 화면의 도착 표시로만 안내되며, 알림 자체는 조용히 실패합니다.
+    void speakKorean(message, { onEnd: release }).then((outcome) => {
+      if (outcome === "unavailable") release();
+    });
+
     return () => {
-      if (approachUtteranceRef.current === utterance) {
+      if (approachSpeechIdRef.current === speechId) {
         cancelApproachSpeech();
       }
     };
@@ -349,7 +362,7 @@ export function BusInfoList() {
   const isStale = !loading && (!lastUpdated || now.getTime() - lastUpdated.getTime() > 45_000);
 
   return (
-    <div className="flex h-full w-full flex-col overflow-hidden bg-[#EDF1F3] font-['Noto_Sans_KR']">
+    <div className="flex h-full w-full flex-col overflow-hidden bg-[#EDF1F3] font-kiosk">
 
       {/* ── 헤더 ─────────────────────────────────── */}
       <div className="flex shrink-0 items-center justify-between border-b-4 border-[#F0C929] bg-[#171D23] px-3 py-2 sm:px-6 sm:py-3">
@@ -400,7 +413,11 @@ export function BusInfoList() {
       )}
 
       {/* ── 잠시 후 도착 (3분 미만, 시간 없음) ───── */}
-      <div className="shrink-0 border-b border-[#C99F11] bg-[#F0C929] px-3 pb-3 pt-2 sm:px-5 sm:pb-4 sm:pt-3">
+      {/*
+        화면이 낮을 때 이 영역이 줄어들 수 있어야 합니다. 여기 있는 차량은 아래
+        목록에도 다시 나오므로, 공간이 부족하면 목록을 살리는 쪽이 맞습니다.
+      */}
+      <div className="min-h-0 shrink border-b border-[#C99F11] bg-[#F0C929] px-3 pb-3 pt-2 sm:px-5 sm:pb-4 sm:pt-3">
         <div className="flex justify-between items-end mb-3">
           <div className="flex flex-col text-left">
             <span className="text-[20px] font-black leading-tight text-[#2C2A1A] sm:text-[24px]">잠시 후 도착</span>
@@ -436,7 +453,7 @@ export function BusInfoList() {
       </div>
 
       {/* ── 메인 버스 목록 ───────────────────────── */}
-      <div className="flex-1 flex flex-col min-h-0 bg-white">
+      <div className="flex min-h-[232px] flex-1 flex-col bg-white">
         {/* 테이블 헤더 */}
         <div className="grid shrink-0 grid-cols-[minmax(78px,1fr)_82px_minmax(120px,2fr)] border-b border-[#374151] bg-[#1C1F26] md:grid-cols-[150px_110px_1fr]">
           {["노선번호", "예정시간", "버스 현재 위치"].map((label, i) => (
@@ -458,7 +475,7 @@ export function BusInfoList() {
           tabIndex={0}
           role="region"
           aria-label="버스 도착 목록"
-          className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto bg-[#F1F5F9] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[#123E49]"
+          className="flex min-h-[112px] min-w-0 flex-1 flex-col overflow-y-auto bg-[#F1F5F9] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[#123E49]"
         >
           <div className="flex min-h-full min-w-0 flex-col">
             {loading

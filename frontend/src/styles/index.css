@@ -1,6 +1,16 @@
 @import './tailwind.css';
 
 /*
+  Tailwind 유틸리티 `font-kiosk` 로 쓸 글꼴 스택입니다. 이전에는 화면마다
+  `font-['Noto_Sans_KR']` 를 직접 적어 두어, 번들 웹폰트가 로드되기 전이거나
+  로드에 실패하면 대체 글꼴 지정이 아예 없었습니다.
+*/
+@theme {
+  --font-kiosk: "Noto Sans KR", "Noto Sans CJK KR", "NanumGothic", "Nanum Gothic",
+    "Malgun Gothic", "Apple SD Gothic Neo", "Source Han Sans KR", system-ui, Arial, sans-serif;
+}
+
+/*
   한글 글꼴을 앱과 함께 배포합니다.
 
   키오스크는 라즈베리파이/리눅스에서 동작하며 어떤 글꼴이 설치돼 있을지 확정할 수

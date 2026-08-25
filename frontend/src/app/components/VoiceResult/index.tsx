@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Home, Info, MapPin, Mic, Play, RotateCcw, ShieldCheck, Square, Volume2 } from "lucide-react";
 import type { SafetyDecision } from "../../../api/client";
 import type { BusOption } from "../../../types/bus";
+import { cancelSpeech, speakKorean } from "../../../utils/speech";
 import { BusList } from "./BusList";
 import { RouteDetailOverlay } from "./RouteDetail";
 
@@ -52,7 +53,7 @@ export function VoiceResult({
     audioRef.current?.pause();
     if (audioRef.current) audioRef.current.currentTime = 0;
     audioRef.current = null;
-    window.speechSynthesis?.cancel();
+    cancelSpeech();
     setPlaybackStatus("idle");
   }, []);
 
@@ -73,14 +74,12 @@ export function VoiceResult({
       } catch {
         setPlaybackStatus("blocked");
       }
-    } else if ("speechSynthesis" in window) {
-      const utterance = new SpeechSynthesisUtterance(message);
-      utterance.lang = "ko-KR";
-      utterance.rate = 0.9;
-      utterance.onend = () => setPlaybackStatus("idle");
-      utterance.onerror = () => setPlaybackStatus("blocked");
+    } else {
+      // 브라우저가 한국어를 말할 수 없는 기기(라즈베리파이 등)에서는 서버 음성으로
+      // 대체됩니다. 둘 다 안 되면 화면에 재생 버튼을 남깁니다.
       setPlaybackStatus("playing");
-      window.speechSynthesis.speak(utterance);
+      const outcome = await speakKorean(message, { onEnd: () => setPlaybackStatus("idle") });
+      if (outcome === "unavailable") setPlaybackStatus("blocked");
     }
   }, [message, rawAudioData, stopPlayback]);
 
@@ -92,7 +91,7 @@ export function VoiceResult({
   }, [message, playMessage, stopPlayback]);
 
   return (
-    <div className="relative flex h-full w-full flex-col overflow-hidden bg-[#123E49] font-['Noto_Sans_KR']">
+    <div className="relative flex h-full w-full flex-col overflow-hidden bg-[#123E49] font-kiosk">
       {/*
         안내 문구는 이 화면에서 소리로 재생됩니다. 같은 문장을 aria-live에도 넣으면
         스크린리더 낭독과 TTS가 겹쳐 두 번 들립니다. 그래서 본문에는 자동 낭독을

@@ -315,6 +315,11 @@ test.beforeEach(async ({ page }) => {
     Object.defineProperty(window, "speechSynthesis", {
       value: {
         speaking: false,
+        // 한국어 음성이 설치된 정상 기기를 재현합니다. 음성이 없는 기기(라즈베리파이 등)는
+        // 별도 테스트에서 서버 음성 대체를 확인합니다.
+        getVoices: () => [{ lang: "ko-KR", name: "Korean", default: true, localService: true, voiceURI: "ko" }],
+        addEventListener() {},
+        removeEventListener() {},
         cancel() {
           const trackedWindow = window as Window & { __speechCancelCalls?: number };
           trackedWindow.__speechCancelCalls = (trackedWindow.__speechCancelCalls || 0) + 1;
@@ -927,4 +932,172 @@ test("renders Korean with the bundled font instead of relying on the device", as
     return node ? getComputedStyle(node).fontFamily : "";
   });
   expect(usedFamily).toContain("Noto Sans KR");
+});
+
+// ---------------------------------------------------------------------------
+// 기기에 한국어 음성이 없을 때 (라즈베리파이 등) 안내가 무음이 되지 않는지
+//
+// 최소 설치 리눅스의 Chromium 은 음성 엔진이 없으면 speechSynthesis.speak() 가
+// 오류 없이 아무 소리도 내지 않습니다. 교통약자용 키오스크에서 도착 안내가
+// 들리지 않으면 핵심 기능이 사라지므로 서버 음성으로 대체되어야 합니다.
+// ---------------------------------------------------------------------------
+
+/** 음성 엔진이 설치되지 않은 기기를 재현합니다. */
+async function installDeviceWithoutKoreanVoice(page: Page) {
+  await page.addInitScript(() => {
+    class SilentUtterance {
+      text: string; lang = ""; rate = 1; voice: unknown = null;
+      onend: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      constructor(text: string) { this.text = text; }
+    }
+    Object.defineProperty(window, "SpeechSynthesisUtterance", { value: SilentUtterance });
+    Object.defineProperty(window, "speechSynthesis", {
+      value: {
+        speaking: false,
+        // 음성 목록이 영영 비어 있고 voiceschanged 도 오지 않습니다.
+        getVoices: () => [],
+        addEventListener() {},
+        removeEventListener() {},
+        cancel() {},
+        speak() {
+          const tracked = window as Window & { __silentSpeakCalls?: number };
+          tracked.__silentSpeakCalls = (tracked.__silentSpeakCalls || 0) + 1;
+        },
+      },
+    });
+    // 재생 자체는 헤드리스에서 막히므로 호출만 기록합니다.
+    const played: string[] = [];
+    (window as Window & { __playedAudio?: string[] }).__playedAudio = played;
+    const originalPlay = HTMLAudioElement.prototype.play;
+    HTMLAudioElement.prototype.play = function play(this: HTMLAudioElement) {
+      played.push(this.src.slice(0, 32));
+      return Promise.resolve();
+    };
+    void originalPlay;
+  });
+}
+
+test("falls back to server speech when the device cannot speak Korean", async ({ page }) => {
+  await installDeviceWithoutKoreanVoice(page);
+
+  const spokenTexts: string[] = [];
+  await page.route("**/api/speech", async (route) => {
+    spokenTexts.push(JSON.parse(route.request().postData() || "{}").text);
+    // 아주 짧은 무음 WAV
+    await route.fulfill({ json: { audio_base64: "UklGRiQAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YQAAAAA=" } });
+  });
+  await page.route("**/api/route", (route) => route.fulfill({ json: routeResult }));
+
+  await page.goto("/");
+  await page.getByRole("combobox", { name: "버스 목적지" }).fill("강남역");
+  await page.getByRole("button", { name: "버스 경로 검색" }).click();
+  await expect(page.getByText("강남역 2호선 방면")).toBeVisible();
+
+  // 서버 음성으로 대체되었는지
+  await expect.poll(() => spokenTexts.length).toBeGreaterThanOrEqual(1);
+  expect(spokenTexts[0]).toContain("3412번 버스");
+
+  // 실제로 오디오 재생까지 이어졌는지
+  const played = await page.evaluate(() => (window as Window & { __playedAudio?: string[] }).__playedAudio || []);
+  expect(played.some((src) => src.startsWith("data:audio/wav"))).toBe(true);
+
+  // 안내가 무음으로 끝나지 않았으므로 "재생하세요" 배너가 뜨면 안 됩니다.
+  await expect(page.getByText("음성 안내를 재생해 주세요.")).toBeHidden();
+});
+
+test("falls back to server speech for tracked-bus arrival announcements", async ({ page }) => {
+  await installDeviceWithoutKoreanVoice(page);
+
+  const spokenTexts: string[] = [];
+  await page.route("**/api/speech", async (route) => {
+    spokenTexts.push(JSON.parse(route.request().postData() || "{}").text);
+    await route.fulfill({ json: { audio_base64: "UklGRiQAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YQAAAAA=" } });
+  });
+
+  await page.unroute("**/api/bus/default");
+  await page.route("**/api/bus/default", (route) => route.fulfill({
+    json: {
+      success: true, station_name: "올림픽공원역", station_id: "24245", message: "정상",
+      items: [{
+        bus_number: "3412", direction: "강남역 방향", first_arrival_min: 1, message: "x",
+        raw_arrmsg1: "곧 도착", raw_congestion1: "3", raw_bus_type1: "1",
+        raw_station_nm1: "몽촌토성역", raw_veh_id1: "approach-1",
+      }],
+    },
+  }));
+
+  await page.goto("/");
+  await expect(page.getByTestId("main-bus-row")).toHaveCount(1);
+
+  // 버스를 추적 대상으로 선택하면 접근 알림이 나가야 합니다.
+  await page.getByTestId("main-bus-row").first().click();
+  await expect.poll(() => spokenTexts.length, { timeout: 8_000 }).toBeGreaterThanOrEqual(1);
+  expect(spokenTexts.join(" ")).toContain("3412번 버스가 곧 도착합니다");
+
+  // 브라우저 음성으로는 시도조차 하지 않아야 합니다(무음이 되므로).
+  const silentCalls = await page.evaluate(() => (window as Window & { __silentSpeakCalls?: number }).__silentSpeakCalls || 0);
+  expect(silentCalls).toBe(0);
+});
+
+test("uses the browser voice and never calls the paid endpoint when one exists", async ({ page }) => {
+  // 한국어 음성이 있는 기기에서는 서버 음성 비용이 발생하면 안 됩니다.
+  let speechCalls = 0;
+  await page.route("**/api/speech", async (route) => { speechCalls += 1; await route.fulfill({ json: {} }); });
+  await page.route("**/api/route", (route) => route.fulfill({ json: routeResult }));
+
+  await page.addInitScript(() => {
+    Object.defineProperty(window, "speechSynthesis", {
+      value: {
+        speaking: false,
+        getVoices: () => [{ lang: "ko-KR", name: "Korean" }],
+        addEventListener() {}, removeEventListener() {}, cancel() {},
+        speak(utterance: { text: string }) {
+          const tracked = window as Window & { __spokenPrompts?: string[] };
+          tracked.__spokenPrompts = [...(tracked.__spokenPrompts || []), utterance.text];
+        },
+      },
+    });
+  });
+
+  await page.goto("/");
+  await page.getByRole("combobox", { name: "버스 목적지" }).fill("강남역");
+  await page.getByRole("button", { name: "버스 경로 검색" }).click();
+  await expect(page.getByText("강남역 2호선 방면")).toBeVisible();
+
+  await expect.poll(() => page.evaluate(() => (window as Window & { __spokenPrompts?: string[] }).__spokenPrompts?.length || 0))
+    .toBeGreaterThanOrEqual(1);
+  expect(speechCalls).toBe(0);
+});
+
+test("keeps the bus list usable on short screens", async ({ page }) => {
+  // 보드 세로 배치에서 스크롤 영역만 늘어나는 요소라, 화면이 낮으면 부족분을 전부
+  // 흡수해 0px 로 접혔습니다. 그러면 버스 행이 표 머리글·푸터에 가려 눌리지 않습니다.
+  // 1280x720 처럼 흔한 화면에서 실제로 발생했으므로 여기서 고정합니다.
+  await page.unroute("**/api/bus/default");
+  await page.route("**/api/bus/default", (route) => route.fulfill({ json: fiveRowArrivals }));
+
+  for (const viewport of [
+    { width: 1024, height: 600 },
+    { width: 1280, height: 720 },
+    { width: 390, height: 844 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await page.goto("/");
+    const firstRow = page.getByTestId("main-bus-row").first();
+    await expect(firstRow).toBeVisible();
+
+    const label = `${viewport.width}x${viewport.height}`;
+    const scrollHeight = await page.evaluate(() => {
+      const scroll = document.querySelector("[data-testid=main-bus-scroll]") as HTMLElement | null;
+      return scroll ? Math.round(scroll.getBoundingClientRect().height) : 0;
+    });
+    expect(scrollHeight, `${label}: 목록 영역이 접혔습니다`).toBeGreaterThanOrEqual(100);
+
+    // 가려져 있으면 이 클릭이 타임아웃납니다.
+    await firstRow.click({ timeout: 5_000 });
+    await expect(firstRow).toHaveAttribute("aria-pressed", "true");
+    await firstRow.click({ timeout: 5_000 });
+    await expectNoHorizontalOverflow(page);
+  }
 });

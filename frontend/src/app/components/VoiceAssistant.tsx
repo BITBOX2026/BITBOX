@@ -116,7 +116,7 @@ export function VoiceAssistant({ onResultModeChange }: VoiceAssistantProps) {
   }
 
   return (
-    <section className="relative flex h-full w-full overflow-hidden bg-[#123E49] font-['Noto_Sans_KR'] text-white">
+    <section className="relative flex h-full w-full overflow-hidden bg-[#123E49] font-kiosk text-white">
       <div className="absolute inset-x-0 top-0 h-1 bg-[#F0C929]" />
 
       {/* 화면을 보지 않는 사용자를 위한 상태 안내 (스크린리더 전용) */}

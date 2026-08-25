@@ -1,6 +1,7 @@
 import { Check, MapPin, Mic, TrainFront, Volume2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { PlaceSuggestion, SafetyDecision, TransitConfirmation } from "../../api/client";
+import { cancelSpeech, speakKorean } from "../../utils/speech";
 
 interface VoiceConfirmationProps {
   confirmation: TransitConfirmation;
@@ -22,7 +23,7 @@ export function VoiceConfirmation({ confirmation, transcript, audioBase64, safet
   const stopPrompt = useCallback(() => {
     audioRef.current?.pause();
     audioRef.current = null;
-    window.speechSynthesis?.cancel();
+    cancelSpeech();
   }, []);
 
   const playPrompt = useCallback(async () => {
@@ -41,14 +42,7 @@ export function VoiceConfirmation({ confirmation, transcript, audioBase64, safet
         audioRef.current = null;
       }
     }
-    if ("speechSynthesis" in window && "SpeechSynthesisUtterance" in window) {
-      const utterance = new SpeechSynthesisUtterance(confirmation.prompt);
-      utterance.lang = "ko-KR";
-      utterance.rate = 0.9;
-      utterance.onerror = () => setPlaybackBlocked(true);
-      window.speechSynthesis.speak(utterance);
-      return;
-    }
+    if (await speakKorean(confirmation.prompt) !== "unavailable") return;
     setPlaybackBlocked(true);
   }, [audioBase64, confirmation.prompt, stopPrompt]);
 

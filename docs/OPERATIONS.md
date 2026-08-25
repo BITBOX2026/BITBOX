@@ -160,6 +160,41 @@ edit production source files directly.
   and on page startup. Voice consent is cleared when the active kiosk session
   ends through home or inactivity.
 
+## Kiosk device checks
+
+The kiosk browser, not the server, decides whether Korean is readable and audible.
+Run these once on every new device before treating it as working.
+
+```bash
+fc-list :lang=ko | head          # 비어 있어도 앱이 글꼴을 번들하므로 화면은 정상입니다
+aplay -l                         # 스피커
+arecord -l                       # 마이크
+```
+
+In the kiosk browser console at the production origin:
+
+```js
+window.isSecureContext                                   // getUserMedia 전제, true 여야 함
+speechSynthesis.getVoices().filter(v => v.lang.startsWith('ko'))   // 비어 있으면 서버 음성으로 대체됩니다
+['audio/webm;codecs=opus','audio/mp4'].filter(t => MediaRecorder.isTypeSupported(t))
+navigator.permissions.query({name:'microphone'}).then(r => console.log(r.state))
+```
+
+An empty Korean voice list is expected on a minimal Linux image and is handled:
+the app falls back to `POST /api/speech`. Watch that endpoint's volume after
+deploying to such a device, because every announcement that would have been free
+now costs a synthesis call until the cache warms.
+
+Launch flags that matter for unattended operation:
+
+```bash
+chromium-browser --kiosk https://<domain>   --autoplay-policy=no-user-gesture-required   --use-fake-ui-for-media-stream   --noerrdialogs --disable-session-crashed-bubble
+```
+
+`--use-fake-ui-for-media-stream` auto-accepts the microphone prompt. For a
+long-lived install prefer a Chromium policy (`AudioCaptureAllowedUrls`) scoped to
+the production origin instead of a blanket flag.
+
 ## Single-host recovery
 
 Everything runs on one EC2 instance: Nginx, the Uvicorn backend, the SQLite
