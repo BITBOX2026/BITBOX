@@ -1,0 +1,27 @@
+name: Production Monitor
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bitbox-production-monitor
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      BITBOX_SERVER_NAME: ${{ secrets.BITBOX_SERVER_NAME }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Verify production from outside EC2
+        run: |
+          test -n "$BITBOX_SERVER_NAME"
+          [[ "$BITBOX_SERVER_NAME" =~ ^[A-Za-z0-9.-]+$ ]]
+          python scripts/production_smoke.py --url "https://$BITBOX_SERVER_NAME"

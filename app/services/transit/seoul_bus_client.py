@@ -12,27 +12,37 @@
 
 from typing import Any
 from urllib.parse import unquote
-from xml.etree import ElementTree
 
 import httpx
 
-from app.services.core.exceptions import TransportAPIError
+from app.core.logger import get_logger
+from app.services.core.exceptions import ExternalServiceError
 from app.services.core.http_client import get_http_client
 from app.services.core.http_utils import http_retry as _http_retry
 from app.services.core.settings_helper import get_setting
+from app.services.transit.xml_utils import (
+    XML_ELEMENT_TYPE,
+    XML_PARSE_ERRORS,
+    parse_untrusted_xml,
+)
+
+logger = get_logger(__name__)
 
 # 서울시 버스 API가 성공으로 반환하는 결과 코드 목록
 SUCCESS_CODES = {"0", "00", "NORMAL_CODE", "INFO-000", "SUCCESS"}
+# 서울시 버스 API의 `4`는 요청 실패가 아니라 검색 결과 없음입니다.
+NO_RESULT_CODES = {"4"}
+MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 
 
-@_http_retry
 async def _seoul_bus_get(url: str, params: dict[str, str]) -> httpx.Response:
-    """서울버스 API GET 요청. 재시도 가능한 오류는 자동 재시도합니다."""
+    """서울버스 API GET 요청. 재시도·회로 관리는 업무 응답 경계에서 수행합니다."""
     response = await get_http_client().get(url, params=params)
     response.raise_for_status()
     return response
 
 
+@_http_retry
 async def request_seoul_bus_payload(
     url: str,
     params: dict[str, str],
@@ -51,8 +61,11 @@ async def request_seoul_bus_payload(
     """
     service_key = _get_first_service_key(service_key_setting_names)
     if not service_key:
-        raise TransportAPIError(
-            f"{' or '.join(service_key_setting_names)} is not configured"
+        raise ExternalServiceError(
+            f"{' or '.join(service_key_setting_names)} is not configured",
+            user_message="버스 도착정보 서비스를 사용할 수 없습니다.",
+            retryable=False,
+            provider_down=True,
         )
 
     last_auth_error: tuple[str, str] | None = None
@@ -69,35 +82,58 @@ async def request_seoul_bus_payload(
             payload = _parse_response_payload(response, stage)
 
             code, message = extract_result_code_message(payload)
+            if code is None:
+                logger.debug("공공데이터 API 응답에 resultCode 없음 (%s) — 성공으로 간주", stage)
             if code and not is_success_code(code):
                 message = message or "공공데이터 API 오류"
+
+                if code.strip().upper() in NO_RESULT_CODES:
+                    logger.info("공공데이터 API 검색 결과 없음 (%s)", stage)
+                    return payload
 
                 # 인증 오류일 때만 다음 파라미터명으로 재시도
                 if index + 1 < len(service_key_param_names) and is_service_key_error(code, message):
                     last_auth_error = (code, message)
                     continue
 
-                raise TransportAPIError(
-                    f"공공데이터 API 오류({stage}): resultCode={code}, resultMsg={message}"
+                auth_failed = is_service_key_error(code, message)
+                raise ExternalServiceError(
+                    f"공공데이터 API 오류({stage}): resultCode={code}, resultMsg={message}",
+                    user_message="버스 도착정보 서비스를 사용할 수 없습니다. 잠시 후 다시 시도해 주세요.",
+                    retryable=not auth_failed,
+                    provider_down=auth_failed,
                 )
 
             return payload
 
     except httpx.HTTPStatusError as exc:
-        raise TransportAPIError(
-            f"공공데이터 API HTTP 오류({stage}): status={exc.response.status_code}"
+        status_code = exc.response.status_code
+        raise ExternalServiceError(
+            f"공공데이터 API HTTP 오류({stage}): status={status_code}",
+            user_message="버스 도착정보 서비스를 사용할 수 없습니다. 잠시 후 다시 시도해 주세요.",
+            retryable=status_code == 429 or status_code >= 500,
+            provider_down=status_code in {401, 403},
         ) from exc
 
     except httpx.RequestError as exc:
-        raise TransportAPIError(f"공공데이터 API 요청 오류({stage})") from exc
+        raise ExternalServiceError(
+            f"공공데이터 API 요청 오류({stage})",
+            user_message="버스 도착정보 서비스를 사용할 수 없습니다. 잠시 후 다시 시도해 주세요.",
+        ) from exc
 
     if last_auth_error:
         code, message = last_auth_error
-        raise TransportAPIError(
-            f"공공데이터 API 인증 오류({stage}): resultCode={code}, resultMsg={message}"
+        raise ExternalServiceError(
+            f"공공데이터 API 인증 오류({stage}): resultCode={code}, resultMsg={message}",
+            user_message="버스 도착정보 서비스를 사용할 수 없습니다.",
+            retryable=False,
+            provider_down=True,
         )
 
-    raise TransportAPIError(f"공공데이터 API 오류({stage})")
+    raise ExternalServiceError(
+        f"공공데이터 API 오류({stage})",
+        user_message="버스 도착정보 서비스를 사용할 수 없습니다.",
+    )
 
 
 def _get_first_service_key(setting_names: tuple[str, ...]) -> str:
@@ -110,15 +146,25 @@ def _get_first_service_key(setting_names: tuple[str, ...]) -> str:
 
 def _parse_response_payload(response: httpx.Response, stage: str) -> Any:
     """응답을 JSON 우선으로 파싱합니다. JSON 실패 시 XML을 시도합니다."""
+    if len(response.content) > MAX_RESPONSE_BYTES:
+        raise ExternalServiceError(
+            f"공공데이터 API 응답 크기 초과({stage})",
+            user_message="버스 도착정보 서비스를 사용할 수 없습니다.",
+            retryable=False,
+        )
+
     try:
         return response.json()
     except ValueError:
         pass
 
     try:
-        return ElementTree.fromstring(response.text)
-    except ElementTree.ParseError as exc:
-        raise TransportAPIError(f"공공데이터 API 응답 해석 오류({stage})") from exc
+        return parse_untrusted_xml(response.text)
+    except XML_PARSE_ERRORS as exc:
+        raise ExternalServiceError(
+            f"공공데이터 API 응답 해석 오류({stage})",
+            user_message="버스 도착정보 서비스를 사용할 수 없습니다. 잠시 후 다시 시도해 주세요.",
+        ) from exc
 
 
 def _normalize_service_key(service_key: object) -> str:
@@ -133,7 +179,7 @@ def _normalize_service_key(service_key: object) -> str:
 
 def extract_result_code_message(payload: Any) -> tuple[str | None, str | None]:
     """응답(JSON dict 또는 XML Element)에서 결과 코드와 메시지를 추출합니다."""
-    if isinstance(payload, ElementTree.Element):
+    if isinstance(payload, XML_ELEMENT_TYPE):
         return (
             _find_first_xml_text(payload, ["headerCd", "resultCode", "returnReasonCode"]),
             _find_first_xml_text(payload, ["headerMsg", "resultMsg", "returnAuthMsg", "errMsg"]),
@@ -170,7 +216,7 @@ def _find_nested_value(value: Any, names: list[str]) -> str | None:
     return None
 
 
-def _find_first_xml_text(root: ElementTree.Element, tag_names: list[str]) -> str | None:
+def _find_first_xml_text(root: Any, tag_names: list[str]) -> str | None:
     """XML 트리에서 주어진 태그 이름 목록 순서대로 첫 번째 텍스트 값을 찾습니다."""
     for tag_name in tag_names:
         for element in root.iter(tag_name):

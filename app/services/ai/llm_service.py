@@ -1,16 +1,27 @@
 import json
 import os
 import re
+from dataclasses import replace
 
 from openai import AsyncOpenAI
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_fixed
 
+from app.core.logger import get_logger
+from app.services.ai.korean_number_normalizer import (
+    normalize_bus_number_token,
+    normalize_spoken_bus_numbers,
+)
 from app.services.core.constants import DEFAULT_LLM_MODEL, TRANSIT_INTENT_SYSTEM_PROMPT
 from app.services.core.exceptions import LLMParsingError
 from app.services.core.openai_client import get_openai_client as _get_openai_client
 from app.services.core.service_types import ParsedIntent
-from app.services.core.settings_helper import get_setting, is_mock_mode
+from app.services.core.settings_helper import (
+    get_bool_setting,
+    get_setting,
+    is_mock_mode,
+)
 
+logger = get_logger(__name__)
 
 _system_prompt_cache: str | None = None
 _system_prompt_file_mtime: float | None = None  # 마지막으로 읽은 파일의 수정 시각
@@ -92,7 +103,7 @@ async def _call_llm(client: AsyncOpenAI, llm_model: str, transcript: str) -> Par
                         "stop_text": {"type": ["string", "null"]},
                         "transport_mode": {
                             "type": "string",
-                            "enum": ["bus", "subway", "transit", "unknown"],
+                            "enum": ["bus", "subway", "unknown"],
                         },
                         "bus_number": {"type": ["string", "null"]},
                         "confidence": {
@@ -133,19 +144,35 @@ async def _call_llm(client: AsyncOpenAI, llm_model: str, transcript: str) -> Par
         destination_text=parsed_json.get("destination_text"),
         stop_text=parsed_json.get("stop_text"),
         transport_mode=_normalize_transport_mode(parsed_json.get("transport_mode")),
-        bus_number=parsed_json.get("bus_number"),
+        bus_number=normalize_bus_number_token(parsed_json.get("bus_number")),
         confidence=_safe_confidence(parsed_json.get("confidence")),
     )
 
 
-async def parse_transit_intent(transcript: str) -> ParsedIntent:
+async def parse_transit_intent(transcript: str, request_id: str = "") -> ParsedIntent:
     """STT 문장을 교통 안내용 intent JSON 구조로 변환합니다."""
 
     if not transcript or not transcript.strip():
         return ParsedIntent()
 
+    logger.info("[%s] LLM 분석 시작: transcript_length=%d", request_id, len(transcript))
+
+    normalized_transcript = normalize_spoken_bus_numbers(transcript)
+    if _has_ambiguous_bus_number_expression(normalized_transcript):
+        logger.info("[%s] 복수 또는 비정상 버스 번호 발화 감지: 재확인 필요", request_id)
+        return ParsedIntent()
+
+    deterministic = _mock_parse_transit_intent(normalized_transcript)
+    if get_bool_setting("INTENT_FAST_PATH_ENABLED", True) and _is_unambiguous(deterministic):
+        logger.info(
+            "[%s] 규칙 기반 의도 분석 사용: intent=%s",
+            request_id,
+            deterministic.intent,
+        )
+        return deterministic
+
     if is_mock_mode():
-        return _mock_parse_transit_intent(transcript)
+        return deterministic
 
     if not get_setting("OPENAI_API_KEY"):
         raise LLMParsingError("OPENAI_API_KEY가 설정되지 않았습니다.")
@@ -153,13 +180,83 @@ async def parse_transit_intent(transcript: str) -> ParsedIntent:
     llm_model = get_setting("LLM_MODEL", DEFAULT_LLM_MODEL)
 
     try:
-        return await _call_llm(_get_openai_client(), llm_model, transcript)
+        parsed = await _call_llm(_get_openai_client(), llm_model, normalized_transcript)
+        return _preserve_explicit_named_bus_number(normalized_transcript, parsed)
 
     except LLMParsingError:
         raise
 
     except Exception as exc:
         raise LLMParsingError(f"LLM 분석 중 오류가 발생했습니다: {exc}") from exc
+
+
+def _is_unambiguous(parsed: ParsedIntent) -> bool:
+    if parsed.intent == "route":
+        return bool(parsed.destination_text and parsed.confidence >= 0.8)
+    if parsed.intent == "arrival":
+        return bool(parsed.bus_number and parsed.confidence >= 0.8)
+    return False
+
+
+def _has_ambiguous_bus_number_expression(text: str) -> bool:
+    """Reject lists and overlong values instead of selecting a plausible suffix."""
+
+    # A five-or-more digit value is not a supported Seoul route number.  In
+    # particular, `12345번` must never be truncated to the suffix `2345번`.
+    if re.search(r"(?<!\d)\d{5,}\s*번", text):
+        return True
+
+    explicit_numbers = re.findall(
+        r"(?<![0-9A-Za-z])(\d{1,4})(?!\d)\s*번",
+        text,
+    )
+    if len(explicit_numbers) > 1:
+        return True
+
+    named_numbers = set(_extract_explicit_named_bus_numbers(text))
+    if len(named_numbers) > 1 or (named_numbers and explicit_numbers):
+        return True
+
+    # STT often writes a choice such as "3, 4번 중에" with `번` only after
+    # the last item.  This is a choice request, not a confident request for 4.
+    return bool(
+        re.search(
+            r"(?<!\d)\d{1,4}\s*[,/·]\s*\d{1,4}\s*번(?:\s*중(?:에|에서)?)?",
+            text,
+        )
+    )
+
+
+def _extract_explicit_named_bus_numbers(text: str) -> list[str]:
+    """Return route names whose prefix or hyphen is semantically significant."""
+    matches = re.findall(
+        r"(?<![0-9A-Za-z])([A-Za-z]{1,3}\d{1,4}|\d{1,4}-\d{1,4}[가-힣]*?)"
+        r"(?=\s*번(?:\s|$|[,.!?])|\s|$|[,.!?])",
+        text,
+    )
+    return [value.upper() if value[0].isalpha() else value for value in matches]
+
+
+def _preserve_explicit_named_bus_number(text: str, parsed: ParsedIntent) -> ParsedIntent:
+    """Prevent the LLM from stripping M/N prefixes or route-name hyphens."""
+    candidates = list(dict.fromkeys(_extract_explicit_named_bus_numbers(text)))
+    if not candidates:
+        return parsed
+    if len(candidates) != 1:
+        return ParsedIntent()
+
+    candidate = candidates[0]
+    parsed_number = (parsed.bus_number or "").strip()
+    if parsed_number.upper() == candidate.upper():
+        return replace(parsed, bus_number=candidate)
+
+    if candidate[0].isalpha() and parsed_number == re.sub(r"^[A-Za-z]+", "", candidate):
+        logger.warning("LLM stripped a route prefix; restoring the explicit transcript value")
+        return replace(parsed, bus_number=candidate)
+
+    # A conflict is safety-sensitive: ask again instead of querying another route.
+    logger.warning("LLM bus number conflicts with the explicit named route; requesting confirmation")
+    return ParsedIntent()
 
 
 def _mock_parse_transit_intent(transcript: str) -> ParsedIntent:
@@ -247,20 +344,25 @@ def _extract_transport_mode(text: str, bus_number: str | None) -> str:
         return "subway"
 
     if "대중교통" in text:
-        return "transit"
+        return "bus"
 
-    return "transit"
+    return "bus"
 
 
 def _extract_bus_number(text: str) -> str | None:
     """문장에서 146번, 740 번 같은 버스 번호를 추출합니다."""
 
-    match = re.search(r"(\d{1,4})\s*번", text)
-
-    if not match:
+    if _has_ambiguous_bus_number_expression(text):
         return None
 
-    return match.group(1)
+    matches = list(
+        re.finditer(r"(?<![0-9A-Za-z])(\d{1,4})(?!\d)\s*번", text)
+    )
+
+    if len(matches) != 1:
+        return None
+
+    return matches[0].group(1)
 
 
 def _extract_route_places(text: str) -> tuple[str | None, str | None]:
@@ -342,7 +444,7 @@ def _safe_confidence(value: object) -> float:
 def _normalize_transport_mode(value: object) -> str:
     """LLM 응답의 transport_mode를 허용된 값으로 보정합니다."""
 
-    if value in {"bus", "subway", "transit", "unknown"}:
+    if value in {"bus", "subway", "unknown"}:
         return str(value)
 
     return "unknown"

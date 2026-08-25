@@ -7,19 +7,25 @@ FastAPI 애플리케이션을 초기화하고 미들웨어·라우터를 등록�
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
-from app.api.schemas import HealthResponse
 from app.api.gateway import router as gateway_router
-from app.core.config import settings, validate_required_settings
+from app.api.schemas import HealthResponse, ReadinessResponse
+from app.core.config import is_local_env, settings, validate_required_settings
 from app.core.logger import get_logger
 from app.core.rate_limiter import limiter
+from app.core.request_context import request_context_middleware
+from app.core.runtime_metrics import runtime_snapshot
+from app.core.usage_guard import usage_snapshot
 from app.routers.bus import router as bus_router
+from app.routers.place import router as place_router
+from app.routers.speech import router as speech_router
 from app.routers.station import router as station_router
 from app.services.core.http_client import close_http_client
+from app.services.core.http_utils import circuit_snapshot
 from app.services.core.openai_client import close_openai_client
 from app.services.core.settings_helper import is_mock_mode
 
@@ -28,25 +34,21 @@ _logger = get_logger(__name__)
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    # 시작 시 필수 환경변수 검증 — import 시점이 아닌 서버 기동 시점에 실행
+    validate_required_settings()
+
+    if not settings.DEFAULT_ORIGIN_NAME and not settings.DEFAULT_ORIGIN_X and not settings.ORIGIN_X:
+        _logger.warning(
+            "기본 출발지가 설정되지 않았습니다. "
+            "사용자가 매번 출발지를 말해야 합니다. "
+            ".env에 DEFAULT_ORIGIN_NAME 또는 DEFAULT_ORIGIN_X/Y를 설정하면 자동 출발지를 사용할 수 있습니다."
+        )
+
     try:
         yield
     finally:
         await close_http_client()
         await close_openai_client()
-
-# ---------------------------------------------------------------------------
-# 시작 시 필수 환경변수 검증
-# mock 모드: API 키 없이 실행 가능 / real 모드: 4개 API 키 필수
-# ---------------------------------------------------------------------------
-validate_required_settings()
-
-# 기본 출발지가 전혀 설정되지 않은 경우 경고 — 사용자가 항상 출발지를 말해야 함
-if not settings.DEFAULT_ORIGIN_NAME and not settings.DEFAULT_ORIGIN_X and not settings.ORIGIN_X:
-    _logger.warning(
-        "기본 출발지가 설정되지 않았습니다. "
-        "사용자가 매번 출발지를 말해야 합니다. "
-        ".env에 DEFAULT_ORIGIN_NAME 또는 DEFAULT_ORIGIN_X/Y를 설정하면 자동 출발지를 사용할 수 있습니다."
-    )
 
 # ---------------------------------------------------------------------------
 # CORS 허용 출처 파싱
@@ -63,7 +65,9 @@ _cors_origins = (
     else sorted(
         {
             *[o.strip() for o in settings.CORS_ALLOWED_ORIGINS.split(",") if o.strip()],
-            *(  _frontend_dev_origins if settings.APP_ENV != "prod" else set()  ),
+            # 오직 "local" 환경에서만 개발 서버 오리진을 추가합니다.
+            # staging 등 알 수 없는 APP_ENV 값은 prod와 동일하게 취급 (fail-closed).
+            *(_frontend_dev_origins if is_local_env() else set()),
         }
     )
 )
@@ -74,9 +78,10 @@ _cors_origins = (
 app = FastAPI(
     title="BITBOX Voice Transit Assistant Backend",
     description="음성 기반 버스/교통 안내 시스템 백엔드 API",
-    version="1.0.0",
+    version="1.2.0",
     lifespan=lifespan,
 )
+app.middleware("http")(request_context_middleware)
 
 # IP 기반 Rate Limiting (slowapi) — 분당 최대 요청 수를 gateway에서 제한
 app.state.limiter = limiter
@@ -88,12 +93,14 @@ app.add_middleware(
     allow_origins=_cors_origins,
     allow_credentials=False,
     allow_methods=["POST", "GET"],
-    allow_headers=["*"],
+    allow_headers=["Authorization", "Content-Type", "X-BITBOX-Token", "X-Request-ID"],
 )
 
 # API 라우터 등록 — /api/process 엔드포인트
 app.include_router(gateway_router, prefix="/api", tags=["Gateway"])
 app.include_router(bus_router, prefix="/api/bus", tags=["Bus"])
+app.include_router(place_router, prefix="/api/places", tags=["Places"])
+app.include_router(speech_router, prefix="/api/speech", tags=["Speech"])
 app.include_router(station_router, prefix="/api/station", tags=["Station"])
 
 
@@ -107,10 +114,18 @@ def health_check() -> HealthResponse:
         "status": "ok",
         "env": settings.APP_ENV,
         "mock_mode": is_mock_mode(),
+        "version": app.version,
+        "release_sha": settings.RELEASE_SHA,
+        "capabilities": [
+            "bus_arrivals",
+            "bus_only_routes",
+            "place_suggestions",
+            "voice_processing",
+        ],
         "api_keys_configured": None,
     }
 
-    if settings.APP_ENV != "prod":
+    if is_local_env():
         body["api_keys_configured"] = {
             "openai": bool(settings.OPENAI_API_KEY),
             "kakao": bool(settings.KAKAO_REST_API_KEY),
@@ -120,3 +135,34 @@ def health_check() -> HealthResponse:
         }
 
     return HealthResponse(**body)
+
+
+@app.get("/ready", response_model=ReadinessResponse)
+def readiness_check() -> ReadinessResponse:
+    """Report readiness and fail while a persistent external circuit is open."""
+    if any(state.get("open") for state in circuit_snapshot().values()):
+        raise HTTPException(
+            status_code=503,
+            detail="외부 교통 서비스 연결이 일시적으로 불안정합니다.",
+        )
+    return ReadinessResponse(
+        status="ready",
+        version=app.version,
+        release_sha=settings.RELEASE_SHA,
+    )
+
+
+@app.get("/internal/status", include_in_schema=False)
+async def internal_status(request: Request) -> dict[str, object]:
+    """Expose privacy-safe runtime state only to local EC2 operators."""
+    client_host = request.client.host if request.client else ""
+    if client_host not in {"127.0.0.1", "::1"}:
+        raise HTTPException(status_code=404, detail="Not found")
+    return {
+        "status": "ok",
+        "version": app.version,
+        "release_sha": settings.RELEASE_SHA,
+        "runtime": runtime_snapshot(),
+        "usage": usage_snapshot(),
+        "circuits": circuit_snapshot(),
+    }

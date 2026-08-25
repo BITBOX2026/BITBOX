@@ -7,7 +7,10 @@
 
 import io
 import logging
+import os
 import sys
+
+_LOG_LEVEL = getattr(logging, os.environ.get("LOG_LEVEL", "INFO").upper(), logging.INFO)
 
 
 def get_logger(name: str) -> logging.Logger:
@@ -16,7 +19,7 @@ def get_logger(name: str) -> logging.Logger:
     if logger.handlers:
         return logger
 
-    logger.setLevel(logging.INFO)
+    logger.setLevel(_LOG_LEVEL)
 
     # Windows CP949 환경에서 한글 로그가 깨지지 않도록 UTF-8 스트림 사용
     stream = _utf8_stderr()

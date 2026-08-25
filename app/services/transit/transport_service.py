@@ -14,14 +14,20 @@ intent별 처리:
 
 import asyncio
 import time
+from dataclasses import replace
 
 from app.core.logger import get_logger
 from app.services.core.exceptions import CoordinateResolveError, TransportAPIError
 from app.services.core.service_types import ParsedIntent, RouteSegment, TransportResult
-from app.services.core.settings_helper import is_mock_mode
+from app.services.core.settings_helper import get_setting, is_mock_mode
 from app.services.transit.kakao_service import resolve_origin, resolve_place_coordinates
 from app.services.transit.odsay_service import search_odsay_route
-from app.services.transit.public_bus_service import search_bus_arrival
+from app.services.transit.public_bus_service import (
+    fetch_arrival_at_default_stop,
+    fetch_arrival_at_stop,
+    search_bus_arrival,
+)
+from app.services.transit.seoul_bus_parser import equals_normalized
 
 logger = get_logger(__name__)
 
@@ -36,14 +42,18 @@ _ROUTE_CACHE_TTL = 300       # 캐시 유효 시간: 5분 (초)
 _ROUTE_CACHE_MAX_SIZE = 100  # 최대 캐시 항목 수 — 초과 시 가장 오래된 항목 제거
 
 
-async def search_transport_info(parsed: ParsedIntent) -> TransportResult:
+async def search_transport_info(parsed: ParsedIntent, request_id: str = "") -> TransportResult:
     """검증된 intent를 바탕으로 교통 정보를 조회합니다."""
+
+    logger.info("[%s] Transport 조회 시작: intent=%s", request_id, parsed.intent)
 
     if is_mock_mode():
         return _mock_transport_result(parsed)
 
     if parsed.intent == "route":
-        return await _search_route_with_odsay(parsed)
+        result = await _search_route_with_odsay(parsed)
+        result = await _enrich_arrival_time(result, parsed, request_id)
+        return result
 
     if parsed.intent == "arrival":
         return await search_bus_arrival(parsed)
@@ -55,8 +65,19 @@ async def search_transport_info(parsed: ParsedIntent) -> TransportResult:
 # 캐시 내부 함수
 # ---------------------------------------------------------------------------
 
-def _make_cache_key(origin_name: str, destination_text: str, transport_mode: str) -> str:
-    return f"{origin_name}|{destination_text.strip()}|{transport_mode}"
+def _make_cache_key(
+    origin_name: str,
+    destination_text: str,
+    transport_mode: str,
+    destination_x: float | None = None,
+    destination_y: float | None = None,
+) -> str:
+    coordinates = (
+        f"|{destination_x:.6f}|{destination_y:.6f}"
+        if destination_x is not None and destination_y is not None
+        else ""
+    )
+    return f"{origin_name}|{destination_text.strip()}|{transport_mode}{coordinates}"
 
 
 def _get_cached_route(key: str) -> TransportResult | None:
@@ -64,19 +85,98 @@ def _get_cached_route(key: str) -> TransportResult | None:
     if entry is None:
         return None
     result, ts = entry
-    # TTL 만료 시 캐시에서 제거
     if time.monotonic() - ts > _ROUTE_CACHE_TTL:
-        del _route_cache[key]
+        _evict_cache_entry(key)
         return None
     return result
 
 
+async def _enrich_arrival_time(
+    result: TransportResult,
+    parsed: ParsedIntent,
+    request_id: str,
+) -> TransportResult:
+    """경로 결과에 첫 번째 버스 탑승 정류장의 실시간 도착 시간을 추가합니다.
+
+    - 출발지 미지정(기본 정류장): getStationByUid 기반으로 빠르게 조회
+    - 출발지 지정: 경로의 첫 번째 버스 구간 탑승 정류장명으로 조회
+    """
+    if not result.route_segments:
+        return result
+
+    first_bus = next(
+        (s for s in result.route_segments if s.vehicle_type == "버스"), None
+    )
+    if not first_bus:
+        return result
+
+    bus_number = first_bus.line.replace("번", "").strip()
+
+    # 프론트의 대표 버스는 실제 첫 탑승 버스와 같아야 합니다. ODsay의 대표
+    # 노선 선택값(일반버스 우선)이 이후 환승 버스를 가리킬 수 있어 여기서 교정합니다.
+    result = replace(
+        result,
+        bus_number=bus_number,
+        stop_name=first_bus.start_name,
+    )
+
+    try:
+        default_stop_name = str(get_setting("DEFAULT_BUS_STOP_NAME") or "").strip()
+        boards_at_default_stop = bool(
+            parsed.origin_text is None
+            and default_stop_name
+            and first_bus.start_name
+            and equals_normalized(default_stop_name, first_bus.start_name)
+        )
+        if boards_at_default_stop:
+            arrival_time, arrival_time_2 = await asyncio.wait_for(
+                fetch_arrival_at_default_stop(bus_number),
+                timeout=5.0,
+            )
+        else:
+            arrival_time, arrival_time_2 = await asyncio.wait_for(
+                fetch_arrival_at_stop(bus_number, first_bus.start_name),
+                timeout=5.0,
+            )
+
+        updates = {}
+        if arrival_time:
+            updates["arrival_time"] = arrival_time
+        if arrival_time_2:
+            updates["arrival_time_2"] = arrival_time_2
+        if updates:
+            result = replace(result, **updates)
+
+    except asyncio.CancelledError:
+        raise
+    except asyncio.TimeoutError:
+        logger.warning(
+            "[%s] 실시간 도착 보강 시간 초과: bus=%s",
+            request_id,
+            bus_number,
+        )
+    except Exception as exc:  # noqa: BLE001 - Arrival enrichment is optional for a valid route.
+        logger.warning(
+            "[%s] 실시간 도착 보강 실패: bus=%s error_type=%s",
+            request_id,
+            bus_number,
+            type(exc).__name__,
+        )
+
+    return result
+
+
 def _set_cached_route(key: str, result: TransportResult) -> None:
-    # 최대 크기 초과 시 가장 오래된(타임스탬프가 가장 작은) 항목을 제거
     if len(_route_cache) >= _ROUTE_CACHE_MAX_SIZE:
         oldest_key = min(_route_cache, key=lambda k: _route_cache[k][1])
-        del _route_cache[oldest_key]
+        _evict_cache_entry(oldest_key)
     _route_cache[key] = (result, time.monotonic())
+
+
+def _evict_cache_entry(key: str) -> None:
+    """캐시 항목과 대응하는 Lock을 함께 제거합니다."""
+    _route_cache.pop(key, None)
+    _route_cache_locks.pop(key, None)
 
 
 # ---------------------------------------------------------------------------
@@ -97,43 +197,66 @@ async def _search_route_with_odsay(parsed: ParsedIntent) -> TransportResult:
         origin_name, ox, oy = await resolve_origin(None)
         origin_coords = (ox, oy)
 
-    cache_key = _make_cache_key(origin_name, parsed.destination_text, parsed.transport_mode)
+    has_destination_coordinates = (
+        parsed.destination_x is not None and parsed.destination_y is not None
+    )
+    cache_key = _make_cache_key(
+        origin_name,
+        parsed.destination_text,
+        parsed.transport_mode,
+        parsed.destination_x,
+        parsed.destination_y,
+    )
 
     # 1차 캐시 확인 (lock 없이)
     cached = _get_cached_route(cache_key)
     if cached is not None:
-        logger.debug("경로 캐시 히트: %s → %s", origin_name, parsed.destination_text)
+        logger.debug("경로 캐시 히트")
         return cached
 
     # 캐시 미스 — per-key lock으로 동일 경로 요청 직렬화 (캐시 스탬피드 방지)
-    async with _route_cache_locks.setdefault(cache_key, asyncio.Lock()):
-        cached = _get_cached_route(cache_key)
-        if cached is not None:
-            return cached
+    route_lock = _route_cache_locks.setdefault(cache_key, asyncio.Lock())
+    try:
+        async with route_lock:
+            cached = _get_cached_route(cache_key)
+            if cached is not None:
+                return cached
 
-        if origin_coords is None:
-            # 출발지·목적지 좌표를 병렬 조회
-            (origin_x, origin_y), (destination_x, destination_y) = await asyncio.gather(
-                resolve_place_coordinates(origin_name, "출발지"),
-                resolve_place_coordinates(parsed.destination_text, "목적지"),
-            )
-        else:
-            origin_x, origin_y = origin_coords
-            destination_x, destination_y = await resolve_place_coordinates(
-                parsed.destination_text, "목적지"
-            )
+            if has_destination_coordinates:
+                destination_x = float(parsed.destination_x)
+                destination_y = float(parsed.destination_y)
+                if origin_coords is None:
+                    origin_x, origin_y = await resolve_place_coordinates(origin_name, "출발지")
+                else:
+                    origin_x, origin_y = origin_coords
+            elif origin_coords is None:
+                # 출발지·목적지 좌표를 병렬 조회
+                (origin_x, origin_y), (destination_x, destination_y) = await asyncio.gather(
+                    resolve_place_coordinates(origin_name, "출발지"),
+                    resolve_place_coordinates(parsed.destination_text, "목적지"),
+                )
+            else:
+                origin_x, origin_y = origin_coords
+                destination_x, destination_y = await resolve_place_coordinates(
+                    parsed.destination_text, "목적지"
+                )
 
-        result = await search_odsay_route(
-            origin_name=origin_name,
-            origin_x=origin_x,
-            origin_y=origin_y,
-            destination_text=parsed.destination_text,
-            destination_x=destination_x,
-            destination_y=destination_y,
-            transport_mode=parsed.transport_mode,
-        )
-        _set_cached_route(cache_key, result)
-        return result
+            result = await search_odsay_route(
+                origin_name=origin_name,
+                origin_x=origin_x,
+                origin_y=origin_y,
+                destination_text=parsed.destination_text,
+                destination_x=destination_x,
+                destination_y=destination_y,
+                transport_mode=parsed.transport_mode,
+            )
+            _set_cached_route(cache_key, result)
+            return result
+    finally:
+        # 실패한 고유 검색어가 Lock 사전에 영구 누적되지 않도록 정리합니다.
+        # 성공한 경로의 Lock은 캐시 수명 동안 유지해 캐시 스탬피드를 방지합니다.
+        if cache_key not in _route_cache and _route_cache_locks.get(cache_key) is route_lock:
+            _route_cache_locks.pop(cache_key, None)
 
 
 # ---------------------------------------------------------------------------
@@ -144,33 +267,18 @@ def _mock_transport_result(parsed: ParsedIntent) -> TransportResult:
     if parsed.intent == "route":
         origin = parsed.origin_text or "출발지"
         dest = parsed.destination_text or "목적지"
-        uses_bus = parsed.transport_mode == "bus"
-        uses_subway = parsed.transport_mode == "subway"
-
-        # 교통수단에 따라 mock 경로 구간 생성
-        if uses_bus:
-            mock_segments: list[RouteSegment] | None = [
-                RouteSegment(vehicle_type="버스", line="146번", start_name=origin, end_name=dest)
-            ]
-        elif uses_subway:
-            mock_segments = [
-                RouteSegment(vehicle_type="지하철", line="2호선", start_name=origin, end_name=dest)
-            ]
-        else:
-            mock_segments = [
-                RouteSegment(vehicle_type="버스", line="146번", start_name=origin, end_name="환승역"),
-                RouteSegment(vehicle_type="지하철", line="2호선", start_name="환승역", end_name=dest),
-            ]
+        mock_segments: list[RouteSegment] = [
+            RouteSegment(vehicle_type="버스", line="146번", start_name=origin, end_name=dest)
+        ]
 
         return TransportResult(
             origin=origin, destination=dest,
             stop_name=None, transport_mode=parsed.transport_mode,
-            bus_number="146" if uses_bus else None,
+            bus_number="146",
             arrival_time=None, total_time_min=24, payment=1500,
-            bus_transit_count=1 if uses_bus else 0,
-            subway_transit_count=1 if uses_subway else 0,
+            bus_transit_count=1,
             transfer_count=0,
-            path_type=2 if uses_bus else 1 if uses_subway else 3,
+            path_type=2,
             route_summary=f"{origin}에서 {dest}까지 가는 mock 경로입니다.",
             route_segments=mock_segments,
             source="mock",

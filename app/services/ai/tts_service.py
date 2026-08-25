@@ -37,6 +37,7 @@ async def generate_tts_audio(text: str) -> str | None:
 
     tts_model = get_setting("TTS_MODEL", DEFAULT_TTS_MODEL)
     tts_voice = get_setting("TTS_VOICE", DEFAULT_TTS_VOICE)
+    tts_speed = max(0.25, min(4.0, float(get_setting("TTS_SPEED") or 0.85)))
 
     try:
         client = _get_openai_client()
@@ -46,11 +47,12 @@ async def generate_tts_audio(text: str) -> str | None:
             voice=tts_voice,
             input=text,
             response_format="wav",
+            speed=tts_speed,
         )
 
         return base64.b64encode(response.content).decode("utf-8")
 
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - TTS is optional and must never fail the text response.
         # TTS 실패는 경고만 기록하고 None 반환 — 텍스트 안내는 계속 전달됨
-        logger.warning("TTS 생성 실패 (텍스트 응답은 정상 반환): %s", exc)
+        logger.warning("TTS 생성 실패 (텍스트 응답은 정상 반환): error_type=%s", type(exc).__name__)
         return None

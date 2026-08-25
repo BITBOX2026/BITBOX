@@ -4,22 +4,27 @@ API Gateway — 음성 파일 수신 및 파이프라인 실행
 클라이언트(라즈베리파이)가 녹음한 오디오를 받아 파이프라인을 실행하고
 구조화된 JSON 응답(교통 안내 + TTS 오디오)을 반환합니다.
 
-엔드포인트: POST /api/process
+엔드포인트: POST /api/process 
 """
 
 import asyncio
 import re
-import secrets
-import uuid
 
-from fastapi import APIRouter, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, File, HTTPException, Request, Response, UploadFile
 
-from app.api.schemas import ProcessResponse, UploadCompatResponse
+from app.api.schemas import ProcessResponse, TextRouteRequest, UploadCompatResponse
+from app.core.auth import verify_api_token
 from app.core.config import settings
 from app.core.logger import get_logger
 from app.core.rate_limiter import limiter
-from app.services.core.settings_helper import get_setting
-from app.services.pipeline import build_timeout_error_response, run_pipeline
+from app.core.request_context import request_id_for
+from app.core.runtime_metrics import record_business_error
+from app.core.usage_guard import usage_slot
+from app.services.pipeline import (
+    build_timeout_error_response,
+    run_pipeline,
+    run_text_route,
+)
 
 router = APIRouter()
 logger = get_logger(__name__)
@@ -32,12 +37,27 @@ ALLOWED_CONTENT_TYPES = {
     "audio/mp3",
     "audio/webm",
     "audio/mp4",
+    "audio/ogg",
+}
+
+AUDIO_FILENAME_BY_CONTENT_TYPE = {
+    "audio/wav": "recording.wav",
+    "audio/x-wav": "recording.wav",
+    "audio/mpeg": "recording.mp3",
+    "audio/mp3": "recording.mp3",
+    "audio/webm": "recording.webm",
+    "audio/mp4": "recording.m4a",
+    "audio/ogg": "recording.ogg",
 }
 
 
 @router.post("/process", response_model=ProcessResponse)
 @limiter.limit("10/minute")  # IP당 분당 최대 10회 요청 허용
-async def process_audio(request: Request, file: UploadFile = File(...)) -> dict:
+async def process_audio(
+    request: Request,
+    response: Response,
+    file: UploadFile = File(...),  # noqa: B008 - FastAPI upload injection
+) -> dict:
     """
     음성 파일을 받아 전체 백엔드 파이프라인을 실행합니다.
 
@@ -47,7 +67,7 @@ async def process_audio(request: Request, file: UploadFile = File(...)) -> dict:
     3. 구조화된 JSON 응답 반환
     """
 
-    _verify_api_token(request)
+    verify_api_token(request)
 
     # MIME 타입 확인 (세미콜론 이후 파라미터 제거 후 비교)
     content_type = (file.content_type or "").split(";")[0].strip().lower()
@@ -60,14 +80,15 @@ async def process_audio(request: Request, file: UploadFile = File(...)) -> dict:
     # 파일 크기 확인 (기본 10MB)
     max_size = settings.MAX_AUDIO_SIZE_MB * 1024 * 1024
     audio_bytes = await file.read(max_size + 1)
+
+    if not audio_bytes:
+        raise HTTPException(status_code=400, detail="오디오 파일이 비어 있습니다.")
+
     if len(audio_bytes) > max_size:
         raise HTTPException(
             status_code=413,
             detail=f"오디오 파일 크기는 {settings.MAX_AUDIO_SIZE_MB}MB 이하여야 합니다.",
         )
-
-    if not audio_bytes:
-        raise HTTPException(status_code=400, detail="오디오 파일이 비어 있습니다.")
 
     if not _looks_like_supported_audio(content_type, audio_bytes):
         raise HTTPException(
@@ -75,39 +96,99 @@ async def process_audio(request: Request, file: UploadFile = File(...)) -> dict:
             detail="오디오 파일 형식을 확인하지 못했습니다.",
         )
 
-    # 요청별 고유 ID 생성 — 로그 추적에 사용
-    request_id = uuid.uuid4().hex[:8]
+    request_id = request_id_for(request)[:12]
     logger.info(
-        "[%s] 요청 시작: file=%s size=%d bytes",
-        request_id, file.filename, len(audio_bytes),
+        "[%s] 음성 요청 시작: content_type=%s size=%d bytes",
+        request_id, content_type, len(audio_bytes),
     )
 
     try:
-        # 전체 파이프라인에 타임아웃 적용 (기본 30초)
-        result = await asyncio.wait_for(
-            run_pipeline(
-                audio_bytes=audio_bytes,
-                filename=file.filename or "audio.wav",
-                request_id=request_id,
-            ),
-            timeout=settings.REQUEST_TIMEOUT_SECONDS,
-        )
+        async with usage_slot(
+            "voice",
+            max_concurrent=settings.VOICE_MAX_CONCURRENT_REQUESTS,
+            daily_limit=settings.VOICE_DAILY_REQUEST_LIMIT,
+        ):
+            # 전체 파이프라인에 타임아웃 적용 (기본 30초)
+            result = await asyncio.wait_for(
+                run_pipeline(
+                    audio_bytes=audio_bytes,
+                    filename=_safe_audio_filename(content_type),
+                    request_id=request_id,
+                ),
+                timeout=settings.REQUEST_TIMEOUT_SECONDS,
+            )
 
         logger.info("[%s] 요청 완료: status=%s", request_id, result.get("status"))
+        _apply_result_http_status(response, result)
         return result
 
     except asyncio.TimeoutError:
         logger.exception("[%s] 파이프라인 타임아웃", request_id)
         result = build_timeout_error_response()
         result["request_id"] = request_id
+        _apply_result_http_status(response, result)
         return result
 
 
 @router.post("/upload", response_model=UploadCompatResponse)
-async def upload_audio(request: Request, file: UploadFile = File(...)) -> dict:
+@limiter.limit("10/minute")
+async def upload_audio(
+    request: Request,
+    response: Response,
+    file: UploadFile = File(...),  # noqa: B008 - FastAPI upload injection
+) -> dict:
     """Compatibility alias for the existing React frontend."""
-    result = await process_audio(request, file)
+    result = await process_audio(request, response, file)
     return _build_upload_compat_response(result)
+
+
+@router.post("/route", response_model=UploadCompatResponse)
+@limiter.limit("20/minute")
+async def process_text_route(
+    request: Request,
+    response: Response,
+    body: TextRouteRequest,
+) -> dict:
+    """Return the same frontend contract as voice upload for a typed destination."""
+    verify_api_token(request)
+    request_id = request_id_for(request)[:12]
+
+    try:
+        async with usage_slot(
+            "route",
+            max_concurrent=settings.ROUTE_MAX_CONCURRENT_REQUESTS,
+            daily_limit=settings.ROUTE_DAILY_REQUEST_LIMIT,
+        ):
+            result = await asyncio.wait_for(
+                run_text_route(
+                    destination=body.destination.strip(),
+                    destination_x=body.destination_x,
+                    destination_y=body.destination_y,
+                    origin=body.origin.strip() if body.origin else None,
+                    transport_mode=body.transport_mode,
+                    request_id=request_id,
+                ),
+                timeout=settings.REQUEST_TIMEOUT_SECONDS,
+            )
+    except asyncio.TimeoutError:
+        result = build_timeout_error_response()
+        result["request_id"] = request_id
+
+    _apply_result_http_status(response, result)
+    return _build_upload_compat_response(result)
+
+
+def _apply_result_http_status(response: Response, result: dict) -> None:
+    """Expose upstream/internal failures to clients and operational middleware."""
+    status_code = result.get("_http_status")
+    if isinstance(status_code, int) and 400 <= status_code <= 599:
+        response.status_code = status_code
+        return
+
+    # 재입력 요청처럼 HTTP 200으로 나가는 업무 오류가 성공 지표에 묻히지 않도록
+    # 별도 카운터에 기록합니다.
+    if result.get("status") == "error":
+        record_business_error(str(result.get("error_kind") or "request"))
 
 
 def _build_upload_compat_response(result: dict) -> dict:
@@ -131,10 +212,17 @@ def _build_upload_compat_response(result: dict) -> dict:
         "destination": destination,
         "destination_text": destination,
         "bus_number": data.get("bus_number"),
+        "arrival_time": data.get("arrival_time"),
+        "arrival_time_2": data.get("arrival_time_2"),
+        "first_bus_time": data.get("first_bus_time"),
         "message": message,
         "buses": _build_buses_from_result(data, is_success),
         "audio_base64": result.get("audio_base64"),
         "request_id": result.get("request_id"),
+        "needs_confirmation": bool(data.get("needs_confirmation")),
+        "confirmation": data.get("confirmation"),
+        "safety_decision": data.get("safety_decision"),
+        "error_kind": result.get("error_kind"),
     }
 
 
@@ -159,22 +247,42 @@ def _build_buses_from_route(data: dict) -> list[dict]:
     if not bus_number and not route_segments:
         return []
 
-    n_segs = len(route_segments) or 1
+    missing_time_indexes = [
+        index for index, segment in enumerate(route_segments)
+        if segment.get("time_min") is None
+    ]
+    known_time = sum(
+        max(int(segment.get("time_min") or 0), 0)
+        for segment in route_segments
+        if segment.get("time_min") is not None
+    )
+    # 안내된 구간시간의 합이 화면의 총시간보다 큰 역방향 모순을 막습니다.
+    # 총시간을 줄이면 소요시간을 실제보다 짧게 안내하게 되므로, 항상 큰 쪽으로
+    # 올립니다(과소 안내 금지). 이렇게 하면 sum(steps) <= totalMin 이 항상 성립합니다.
+    total_time_min = max(total_time_min, known_time)
+    remaining_time = max(total_time_min - known_time, 0)
+    missing_durations: dict[int, int] = {}
+    if missing_time_indexes:
+        quotient, remainder = divmod(remaining_time, len(missing_time_indexes))
+        missing_durations = {
+            index: quotient + (1 if order < remainder else 0)
+            for order, index in enumerate(missing_time_indexes)
+        }
+
     steps: list[dict] = []
-    for seg in route_segments:
+    for index, seg in enumerate(route_segments):
         line = seg.get("line", "")
-        is_bus = seg.get("vehicle_type") == "버스"
-        # 버스 구간은 번호만("146번" → "146"), 지하철 구간은 빈 문자열
-        seg_bus_number = line.replace("번", "").strip() if is_bus else ""
+        seg_bus_number = line.replace("번", "").strip()
         seg_time = seg.get("time_min")
-        duration = seg_time if seg_time is not None else round(total_time_min / n_segs)
+        duration = max(int(seg_time), 0) if seg_time is not None else missing_durations[index]
+        is_walk = seg.get("vehicle_type") == "도보"
         steps.append({
-            "type": "bus",  # RouteStep은 "walk" | "bus"만 지원
+            "type": "walk" if is_walk else "bus",
             "durationMin": duration,
-            "busNumber": seg_bus_number,
+            "busNumber": None if is_walk else seg_bus_number,
             "fromStop": seg.get("start_name") or "",
             "toStop": seg.get("end_name") or "",
-            "description": f"{line} {'탑승' if is_bus else '이용'}",
+            "description": line if is_walk else f"{line} 탑승",
         })
 
     # 대표 버스 번호: bus_number 우선, 없으면 노선명에서 추출
@@ -186,31 +294,62 @@ def _build_buses_from_route(data: dict) -> list[dict]:
     else:
         display_bus = ""
 
-    origin_stop = steps[0]["fromStop"] if steps else (data.get("origin") or "")
+    first_bus_step = next((step for step in steps if step["type"] == "bus"), None)
+    origin_stop = first_bus_step["fromStop"] if first_bus_step else (data.get("origin") or "")
+
+    arrival_time = data.get("arrival_time") or ""
+    arrival_min = _arrival_minutes_for_display(arrival_time)
+
+    route_detail = {
+        "busNumber": display_bus,
+        "totalMin": total_time_min,
+        "steps": steps,
+        "origin_x": data.get("origin_x"),
+        "origin_y": data.get("origin_y"),
+        "destination_x": data.get("destination_x"),
+        "destination_y": data.get("destination_y"),
+        "origin": data.get("origin"),
+        "route_segments": route_segments,
+    }
 
     return [{
         "id": f"route-{display_bus}-0",
         "busNumber": display_bus,
-        "arrivalMin": 0,
-        "traTimeSec": 60,   # 프론트 필터(traTime > 0) 통과용 최솟값
-        "arrivalMsg": f"{display_bus} 탑승 예정",
+        "status": "live" if arrival_min >= 0 else "unknown",
+        "arrivalMin": arrival_min,
+        "traTimeSec": arrival_min * 60 if arrival_min >= 0 else -1,
+        "arrivalMsg": arrival_time or f"{display_bus} 도착정보 없음",
         "currentStationName": origin_stop,
         "remainingStops": 0,
         "busType": 0,
-        "congetion": 0,     # 프론트 typo 그대로 유지
+        "congestion": 0,
         "isFullFlag": False,
         "isLastBus": False,
         "plainNo": "",
         "isSecond": False,
-        # useRouteSelection이 (bus as any)로 접근하는 추가 필드
+        # 경로 상세 화면에서 사용하는 추가 필드
         "totalMin": total_time_min,
         "steps": steps,
+        "routeDetail": route_detail,
     }]
 
 
 # 버스가 운행을 마쳤거나 아직 차고지에서 출발 전인 상태 코드
 _TERMINAL_ARRIVAL_STATES = {"운행종료"}
 _STANDBY_ARRIVAL_STATES = {"출발대기"}
+
+
+def _arrival_minutes_for_display(arrival_time: str) -> int:
+    """Parse a live arrival value without turning unknown states into zero."""
+    compact = arrival_time.replace(" ", "")
+    if "곧" in arrival_time or "잠시후" in compact:
+        return 0
+    minute_match = re.search(r"(\d+)\s*분", arrival_time)
+    if minute_match:
+        return int(minute_match.group(1))
+    if re.search(r"\d+\s*초", arrival_time):
+        return 1
+    return -1
 
 
 def _build_buses_from_arrival(data: dict) -> list[dict]:
@@ -220,69 +359,66 @@ def _build_buses_from_arrival(data: dict) -> list[dict]:
         return []
 
     arrival_time = data.get("arrival_time") or ""
+    arrival_time_2 = data.get("arrival_time_2") or ""
     stop_name = data.get("stop_name") or data.get("stop_text") or ""
 
-    # 운행종료: 오늘 더 이상 운행하지 않음 → 버스 옵션 미제공
     if arrival_time in _TERMINAL_ARRIVAL_STATES:
         return []
 
-    # 출발대기: 차고지 대기 중 → arrivalMin=0으로 표시
+    buses = []
+    if arrival_time:
+        buses.append(_make_arrival_bus_entry(bus_number, arrival_time, stop_name, is_second=False))
+    if arrival_time_2 and arrival_time_2 not in _TERMINAL_ARRIVAL_STATES:
+        buses.append(_make_arrival_bus_entry(bus_number, arrival_time_2, stop_name, is_second=True))
+
+    return buses
+
+
+def _make_arrival_bus_entry(
+    bus_number: str,
+    arrival_time: str,
+    stop_name: str,
+    is_second: bool,
+) -> dict:
+    """단일 버스 도착 항목을 프론트 BusOption 형식으로 생성합니다."""
+    suffix = "-2" if is_second else ""
+
     if arrival_time in _STANDBY_ARRIVAL_STATES:
-        return [{
-            "id": f"arrival-{bus_number}",
+        return {
+            "id": f"arrival-{bus_number}{suffix}",
             "busNumber": bus_number,
-            "arrivalMin": 0,
-            "traTimeSec": 30,   # 프론트 필터(> 0) 통과용 최솟값
+            "status": "standby",
+            "arrivalMin": -1,
+            "traTimeSec": -1,
             "arrivalMsg": "출발 대기 중",
             "currentStationName": stop_name,
             "remainingStops": 0,
             "busType": 0,
-            "congetion": 0,
+            "congestion": 0,
             "isFullFlag": False,
             "isLastBus": False,
             "plainNo": "",
-            "isSecond": False,
-            "totalMin": 0,
-            "steps": [],
-        }]
+            "isSecond": is_second,
+        }
 
-    m = re.search(r"(\d+)\s*분", arrival_time)
-    # 분 숫자가 없으면(곧 도착 등) arrivalMin=0으로 처리
-    arrival_min = int(m.group(1)) if m else 0
+    arrival_min = _arrival_minutes_for_display(arrival_time)
 
-    return [{
-        "id": f"arrival-{bus_number}",
+    return {
+        "id": f"arrival-{bus_number}{suffix}",
         "busNumber": bus_number,
+        "status": "live" if arrival_min >= 0 else "unknown",
         "arrivalMin": arrival_min,
-        "traTimeSec": max(arrival_min * 60, 30),  # 최소 30초 — 프론트 필터 통과
+        "traTimeSec": max(arrival_min * 60, 30) if arrival_min >= 0 else -1,
         "arrivalMsg": arrival_time or f"{bus_number}번 도착 정보",
         "currentStationName": stop_name,
         "remainingStops": 0,
         "busType": 0,
-        "congetion": 0,
+        "congestion": 0,
         "isFullFlag": False,
         "isLastBus": False,
         "plainNo": "",
-        "isSecond": False,
-        "totalMin": arrival_min,
-        "steps": [],
-    }]
-
-
-def _verify_api_token(request: Request) -> None:
-    """API_AUTH_TOKEN이 설정된 경우 요청 헤더의 토큰을 검증합니다."""
-    expected = get_setting("API_AUTH_TOKEN")
-    expected_token = str(expected or "").strip()
-    if not expected_token:
-        return
-
-    provided = (request.headers.get("x-bitbox-token") or "").strip()
-    auth_header = request.headers.get("authorization") or ""
-    if auth_header.lower().startswith("bearer "):
-        provided = auth_header[7:].strip()
-
-    if not provided or not secrets.compare_digest(expected_token, provided):
-        raise HTTPException(status_code=401, detail="인증 토큰이 올바르지 않습니다.")
+        "isSecond": is_second,
+    }
 
 
 def _looks_like_supported_audio(content_type: str, audio_bytes: bytes) -> bool:
@@ -307,4 +443,12 @@ def _looks_like_supported_audio(content_type: str, audio_bytes: bytes) -> bool:
     if content_type == "audio/mp4":
         return len(audio_bytes) >= 12 and audio_bytes[4:8] == b"ftyp"
 
+    if content_type == "audio/ogg":
+        return audio_bytes.startswith(b"OggS")
+
     return False
+
+
+def _safe_audio_filename(content_type: str) -> str:
+    """Return a server-controlled filename for the already validated MIME type."""
+    return AUDIO_FILENAME_BY_CONTENT_TYPE.get(content_type, "recording.bin")

@@ -19,6 +19,9 @@ _SPECIAL_ARRIVAL_TEXTS: dict[str, str] = {
     "운행종료": "운행이 종료되었습니다.",
 }
 
+# 오늘 더 이상 운행하지 않는 상태 코드 (두 번째 버스 안내 제외에 사용)
+_TERMINAL_ARRIVAL_STATES = {"운행종료"}
+
 
 def build_user_message(
     parsed: ParsedIntent,
@@ -67,38 +70,21 @@ def _build_segment_guidance(segments: list[RouteSegment]) -> list[str]:
     if not segments:
         return []
 
-    if len(segments) == 1:
-        seg = segments[0]
-        label = _vehicle_label(seg)
-        return [
-            f"{seg.start_name}에서 {label}{_josa_reul(label)} 타시면 "
-            f"{seg.end_name}까지 가실 수 있습니다."
-        ]
+    guidance: list[str] = []
+    for segment in segments:
+        if segment.vehicle_type == "도보":
+            duration = f"약 {segment.time_min}분 " if segment.time_min else ""
+            target = segment.end_name or "다음 탑승 지점"
+            guidance.append(f"{target}까지 {duration}걸어가세요.")
+            continue
 
-    parts: list[str] = []
+        label = _vehicle_label(segment)
+        guidance.append(
+            f"{segment.start_name}에서 {label}{_josa_reul(label)} 타고 "
+            f"{segment.end_name}에 내리세요."
+        )
 
-    # 첫 번째 구간 — 탑승 안내
-    first = segments[0]
-    label = _vehicle_label(first)
-    parts.append(f"{first.start_name}에서 {label}{_josa_reul(label)} 타세요.")
-
-    # 중간 환승 구간 (첫 번째와 마지막 제외)
-    for i in range(1, len(segments) - 1):
-        prev = segments[i - 1]
-        cur = segments[i]
-        label = _vehicle_label(cur)
-        parts.append(f"{prev.end_name}에서 내려 {label}{_josa_ro(label)} 환승하세요.")
-
-    # 마지막 구간 — 도착 안내
-    prev = segments[-2]
-    last = segments[-1]
-    label = _vehicle_label(last)
-    parts.append(
-        f"{prev.end_name}에서 내려 {label}{_josa_ro(label)} 환승하시면 "
-        f"{last.end_name}에 도착합니다."
-    )
-
-    return parts
+    return guidance
 
 
 def _build_fallback_guidance(result: TransportResult) -> str:
@@ -111,10 +97,7 @@ def _build_fallback_guidance(result: TransportResult) -> str:
             f"{result.destination}까지 가실 수 있습니다."
         )
 
-    if result.transport_mode == "subway":
-        return f"{result.origin}에서 {result.destination} 방향 지하철을 이용하시면 됩니다."
-
-    return f"{result.origin}에서 {result.destination}까지 버스와 지하철을 이용하시면 됩니다."
+    return f"{result.origin}에서 {result.destination}까지 가는 경로를 찾지 못했습니다."
 
 
 def _build_time_payment(total_time_min: int | None, payment: int | None) -> str:
@@ -144,12 +127,24 @@ def _build_arrival_message(result: TransportResult) -> str:
     # 출발대기 / 곧 도착 / 운행종료 등 특수 상태 처리
     special = _SPECIAL_ARRIVAL_TEXTS.get(result.arrival_time)
     if special:
-        return f"{result.stop_name} 정류장 기준 {result.bus_number}번 버스는 {special}"
+        base = f"{result.stop_name} 정류장 기준 {result.bus_number}번 버스는 {special}"
+        if result.arrival_time == "운행종료" and result.first_bus_time:
+            base += f" 내일 첫차는 {result.first_bus_time}입니다."
+        return base
 
-    return (
+    message = (
         f"{result.stop_name} 정류장 기준 {result.bus_number}번 버스는 "
         f"{_format_arrival_time(result.arrival_time)} 도착 예정입니다."
     )
+
+    if result.arrival_time_2:
+        second_special = _SPECIAL_ARRIVAL_TEXTS.get(result.arrival_time_2)
+        if second_special:
+            message += f" 다음 버스는 {second_special}"
+        elif result.arrival_time_2 not in _TERMINAL_ARRIVAL_STATES:
+            message += f" 다음 버스는 {_format_arrival_time(result.arrival_time_2)} 도착합니다."
+
+    return message
 
 
 def _format_arrival_time(arrival_time: str) -> str:
@@ -180,18 +175,13 @@ def _vehicle_label(seg: RouteSegment) -> str:
         if _is_night_bus(seg.line):
             return f"{seg.line} 야간버스"
         return f"{seg.line} 버스"
-    return seg.line  # 지하철은 노선명 그대로 (예: "2호선")
+    return seg.line
 
 
 def _josa_reul(word: str) -> str:
     """받침 유무에 따라 목적격 조사 '을' 또는 '를'을 반환합니다."""
     return "를" if _last_jongseong(word) == 0 else "을"
 
-
-def _josa_ro(word: str) -> str:
-    """받침 유무에 따라 방향격 조사 '로' 또는 '으로'를 반환합니다. ㄹ 받침은 '로'."""
-    j = _last_jongseong(word)
-    return "로" if j == 0 or j == 8 else "으로"  # 8 = ㄹ 받침
 
 
 def _last_jongseong(word: str) -> int:

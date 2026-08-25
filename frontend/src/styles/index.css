@@ -1,0 +1,127 @@
+@import './tailwind.css';
+
+/*
+  Tailwind 유틸리티 `font-kiosk` 로 쓸 글꼴 스택입니다. 이전에는 화면마다
+  `font-['Noto_Sans_KR']` 를 직접 적어 두어, 번들 웹폰트가 로드되기 전이거나
+  로드에 실패하면 대체 글꼴 지정이 아예 없었습니다.
+*/
+@theme {
+  --font-kiosk: "Noto Sans KR", "Noto Sans CJK KR", "NanumGothic", "Nanum Gothic",
+    "Malgun Gothic", "Apple SD Gothic Neo", "Source Han Sans KR", system-ui, Arial, sans-serif;
+}
+
+/*
+  한글 글꼴을 앱과 함께 배포합니다.
+
+  키오스크는 라즈베리파이/리눅스에서 동작하며 어떤 글꼴이 설치돼 있을지 확정할 수
+  없습니다. CSP(font-src 'self' data:)가 외부 폰트 CDN을 막으므로 웹폰트를 받아올
+  수도 없습니다. 설치 글꼴에만 기대면 CJK 글꼴이 없는 기기에서 정류장 이름이
+  두부(□□□)로 보일 수 있는데, 정류장 이름을 읽지 못하는 것은 이 제품에서
+  치명적인 실패입니다.
+
+  Noto Sans KR (SIL Open Font License 1.1, 라이선스 전문은 assets/fonts/OFL.txt)을
+  현대 한글 전체(U+AC00–D7A3, 11,172 음절) + 라틴/구두점으로 서브셋해 세 굵기만
+  포함했습니다. 세 파일 합계 약 1.8MB이며 nginx가 /assets/ 를 1년 캐시합니다.
+  Vite 가 파일명에 해시를 붙이므로 갱신 시 캐시가 자동으로 무효화됩니다.
+*/
+@font-face {
+  font-family: 'Noto Sans KR';
+  src: url('../assets/fonts/NotoSansKR-400.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Noto Sans KR';
+  src: url('../assets/fonts/NotoSansKR-700.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Noto Sans KR';
+  src: url('../assets/fonts/NotoSansKR-900.woff2') format('woff2');
+  font-weight: 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  color: #171d23;
+  background: #dce3e6;
+  /*
+    번들한 Noto Sans KR 을 우선 사용하고, 로드 전(font-display: swap)이나 로드 실패
+    시를 대비해 설치 글꼴을 뒤에 둡니다.
+  */
+  font-family: "Noto Sans KR", "Noto Sans CJK KR", "NanumGothic", "Nanum Gothic",
+    "Malgun Gothic", "Apple SD Gothic Neo", "Source Han Sans KR", system-ui, Arial, sans-serif;
+  /*
+    400/700/900 만 번들했으므로 500·600·800 은 브라우저가 가장 가까운 굵기로
+    대체합니다. 합성(synthesis)을 켜면 굵기를 인위적으로 늘려 한글 획이 뭉개지므로
+    끄고, 실제 굵기 파일만 쓰게 합니다.
+  */
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* { box-sizing: border-box; }
+html, body, #root { min-width: 320px; min-height: 100%; margin: 0; }
+body {
+  background:
+    radial-gradient(circle at 18% 12%, rgb(240 201 41 / 16%), transparent 28rem),
+    linear-gradient(135deg, #dce3e6 0%, #edf2f4 48%, #d7e0e3 100%);
+  -webkit-font-smoothing: antialiased;
+}
+button, input { font: inherit; }
+button { cursor: pointer; }
+button:focus-visible, input:focus-visible { outline: 3px solid #f0c929; outline-offset: 2px; }
+
+@keyframes voiceWave {
+  0%, 100% { transform: scaleY(1); opacity: 0.9; }
+  50% { transform: scaleY(0.3); opacity: 0.5; }
+}
+
+@keyframes fadeEnter {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes routeProgress {
+  from { width: 8%; }
+  to { width: 92%; }
+}
+
+.fade-enter { animation: fadeEnter 220ms ease-out both; }
+.route-progress { animation: routeProgress 7s ease-out both; }
+.icon-command { display: grid; width: 36px; height: 36px; place-items: center; border: 1px solid rgb(255 255 255 / 20%); border-radius: 6px; background: rgb(255 255 255 / 10%); color: white; }
+.icon-command:hover { background: rgb(255 255 255 / 20%); }
+.route-tab { display: inline-flex; align-items: center; gap: 6px; border: 0; border-radius: 4px; padding: 6px 10px; background: transparent; color: #475569; font-size: 13px; font-weight: 800; }
+.route-tab-active { background: white; color: #123e49; box-shadow: 0 1px 2px rgb(15 23 42 / 12%); }
+
+.custom-scrollbar::-webkit-scrollbar, .custom-scrollbar-light::-webkit-scrollbar { width: 5px; }
+.custom-scrollbar::-webkit-scrollbar-thumb { border-radius: 8px; background: rgb(255 255 255 / 18%); }
+.custom-scrollbar-light::-webkit-scrollbar-thumb { border-radius: 8px; background: rgb(15 23 42 / 18%); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+}
+
+/* ── 큰 글씨·고대비 모드 (고령자·저시력 사용자 배려) ──────────────
+   Tailwind의 rem 기반 텍스트 크기는 html font-size 확대만으로 함께 커집니다.
+   낮은 명도 대비로 쓰이던 반투명/회색 텍스트만 별도로 진하게 보정합니다. */
+html[data-a11y-large] { font-size: 120%; }
+
+[data-a11y-large] .text-white\/45,
+[data-a11y-large] .text-white\/50,
+[data-a11y-large] .text-white\/55,
+[data-a11y-large] .text-white\/65,
+[data-a11y-large] .text-white\/70,
+[data-a11y-large] .text-white\/80,
+[data-a11y-large] .text-white\/85,
+[data-a11y-large] .text-white\/90 {
+  color: rgb(255 255 255 / 96%);
+}
+
+[data-a11y-large] .text-slate-400 { color: #334155; }
+[data-a11y-large] .text-slate-500 { color: #1e293b; }
+[data-a11y-large] .text-slate-600 { color: #0f172a; }

@@ -6,6 +6,8 @@ pydantic-settings의 BaseSettings를 사용합니다.
 설정 항목 설명은 .env.example 파일을 참고하세요.
 """
 
+import re
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -24,7 +26,7 @@ class Settings(BaseSettings):
     # -------------------------------------------------------------------------
     OPENAI_API_KEY: str | None = None        # STT / LLM / TTS
     KAKAO_REST_API_KEY: str | None = None    # 장소명 → 좌표 변환
-    ODSAY_API_KEY: str | None = None         # 대중교통 경로 조회
+    ODSAY_API_KEY: str | None = None         # 버스 전용 경로 조회
     PUBLIC_DATA_SERVICE_KEY: str | None = None  # 실시간 버스 도착 정보
     SEOUL_BUS_API_KEY: str | None = None
 
@@ -47,8 +49,10 @@ class Settings(BaseSettings):
     # -------------------------------------------------------------------------
     STT_MODEL: str = "gpt-4o-mini-transcribe"
     LLM_MODEL: str = "gpt-4o-mini"
+    INTENT_FAST_PATH_ENABLED: bool = True
     TTS_MODEL: str = "tts-1-hd"
     TTS_VOICE: str = "nova"
+    TTS_SPEED: float = 0.85  # 노인 사용자 대상 — 기본보다 약간 느리게 (0.25~4.0)
     # 파일 경로를 지정하면 내장 프롬프트 대신 해당 파일을 사용합니다.
     LLM_SYSTEM_PROMPT_FILE: str | None = None
 
@@ -57,11 +61,24 @@ class Settings(BaseSettings):
     # -------------------------------------------------------------------------
     MAX_AUDIO_SIZE_MB: int = 10       # 업로드 허용 최대 오디오 파일 크기 (MB)
     REQUEST_TIMEOUT_SECONDS: int = 30  # 파이프라인 전체 타임아웃 (초)
-    CORS_ALLOWED_ORIGINS: str = "*"    # 허용 출처 (* = 전체)
+    CORS_ALLOWED_ORIGINS: str = "http://localhost:5173,http://127.0.0.1:5173"
     RATE_LIMIT_ENABLED: bool = True
     API_AUTH_TOKEN: str | None = None   # 설정 시 /api/process 호출에 토큰 필요
+    RELEASE_SHA: str | None = None
+    USAGE_DB_PATH: str | None = None
     TTS_TIMEOUT_SECONDS: int = 8        # TTS 단독 타임아웃 (초)
     ALLOW_KNOWN_PLACE_FALLBACK: bool | None = None
+    VOICE_MAX_CONCURRENT_REQUESTS: int = 4
+    VOICE_DAILY_REQUEST_LIMIT: int = 500
+    ROUTE_MAX_CONCURRENT_REQUESTS: int = 12
+    ROUTE_DAILY_REQUEST_LIMIT: int = 5000
+    # 브라우저가 한국어를 말하지 못하는 기기에서만 쓰이는 서버 음성 합성 한도.
+    # 같은 문구가 반복되어 캐시 적중률이 높으므로 실제 호출은 이보다 훨씬 적습니다.
+    SPEECH_DAILY_REQUEST_LIMIT: int = 2000
+    PLACE_MAX_CONCURRENT_REQUESTS: int = 12
+    PLACE_DAILY_REQUEST_LIMIT: int = 10000
+    EXTERNAL_CIRCUIT_FAILURE_THRESHOLD: int = 5
+    EXTERNAL_CIRCUIT_RESET_SECONDS: int = 30
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -72,14 +89,40 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
+# "local"만 신뢰할 수 있는 개발 환경으로 취급합니다.
+# staging/prod는 물론, 오타나 미설정으로 알 수 없는 값이 들어와도
+# 항상 운영 환경 수준의 보안 검증을 적용합니다 (fail-closed).
+_LOCAL_ENV = "local"
+
+
+def is_local_env() -> bool:
+    return settings.APP_ENV == _LOCAL_ENV
+
 
 def validate_required_settings() -> None:
     """
     실행 모드에 따라 필수 환경변수를 검증합니다.
 
-    mock 모드: API 키 없이 실행 가능
+    mock 모드: API 키 없이 실행 가능 (단, 보안 관련 설정은 항상 검증)
     real 모드: OPENAI / KAKAO / ODSAY / PUBLIC_DATA 키 모두 필요
     """
+    # 보안 설정 검증은 mock 모드 여부와 무관하게 항상 수행합니다.
+    # (USE_MOCK_EXTERNALS=true 인 채로 실수로 prod에 배포되는 경우를 방지)
+    if not is_local_env():
+        if not settings.API_AUTH_TOKEN:
+            raise RuntimeError(
+                f"APP_ENV={settings.APP_ENV!r}에서는 API_AUTH_TOKEN 설정이 필요합니다."
+            )
+        if settings.CORS_ALLOWED_ORIGINS.strip() == "*":
+            raise RuntimeError(
+                f"APP_ENV={settings.APP_ENV!r}에서는 CORS_ALLOWED_ORIGINS='*'를 사용할 수 없습니다."
+            )
+
+    if settings.APP_ENV == "prod" and not re.fullmatch(
+        r"[0-9a-f]{40}", settings.RELEASE_SHA or ""
+    ):
+        raise RuntimeError("APP_ENV='prod'에서는 유효한 RELEASE_SHA가 필요합니다.")
+
     if settings.USE_MOCK_EXTERNALS:
         return
 
@@ -97,6 +140,17 @@ def validate_required_settings() -> None:
         raise RuntimeError(
             f"USE_MOCK_EXTERNALS=false 일 때 다음 환경변수가 필요합니다: {', '.join(missing)}"
         )
+
+    positive_settings = (
+        "VOICE_MAX_CONCURRENT_REQUESTS", "VOICE_DAILY_REQUEST_LIMIT",
+        "ROUTE_MAX_CONCURRENT_REQUESTS", "ROUTE_DAILY_REQUEST_LIMIT",
+        "PLACE_MAX_CONCURRENT_REQUESTS", "PLACE_DAILY_REQUEST_LIMIT",
+        "SPEECH_DAILY_REQUEST_LIMIT",
+        "EXTERNAL_CIRCUIT_FAILURE_THRESHOLD", "EXTERNAL_CIRCUIT_RESET_SECONDS",
+    )
+    for name in positive_settings:
+        if getattr(settings, name) < 1:
+            raise RuntimeError(f"{name}은 1 이상이어야 합니다.")
 
     # 좌표값이 있으면 숫자 형식인지 확인
     for name in ("DEFAULT_ORIGIN_X", "DEFAULT_ORIGIN_Y", "ORIGIN_X", "ORIGIN_Y"):

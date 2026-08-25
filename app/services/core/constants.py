@@ -10,11 +10,14 @@ DEFAULT_TTS_VOICE = "nova"
 # 외부 교통/지도 API 엔드포인트입니다.
 ODSAY_ROUTE_URL = "https://api.odsay.com/v1/api/searchPubTransPathT"
 KAKAO_KEYWORD_SEARCH_URL = "https://dapi.kakao.com/v2/local/search/keyword.json"
-SEOUL_BUS_ROUTE_SEARCH_URL = "http://ws.bus.go.kr/api/rest/busRouteInfo/getBusRouteList"
-SEOUL_STATION_SEARCH_URL = "http://ws.bus.go.kr/api/rest/stationinfo/getStationByName"
-SEOUL_STATION_ARRIVAL_URL = "http://ws.bus.go.kr/api/rest/stationinfo/getStationByUid"
-SEOUL_ROUTE_STATION_URL = "http://ws.bus.go.kr/api/rest/busRouteInfo/getStaionByRoute"
-SEOUL_BUS_ARRIVAL_URL = "http://ws.bus.go.kr/api/rest/arrive/getArrInfoByRoute"
+# ws.bus.go.kr은 현재 HTTPS 연결을 제공하지 않아 443 포트에서 타임아웃됩니다.
+# 서울시 버스 Open API가 실제로 제공하는 HTTP 엔드포인트를 사용합니다.
+SEOUL_BUS_API_BASE_URL = "http://ws.bus.go.kr/api/rest"
+SEOUL_BUS_ROUTE_SEARCH_URL = f"{SEOUL_BUS_API_BASE_URL}/busRouteInfo/getBusRouteList"
+SEOUL_STATION_SEARCH_URL = f"{SEOUL_BUS_API_BASE_URL}/stationinfo/getStationByName"
+SEOUL_STATION_ARRIVAL_URL = f"{SEOUL_BUS_API_BASE_URL}/stationinfo/getStationByUid"
+SEOUL_ROUTE_STATION_URL = f"{SEOUL_BUS_API_BASE_URL}/busRouteInfo/getStaionByRoute"
+SEOUL_BUS_ARRIVAL_URL = f"{SEOUL_BUS_API_BASE_URL}/arrive/getArrInfoByRoute"
 
 # 대한민국 서비스 범위 기준 좌표 검증값입니다.
 # ODsay 기준 X는 경도, Y는 위도입니다.
@@ -32,19 +35,8 @@ KNOWN_PLACE_COORDS = {
     "홍대입구역": (126.923708, 37.557192),
 }
 
-# ODsay API가 반환하는 지하철 노선 코드 → 한국어 노선명 매핑입니다.
-SUBWAY_LINE_NAMES: dict[int, str] = {
-    1: "1호선", 2: "2호선", 3: "3호선", 4: "4호선",
-    5: "5호선", 6: "6호선", 7: "7호선", 8: "8호선", 9: "9호선",
-    21: "인천1호선", 22: "인천2호선",
-    31: "대전1호선", 41: "대구1호선", 51: "광주1호선",
-    101: "공항철도", 104: "경의중앙선", 107: "수인분당선",
-    108: "경춘선", 109: "신분당선", 110: "우이신설선",
-    112: "서해선", 113: "경강선",
-}
-
 TRANSIT_INTENT_SYSTEM_PROMPT = """
-너는 교통 안내 시스템의 발화 분석기다.
+너는 버스 안내 시스템의 발화 분석기다.
 
 중요 규칙:
 - 사용자의 질문에 직접 답하지 않는다.
@@ -53,10 +45,10 @@ TRANSIT_INTENT_SYSTEM_PROMPT = """
 - 사용자가 목적지를 말하면 destination_text에 넣는다.
 - 사용자가 특정 버스 도착 정보를 묻고 정류장명이나 기준 위치를 말하면 stop_text에 넣는다.
 - 사용자가 요청한 이동 수단을 transport_mode에 넣는다.
-  가능한 값은 "bus", "subway", "transit", "unknown"뿐이다.
+  가능한 값은 "bus", "subway", "unknown"뿐이다.
 - "버스"를 요청하면 transport_mode는 "bus"다.
-- "지하철"을 요청하면 transport_mode는 "subway"다.
-- 특정 수단 없이 대중교통 경로를 묻는 요청이면 transport_mode는 "transit"다.
+- "지하철"을 명시적으로 요청하면 비지원 요청 판별을 위해 transport_mode는 "subway"다.
+- 이동 수단을 말하지 않은 경로 요청은 버스 전용 기기이므로 transport_mode는 "bus"다.
 - 사용자가 버스 번호를 말하면 bus_number에 넣는다.
 - "서울역에서 강남역 가는 버스 알려줘"처럼 출발지와 목적지가 함께 있으면
   origin_text는 "서울역", destination_text는 "강남역", transport_mode는 "bus"다.
@@ -71,5 +63,6 @@ TRANSIT_INTENT_SYSTEM_PROMPT = """
 - confidence는 0.0 이상 1.0 이하 숫자다.
 - 실제 버스 번호, 운행 시간, 도착 시간, 소요 시간, 요금, 경로 상세는 절대 생성하지 않는다.
 - bus_number는 사용자가 직접 말한 번호만 넣고, 추정한 번호는 넣지 않는다.
-- 실제 교통 정보는 Kakao/ODsay/공공데이터 API가 조회하므로 이 단계에서는 발화 구조화만 한다.
+- M5333, N13 같은 영문 접두와 30-5하남 같은 하이픈·문자 접미는 노선명의 일부다. 접두·하이픈·접미를 삭제하거나 숫자만 반환하지 말고 발화 그대로 보존한다.
+- 실제 버스 정보는 Kakao/ODsay/공공데이터 API가 조회하므로 이 단계에서는 발화 구조화만 한다.
 """

@@ -1,26 +1,36 @@
 """
-ODsay 대중교통 경로 검색 클라이언트
+ODsay 버스 경로 검색 클라이언트
 
-출발지/목적지 좌표를 받아 대중교통 경로를 조회하고
+출발지/목적지 좌표를 받아 버스 경로를 조회하고
 파이프라인 공통 타입인 TransportResult로 변환합니다.
 
-transport_mode에 따른 경로 선택:
-- "bus"    : 버스가 포함된 경로 우선, 야간버스보다 일반버스 우선
-- "subway" : 지하철이 포함된 경로만 선택
-- 기타     : 총 소요 시간이 가장 짧은 경로 선택
+버스만 이용하는 경로 중 야간버스보다 일반버스를 우선합니다.
 """
 
 from typing import Any
 
 import httpx
 
-from app.services.core.constants import ODSAY_ROUTE_URL, SUBWAY_LINE_NAMES
-from app.services.core.exceptions import TransportAPIError
+from app.services.core.constants import ODSAY_ROUTE_URL
+from app.services.core.exceptions import (
+    ExternalServiceError,
+    RouteNotFoundError,
+    TransportAPIError,
+)
 from app.services.core.http_client import get_http_client
 from app.services.core.http_utils import http_retry as _http_retry
 from app.services.core.service_types import RouteSegment, TransportResult
 from app.services.core.settings_helper import get_setting
 from app.services.transit.seoul_bus_parser import is_night_bus_number, safe_int
+
+
+def _safe_float(value: object) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 @_http_retry
@@ -29,9 +39,19 @@ async def _odsay_fetch(params: dict) -> dict:
     response = await get_http_client().get(ODSAY_ROUTE_URL, params=params)
     response.raise_for_status()
     try:
-        return response.json()
+        payload = response.json()
     except ValueError as exc:
-        raise TransportAPIError("ODsay API 응답을 파싱하지 못했습니다.") from exc
+        raise ExternalServiceError("경로 API 응답을 파싱하지 못했습니다.") from exc
+
+    if "error" in payload:
+        error_text = str(payload["error"])
+        auth_failed = "ApiKeyAuthFailed" in error_text
+        raise ExternalServiceError(
+            f"경로 API 오류: {error_text}",
+            retryable=not auth_failed,
+            provider_down=auth_failed,
+        )
+    return payload
 
 
 async def search_odsay_route(
@@ -52,6 +72,7 @@ async def search_odsay_route(
     params = {
         "SX": origin_x, "SY": origin_y,
         "EX": destination_x, "EY": destination_y,
+        "SearchPathType": 2,
         "apiKey": api_key,
     }
 
@@ -59,30 +80,26 @@ async def search_odsay_route(
         payload = await _odsay_fetch(params)
 
     except httpx.HTTPStatusError as exc:
-        raise TransportAPIError(
+        raise ExternalServiceError(
             f"ODsay API HTTP 오류: {exc.response.status_code}"
         ) from exc
 
-    except httpx.RequestError as exc:
-        raise TransportAPIError("ODsay API 요청 오류가 발생했습니다.") from exc
+    except httpx.HTTPError as exc:
+        raise ExternalServiceError("경로 API 요청 오류가 발생했습니다.") from exc
 
-    if "error" in payload:
-        raise TransportAPIError(f"ODsay API 오류: {payload['error']}")
-
-    best_path = _select_best_path(payload=payload, transport_mode=transport_mode)
+    best_path = _select_best_path(payload=payload)
 
     if not best_path:
         if transport_mode == "bus":
-            raise TransportAPIError(
+            raise RouteNotFoundError(
                 user_message="버스가 포함된 경로를 찾지 못했습니다. 다른 출발지나 목적지로 다시 말씀해 주세요."
             )
-        raise TransportAPIError(user_message="조회 가능한 대중교통 경로를 찾지 못했습니다.")
+        raise RouteNotFoundError(user_message="조회 가능한 버스 경로를 찾지 못했습니다.")
 
     return _convert_odsay_path_to_transport_result(
-        origin=origin_name,
-        destination=destination_text,
-        path=best_path,
-        transport_mode=transport_mode,
+        origin=origin_name, origin_x=origin_x, origin_y=origin_y,
+        destination=destination_text, destination_x=destination_x, destination_y=destination_y,
+        path=best_path, transport_mode=transport_mode,
     )
 
 
@@ -93,9 +110,8 @@ def _path_time_key(path: dict[str, Any]) -> int:
 
 def _select_best_path(
     payload: dict[str, Any],
-    transport_mode: str,
 ) -> dict[str, Any] | None:
-    """요청한 교통수단을 포함하는 경로 중 소요 시간이 가장 짧은 경로를 선택합니다."""
+    """버스만 이용하는 경로 중 소요 시간이 가장 짧은 경로를 선택합니다."""
     paths = payload.get("result", {}).get("path", [])
     if not paths:
         return None
@@ -106,16 +122,14 @@ def _select_best_path(
         if safe_int(p.get("info", {}).get("totalTime")) is not None
     ] or paths
 
-    if transport_mode == "bus":
-        bus_paths = [p for p in valid_paths if _path_has_bus(p)]
-        if not bus_paths:
-            return None
-        # 야간버스(N번대)보다 일반 버스가 있는 경로 우선
-        regular = [p for p in bus_paths if _path_has_regular_bus(p)]
-        valid_paths = regular or bus_paths
-
-    elif transport_mode == "subway":
-        valid_paths = [p for p in valid_paths if _path_has_subway(p)]
+    bus_paths = [
+        p for p in valid_paths
+        if _path_has_bus(p) and not _path_has_subway(p)
+    ]
+    if not bus_paths:
+        return None
+    regular = [p for p in bus_paths if _path_has_regular_bus(p)]
+    valid_paths = regular or bus_paths
 
     if not valid_paths:
         return None
@@ -149,7 +163,11 @@ def _path_has_regular_bus(path: dict[str, Any]) -> bool:
 
 def _convert_odsay_path_to_transport_result(
     origin: str,
+    origin_x: float,
+    origin_y: float,
     destination: str,
+    destination_x: float,
+    destination_y: float,
     path: dict[str, Any],
     transport_mode: str,
 ) -> TransportResult:
@@ -161,22 +179,24 @@ def _convert_odsay_path_to_transport_result(
     raw_payment = safe_int(info.get("payment"))
     payment = raw_payment if (raw_payment is not None and raw_payment >= 0) else None
     bus_transit_count = safe_int(info.get("busTransitCount"))
-    subway_transit_count = safe_int(info.get("subwayTransitCount"))
     path_type = safe_int(path.get("pathType"))
-    transfer_count = _calculate_transfer_count(bus_transit_count, subway_transit_count)
+    transfer_count = _calculate_transfer_count(bus_transit_count)
     first_bus_number = _select_display_bus_number(sub_paths)
     route_segments = _extract_route_segments(sub_paths)
 
     return TransportResult(
         origin=origin,
+        origin_x=origin_x,
+        origin_y=origin_y,
         destination=destination,
+        destination_x=destination_x,
+        destination_y=destination_y,
         transport_mode=transport_mode,
         bus_number=first_bus_number,
         arrival_time=None,
         total_time_min=total_time_min,
         payment=payment,
         bus_transit_count=bus_transit_count,
-        subway_transit_count=subway_transit_count,
         transfer_count=transfer_count,
         path_type=path_type,
         route_summary=None,
@@ -185,24 +205,30 @@ def _convert_odsay_path_to_transport_result(
     )
 
 
-def _calculate_transfer_count(
-    bus_transit_count: int | None,
-    subway_transit_count: int | None,
-) -> int | None:
-    """버스·지하철 탑승 횟수의 합에서 1을 빼면 환승 횟수가 됩니다."""
-    counts = [c for c in [bus_transit_count, subway_transit_count] if c is not None]
-    if not counts:
+def _calculate_transfer_count(bus_transit_count: int | None) -> int | None:
+    """버스 탑승 횟수에서 1을 빼 환승 횟수를 계산합니다."""
+    if bus_transit_count is None:
         return None
-    return max(sum(counts) - 1, 0)
+    return max(bus_transit_count - 1, 0)
 
 
 def _select_display_bus_number(sub_paths: list[dict[str, Any]]) -> str | None:
-    """일반 버스를 야간버스보다 우선해 대표 버스 번호를 선택합니다."""
-    bus_numbers = _extract_bus_numbers(sub_paths)
-    for n in bus_numbers:
-        if not is_night_bus_number(n):
-            return n
-    return bus_numbers[0] if bus_numbers else None
+    """첫 탑승 구간에서 실제로 안내할 대표 버스 번호를 선택합니다."""
+    for sub_path in sub_paths:
+        if sub_path.get("trafficType") != 2:
+            continue
+        selected = _select_lane_bus_number(sub_path.get("lane") or [])
+        if selected:
+            return selected
+    return None
+
+
+def _select_lane_bus_number(lanes: list[dict[str, Any]]) -> str | None:
+    """같은 구간의 대체 노선 중 일반 버스를 우선하되 표시값을 일관되게 유지합니다."""
+    numbers = [str(lane.get("busNo")) for lane in lanes if lane.get("busNo")]
+    return next((number for number in numbers if not is_night_bus_number(number)), None) or (
+        numbers[0] if numbers else None
+    )
 
 
 def _extract_bus_numbers(sub_paths: list[dict[str, Any]]) -> list[str]:
@@ -219,24 +245,52 @@ def _extract_bus_numbers(sub_paths: list[dict[str, Any]]) -> list[str]:
 
 def _extract_route_segments(sub_paths: list[dict[str, Any]]) -> list[RouteSegment] | None:
     """
-    ODsay subPath 목록에서 버스/지하철 탑승 구간만 추출합니다.
-    trafficType 3(도보)은 제외합니다.
+    ODsay subPath 목록에서 버스와 도보 이동 구간을 순서대로 추출합니다.
     """
     segments: list[RouteSegment] = []
 
     for sp in sub_paths:
         traffic_type = sp.get("trafficType")
-        if traffic_type == 3:
-            continue  # 도보 구간 제외
 
         start_name = sp.get("startName") or ""
         end_name = sp.get("endName") or ""
         lanes = sp.get("lane") or []
 
-        seg_time = safe_int(sp.get("time"))
+        # ODsay 실제 응답은 구간 소요시간을 sectionTime 으로 반환합니다.
+        # (time 은 과거/모의 응답 호환용 예비 키)
+        seg_time = safe_int(sp.get("sectionTime"))
+        if seg_time is None:
+            seg_time = safe_int(sp.get("time"))
+        start_x = _safe_float(sp.get("startX"))
+        start_y = _safe_float(sp.get("startY"))
+        end_x = _safe_float(sp.get("endX"))
+        end_y = _safe_float(sp.get("endY"))
+
+        if traffic_type == 3:  # 도보
+            distance = safe_int(sp.get("distance"))
+            description = f"도보 {distance}m" if distance is not None else "도보 이동"
+            segments.append(RouteSegment(
+                vehicle_type="도보",
+                line=description,
+                start_name=start_name,
+                end_name=end_name,
+                time_min=seg_time,
+                start_x=start_x,
+                start_y=start_y,
+                end_x=end_x,
+                end_y=end_y,
+                path_points=_extract_path_points(
+                    sp,
+                    start_x=start_x,
+                    start_y=start_y,
+                    end_x=end_x,
+                    end_y=end_y,
+                ),
+            ))
+            continue
 
         if traffic_type == 2:  # 버스
-            bus_no = str(lanes[0].get("busNo", "")) if lanes else ""
+            bus_no = _select_lane_bus_number(lanes) or ""
             if bus_no:
                 segments.append(RouteSegment(
                     vehicle_type="버스",
@@ -244,17 +298,46 @@ def _extract_route_segments(sub_paths: list[dict[str, Any]]) -> list[RouteSegmen
                     start_name=start_name,
                     end_name=end_name,
                     time_min=seg_time,
+                    start_x=start_x,
+                    start_y=start_y,
+                    end_x=end_x,
+                    end_y=end_y,
+                    path_points=_extract_path_points(
+                        sp,
+                        start_x=start_x,
+                        start_y=start_y,
+                        end_x=end_x,
+                        end_y=end_y,
+                    ),
                 ))
 
-        elif traffic_type == 1:  # 지하철
-            subway_code = (safe_int(lanes[0].get("subwayCode")) or 0) if lanes else 0
-            line_name = SUBWAY_LINE_NAMES.get(subway_code, f"{subway_code}호선")
-            segments.append(RouteSegment(
-                vehicle_type="지하철",
-                line=line_name,
-                start_name=start_name,
-                end_name=end_name,
-                time_min=seg_time,
-            ))
-
     return segments if segments else None
+
+
+def _extract_path_points(
+    sub_path: dict[str, Any],
+    *,
+    start_x: float | None,
+    start_y: float | None,
+    end_x: float | None,
+    end_y: float | None,
+) -> list[dict[str, float]] | None:
+    """경유 정류장 좌표를 지도 폴리라인용 순서로 정리합니다."""
+    points: list[dict[str, float]] = []
+
+    def append_point(x_value: object, y_value: object) -> None:
+        x = _safe_float(x_value)
+        y = _safe_float(y_value)
+        if x is None or y is None:
+            return
+        point = {"x": x, "y": y}
+        if not points or points[-1] != point:
+            points.append(point)
+
+    append_point(start_x, start_y)
+    stations = (sub_path.get("passStopList") or {}).get("stations") or []
+    for station in stations:
+        append_point(station.get("x"), station.get("y"))
+    append_point(end_x, end_y)
+
+    return points if len(points) >= 2 else None

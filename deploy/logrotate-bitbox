@@ -1,0 +1,12 @@
+/var/log/nginx/bitbox_access.log /var/log/nginx/bitbox_error.log {
+    daily
+    rotate 14
+    missingok
+    notifempty
+    compress
+    delaycompress
+    sharedscripts
+    postrotate
+        systemctl reload nginx >/dev/null 2>&1 || true
+    endscript
+}
