@@ -25,6 +25,7 @@ export function VoiceAssistant({ onResultModeChange }: VoiceAssistantProps) {
     audioBase64,
     error,
     confirmation,
+    safetyDecision,
     startRecording,
     stopRecording,
     submitTextRoute,
@@ -64,6 +65,7 @@ export function VoiceAssistant({ onResultModeChange }: VoiceAssistantProps) {
           destination={destination}
           buses={buses}
           message={message}
+          safetyDecision={safetyDecision}
           audio_base64={audioBase64}
           onReset={requestRecording}
           onGoHome={reset}
@@ -92,7 +94,14 @@ export function VoiceAssistant({ onResultModeChange }: VoiceAssistantProps) {
           className="absolute left-3 right-3 top-3 z-40 flex items-center gap-3 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm font-bold text-red-900 shadow-lg"
         >
           <AlertCircle className="size-4 shrink-0" />
-          <span className="min-w-0 flex-1">{error}</span>
+          <span className="min-w-0 flex-1">
+            <span className="block">{error}</span>
+            {safetyDecision?.level === "retry" && safetyDecision.reasons.length > 0 && (
+              <span className="mt-1 block text-xs font-semibold text-red-800">
+                {safetyDecision.reasons.join(" ")}
+              </span>
+            )}
+          </span>
           <button type="button" onClick={reset} aria-label="오류 닫기" title="오류 닫기" className="grid size-7 shrink-0 place-items-center rounded hover:bg-red-100">
             <X className="size-4" />
           </button>
@@ -118,12 +127,21 @@ export function VoiceAssistant({ onResultModeChange }: VoiceAssistantProps) {
             </div>
           )}
 
+          {status === "starting" && (
+            <div className="fade-enter" role="status" aria-live="polite">
+              <p className="mb-2 text-xs font-extrabold text-[#F0C929]">마이크 준비 중</p>
+              <h2 className="text-[clamp(24px,4vw,36px)] font-black leading-tight">마이크 권한을 확인하고 있습니다</h2>
+              <p className="mt-2 text-sm font-medium text-white/65">잠시만 기다려 주세요.</p>
+            </div>
+          )}
+
           {status === "loading" && <VoiceLoading />}
           {status === "confirming" && confirmation && (
             <VoiceConfirmation
               confirmation={confirmation}
               transcript={transcript}
               audioBase64={audioBase64}
+              safetyDecision={safetyDecision}
               onSelect={(place) => void confirmPlace(place)}
               onRetry={requestRecording}
             />
@@ -133,7 +151,7 @@ export function VoiceAssistant({ onResultModeChange }: VoiceAssistantProps) {
         <div className="flex flex-col items-center gap-2">
           {status !== "confirming" && <VoiceMicButton status={status} onClick={toggleRecording} />}
           <span className="text-center text-xs font-bold text-white/65">
-            {status === "idle" ? "음성으로 찾기" : status === "listening" ? "눌러서 완료" : status === "confirming" ? "후보를 선택하세요" : "조회 중"}
+            {status === "idle" ? "음성으로 찾기" : status === "starting" ? "권한 확인 중" : status === "listening" ? "눌러서 완료" : status === "confirming" ? "후보를 선택하세요" : "조회 중"}
           </span>
           <button type="button" onClick={() => { setConsentRequired(false); setPrivacyOpen(true); }} aria-label="개인정보 처리 안내" title="개인정보 처리 안내" className="grid size-7 place-items-center rounded text-white/55 hover:bg-white/10 hover:text-white">
             <ShieldCheck className="size-4" />

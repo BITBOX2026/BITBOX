@@ -134,6 +134,13 @@ file: <WAV 파일>
     "route_segments": [
       { "vehicle_type": "버스", "line": "402번", "start_name": "서울역버스환승센터", "end_name": "강남역" }
     ],
+    "safety_decision": {
+      "level": "verified",
+      "title": "검증 절차 완료",
+      "reasons": ["확정된 목적지 좌표를 기준으로 버스 경로를 조회했습니다."],
+      "auto_corrected": false,
+      "checked_at": "2026-08-25T02:00:00+09:00"
+    },
     "source": "odsay"
   }
 }
@@ -184,3 +191,13 @@ BITBOX_TLS_KEY_PATH
 - 지도 선은 ODsay 정류장 순서와 구간 좌표를 연결한 예상 경로이며 도로 중심선과 완전히 같지 않을 수 있습니다.
 - 도착 단계 알림은 서울 버스 도착정보를 15초마다 갱신한 결과이며 GPS 연속 추적이 아닙니다.
 - 저상·여유 우선 정렬은 현재 정류장 도착 차량에 적용되며 목적지 경로 자체를 재계산하지 않습니다.
+
+## 7. 실증 평가
+
+사용자 과업 비교, 실제 음성 정확도, 위험한 번호 오안내, 접근성 및 장애·부하 검증은
+[`docs/EVALUATION.md`](docs/EVALUATION.md)의 절차를 따릅니다. 저장소에는 실제 참가자
+결과를 포함하지 않으며, `voice-samples/`와 `evaluation-results/`는 Git에서 제외됩니다.
+
+- `scripts/analyze_user_study.py`: BITBOX와 비교 앱의 성공률·시간·터치 수 기술통계
+- `scripts/voice_benchmark.py`: 실제 음성의 번호·의도·복구 행동 정확도와 위험한 대체 건수
+- `scripts/load_smoke.py`: 오류율, 평균·p50·p95·최대 응답시간과 처리량

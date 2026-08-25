@@ -3,6 +3,7 @@
 import asyncio
 import re
 
+import httpx
 import pytest
 from fastapi import HTTPException
 from starlette.requests import Request
@@ -10,6 +11,7 @@ from starlette.responses import JSONResponse
 
 import app.main as main_module
 from app.core.request_context import request_context_middleware, request_id_for
+from app.core.runtime_metrics import record_safety_decision, runtime_snapshot
 from app.main import readiness_check
 
 
@@ -47,6 +49,16 @@ def test_request_context_adds_operational_headers() -> None:
     assert response.headers["cache-control"] == "no-store"
 
 
+def test_runtime_metrics_count_privacy_safe_pipeline_dimensions() -> None:
+    before = runtime_snapshot()
+    record_safety_decision("verified", "odsay", "route")
+    after = runtime_snapshot()
+
+    assert after["safety_decisions"].get("verified", 0) == before["safety_decisions"].get("verified", 0) + 1
+    assert after["pipeline_sources"].get("odsay", 0) == before["pipeline_sources"].get("odsay", 0) + 1
+    assert after["pipeline_intents"].get("route", 0) == before["pipeline_intents"].get("route", 0) + 1
+
+
 def test_readiness_contract(monkeypatch) -> None:
     monkeypatch.setattr(main_module, "circuit_snapshot", dict)
     response = readiness_check()
@@ -65,3 +77,23 @@ def test_readiness_fails_while_external_circuit_is_open(monkeypatch) -> None:
         readiness_check()
 
     assert exc_info.value.status_code == 503
+
+
+def test_readiness_http_boundary_returns_503_for_open_circuit(monkeypatch) -> None:
+    monkeypatch.setattr(
+        main_module,
+        "circuit_snapshot",
+        lambda: {"odsay": {"open": True, "failures": 5}},
+    )
+
+    async def request_ready() -> httpx.Response:
+        transport = httpx.ASGITransport(app=main_module.app)
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://test",
+        ) as client:
+            return await client.get("/ready")
+
+    response = asyncio.run(request_ready())
+    assert response.status_code == 503
+    assert response.json()["detail"]

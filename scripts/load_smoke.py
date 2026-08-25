@@ -6,6 +6,7 @@ import statistics
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 from urllib.parse import urlsplit
 
 import httpx
@@ -54,6 +55,7 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, default=5.0)
     parser.add_argument("--max-error-rate", type=float, default=0.01)
     parser.add_argument("--max-p95-ms", type=float, default=1000.0)
+    parser.add_argument("--output", type=Path)
     args = parser.parse_args()
 
     if args.requests < 1 or args.concurrency < 1:
@@ -84,18 +86,30 @@ def main() -> int:
     durations = [duration for _, duration in results]
     errors = sum(not success for success, _ in results)
     error_rate = errors / len(results)
+    elapsed_ms = (time.perf_counter() - started_at) * 1000
     report = {
         "url": args.url,
         "requests": len(results),
+        "successes": len(results) - errors,
         "concurrency": args.concurrency,
         "warmup_errors": warmup_errors,
         "errors": errors,
         "error_rate": round(error_rate, 4),
         "mean_ms": round(statistics.fmean(durations), 2),
+        "p50_ms": round(percentile(durations, 0.50), 2),
         "p95_ms": round(percentile(durations, 0.95), 2),
-        "elapsed_ms": round((time.perf_counter() - started_at) * 1000, 2),
+        "max_ms": round(max(durations), 2),
+        "throughput_requests_per_second": round(
+            len(results) / (elapsed_ms / 1000),
+            2,
+        ) if elapsed_ms else 0.0,
+        "elapsed_ms": round(elapsed_ms, 2),
     }
-    print(json.dumps(report, ensure_ascii=False))
+    serialized = json.dumps(report, ensure_ascii=False)
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(serialized + "\n", encoding="utf-8")
+    print(serialized)
 
     return (
         1

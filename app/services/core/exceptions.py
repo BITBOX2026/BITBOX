@@ -38,6 +38,30 @@ class TransportAPIError(PipelineError):
             self.user_message = user_message
 
 
+class ExternalServiceError(TransportAPIError):
+    """An upstream service failed independently of the user's request."""
+
+    http_status = 502
+    error_kind = "external_service"
+
+    def __init__(
+        self,
+        message: str = "",
+        *,
+        user_message: str = "",
+        retryable: bool = True,
+    ) -> None:
+        super().__init__(message, user_message=user_message)
+        self.retryable = retryable
+
+
+class RouteNotFoundError(TransportAPIError):
+    """The provider is healthy but has no usable bus-only route."""
+
+    http_status = 404
+    error_kind = "route_not_found"
+
+
 class CoordinateResolveError(TransportAPIError):
     # 장소명을 좌표로 변환하지 못한 경우 — 사용자가 더 정확한 이름을 말해야 함
     user_message = "목적지 위치를 찾지 못했습니다. 더 정확한 장소명을 말씀해 주세요."

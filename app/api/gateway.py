@@ -10,7 +10,7 @@ API Gateway — 음성 파일 수신 및 파이프라인 실행
 import asyncio
 import re
 
-from fastapi import APIRouter, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, File, HTTPException, Request, Response, UploadFile
 
 from app.api.schemas import ProcessResponse, TextRouteRequest, UploadCompatResponse
 from app.core.auth import verify_api_token
@@ -54,6 +54,7 @@ AUDIO_FILENAME_BY_CONTENT_TYPE = {
 @limiter.limit("10/minute")  # IP당 분당 최대 10회 요청 허용
 async def process_audio(
     request: Request,
+    response: Response,
     file: UploadFile = File(...),  # noqa: B008 - FastAPI upload injection
 ) -> dict:
     """
@@ -117,12 +118,14 @@ async def process_audio(
             )
 
         logger.info("[%s] 요청 완료: status=%s", request_id, result.get("status"))
+        _apply_result_http_status(response, result)
         return result
 
     except asyncio.TimeoutError:
         logger.exception("[%s] 파이프라인 타임아웃", request_id)
         result = build_timeout_error_response()
         result["request_id"] = request_id
+        _apply_result_http_status(response, result)
         return result
 
 
@@ -130,16 +133,21 @@ async def process_audio(
 @limiter.limit("10/minute")
 async def upload_audio(
     request: Request,
+    response: Response,
     file: UploadFile = File(...),  # noqa: B008 - FastAPI upload injection
 ) -> dict:
     """Compatibility alias for the existing React frontend."""
-    result = await process_audio(request, file)
+    result = await process_audio(request, response, file)
     return _build_upload_compat_response(result)
 
 
 @router.post("/route", response_model=UploadCompatResponse)
 @limiter.limit("20/minute")
-async def process_text_route(request: Request, body: TextRouteRequest) -> dict:
+async def process_text_route(
+    request: Request,
+    response: Response,
+    body: TextRouteRequest,
+) -> dict:
     """Return the same frontend contract as voice upload for a typed destination."""
     verify_api_token(request)
     request_id = request_id_for(request)[:12]
@@ -165,7 +173,15 @@ async def process_text_route(request: Request, body: TextRouteRequest) -> dict:
         result = build_timeout_error_response()
         result["request_id"] = request_id
 
+    _apply_result_http_status(response, result)
     return _build_upload_compat_response(result)
+
+
+def _apply_result_http_status(response: Response, result: dict) -> None:
+    """Expose upstream/internal failures to clients and operational middleware."""
+    status_code = result.get("_http_status")
+    if isinstance(status_code, int) and 400 <= status_code <= 599:
+        response.status_code = status_code
 
 
 def _build_upload_compat_response(result: dict) -> dict:
@@ -198,6 +214,8 @@ def _build_upload_compat_response(result: dict) -> dict:
         "request_id": result.get("request_id"),
         "needs_confirmation": bool(data.get("needs_confirmation")),
         "confirmation": data.get("confirmation"),
+        "safety_decision": data.get("safety_decision"),
+        "error_kind": result.get("error_kind"),
     }
 
 

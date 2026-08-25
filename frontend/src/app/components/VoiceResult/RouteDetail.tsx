@@ -9,7 +9,27 @@ interface RouteDetailOverlayProps {
   onToggleView: () => void;
 }
 
+// 색맹 안전 팔레트(Okabe-Ito). 선 색은 그대로 두고 라벨 글자색만 대비로 고릅니다.
 const ROUTE_COLORS = ["#0072B2", "#009E73", "#D55E00", "#CC79A7"];
+
+/**
+ * 배경색 위에서 WCAG AA(4.5:1)를 만족하는 글자색을 고릅니다.
+ *
+ * 팔레트를 어둡게 바꾸면 색맹 구분성이 떨어지므로, 배경은 유지하고
+ * 흰색/검은색 중 대비가 큰 쪽을 선택합니다.
+ */
+export function readableTextColor(background: string): "#FFFFFF" | "#000000" {
+  const hex = background.replace("#", "");
+  if (hex.length !== 6) return "#000000";
+  const channel = (offset: number): number => {
+    const value = Number.parseInt(hex.slice(offset, offset + 2), 16) / 255;
+    return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  };
+  const luminance = 0.2126 * channel(0) + 0.7152 * channel(2) + 0.0722 * channel(4);
+  const againstWhite = 1.05 / (luminance + 0.05);
+  const againstBlack = (luminance + 0.05) / 0.05;
+  return againstWhite >= againstBlack ? "#FFFFFF" : "#000000";
+}
 
 interface MapLine {
   path: Array<{ lat: number; lng: number }>;
@@ -86,7 +106,12 @@ export function RouteDetailOverlay({ route, destination, viewMode, onToggleView 
         </div>
       </header>
 
-      <div className="custom-scrollbar-light min-h-0 flex-1 overflow-y-auto bg-[#F3F6F7] p-3 sm:p-5">
+      <div
+        tabIndex={0}
+        role="region"
+        aria-label="경로 상세 내용"
+        className="custom-scrollbar-light min-h-0 flex-1 overflow-y-auto bg-[#F3F6F7] p-3 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[#123E49] sm:p-5"
+      >
         {viewMode === "map" ? (
           mapMarkers.length > 0 ? (
             <div className="fade-enter relative h-full min-h-[300px] overflow-hidden rounded-xl border border-slate-300 bg-white shadow-[0_10px_28px_rgba(15,23,42,0.10)]">
@@ -120,7 +145,7 @@ export function RouteDetailOverlay({ route, destination, viewMode, onToggleView 
                     const [start, end] = line.path;
                     return (
                       <CustomOverlayMap key={`label-${index}`} position={{ lat: (start.lat + end.lat) / 2, lng: (start.lng + end.lng) / 2 }} yAnchor={1.2}>
-                        <span className="rounded-md border-2 border-white px-2 py-1 text-xs font-black text-white shadow-lg" style={{ backgroundColor: line.color }}>{line.busNumber}</span>
+                        <span className="rounded-md border-2 border-white px-2 py-1 text-xs font-black shadow-lg" style={{ backgroundColor: line.color, color: readableTextColor(line.color) }}>{line.busNumber}</span>
                       </CustomOverlayMap>
                     );
                   })}

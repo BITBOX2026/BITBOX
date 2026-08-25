@@ -120,8 +120,10 @@ export function DestinationSearch({ disabled, onSubmit }: DestinationSearchProps
             onFocus={() => setIsFocused(true)}
             onBlur={() => window.setTimeout(() => setIsFocused(false), 120)}
             placeholder="목적지를 입력하세요"
+            role="combobox"
             aria-label="버스 목적지"
             aria-autocomplete="list"
+            aria-haspopup="listbox"
             aria-expanded={isFocused && suggestions.length > 0}
             aria-controls="destination-suggestions"
             aria-activedescendant={activeIndex >= 0 ? `destination-option-${activeIndex}` : undefined}

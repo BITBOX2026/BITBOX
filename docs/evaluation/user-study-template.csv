@@ -1,0 +1,5 @@
+participant_id,interface,task_id,success,duration_seconds,taps,retries,satisfaction_1_to_5
+P01,bitbox,arrival_lookup,,,,,
+P01,baseline,arrival_lookup,,,,,
+P01,bitbox,ambiguous_place,,,,,
+P01,baseline,ambiguous_place,,,,,

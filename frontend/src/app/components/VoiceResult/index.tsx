@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Home, Info, MapPin, Mic, Play, RotateCcw, Square, Volume2 } from "lucide-react";
+import { Home, Info, MapPin, Mic, Play, RotateCcw, ShieldCheck, Square, Volume2 } from "lucide-react";
+import type { SafetyDecision } from "../../../api/client";
 import type { BusOption } from "../../../types/bus";
 import { BusList } from "./BusList";
 import { RouteDetailOverlay } from "./RouteDetail";
@@ -10,8 +11,20 @@ interface VoiceResultProps {
   message?: string;
   audioBase64?: string;
   audio_base64?: string;
+  safetyDecision?: SafetyDecision | null;
   onReset: () => void;
   onGoHome: () => void;
+}
+
+function formatCheckedAt(value?: string | null): string | null {
+  if (!value) return null;
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return null;
+  return new Intl.DateTimeFormat("ko-KR", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).format(timestamp);
 }
 
 export function VoiceResult({
@@ -20,6 +33,7 @@ export function VoiceResult({
   message = "",
   audioBase64 = "",
   audio_base64 = "",
+  safetyDecision = null,
   onReset,
   onGoHome,
 }: VoiceResultProps) {
@@ -28,6 +42,7 @@ export function VoiceResult({
   const [playbackStatus, setPlaybackStatus] = useState<"idle" | "playing" | "blocked">("idle");
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const rawAudioData = audio_base64 || audioBase64;
+  const checkedAtLabel = formatCheckedAt(safetyDecision?.checked_at);
 
   useEffect(() => {
     setSelectedBus(buses[0] ?? null);
@@ -98,8 +113,8 @@ export function VoiceResult({
           {playbackStatus === "playing" && (
             <button type="button" onClick={stopPlayback} className="icon-command" title="음성 중지" aria-label="음성 중지"><Square className="size-4" /></button>
           )}
-          <button type="button" onClick={onReset} className="inline-flex shrink-0 items-center gap-2 rounded-md border border-white/20 bg-white/10 px-3 py-2 text-sm font-bold text-white hover:bg-white/20">
-            <Mic className="size-4" /><span className="hidden sm:inline">다시 검색</span>
+          <button type="button" onClick={onReset} title="다시 검색" aria-label="다시 검색" className="inline-flex shrink-0 items-center gap-2 rounded-md border border-white/20 bg-white/10 px-3 py-2 text-sm font-bold text-white hover:bg-white/20">
+            <Mic className="size-4" aria-hidden="true" /><span className="hidden sm:inline">다시 검색</span>
           </button>
         </div>
       </header>
@@ -125,6 +140,18 @@ export function VoiceResult({
           )}
         </div>
       </div>
+
+      {safetyDecision?.level === "verified" && (
+        <details className="absolute bottom-3 left-3 z-20 max-w-[min(440px,calc(100%-1.5rem))] rounded-md border border-emerald-300/60 bg-[#123E49]/95 px-3 py-2 text-white shadow-xl backdrop-blur-sm">
+          <summary className="flex cursor-pointer list-none items-center gap-2 text-sm font-black">
+            <ShieldCheck className="size-4 text-emerald-300" /> {safetyDecision.title}
+          </summary>
+          <ul className="mt-2 space-y-1 pl-5 text-xs leading-relaxed text-white/80">
+            {safetyDecision.reasons.map((reason) => <li key={reason} className="list-disc">{reason}</li>)}
+          </ul>
+          {checkedAtLabel && <p className="mt-2 text-[11px] font-semibold text-white/60">교통 데이터 확인 {checkedAtLabel}</p>}
+        </details>
+      )}
 
       {playbackStatus === "playing" && message && (
         <div className="absolute bottom-3 left-1/2 z-[999] flex w-[calc(100%-1.5rem)] max-w-[680px] -translate-x-1/2 items-center gap-3 rounded-md border border-[#F0C929]/60 bg-[#171D23]/95 px-4 py-3 text-white shadow-2xl backdrop-blur-sm">

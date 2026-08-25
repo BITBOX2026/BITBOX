@@ -1,6 +1,7 @@
 """Contract tests for the BIT_REACT feat/info frontend."""
 
 import asyncio
+import time
 
 import httpx
 import pytest
@@ -362,6 +363,38 @@ def test_place_suggestion_contract_preserves_ranking_metadata() -> None:
     assert "지하철" in suggestion["category"]
 
 
+def test_safety_decision_is_preserved_for_frontend() -> None:
+    compat = _build_upload_compat_response({
+        "status": "success",
+        "message": "3412번 버스를 확인했습니다.",
+        "data": {
+            "intent": "arrival",
+            "bus_number": "3412",
+            "safety_decision": {
+                "level": "verified",
+                "title": "검증 절차 완료",
+                "reasons": ["운행 노선과 정확히 일치합니다."],
+                "auto_corrected": False,
+            },
+        },
+    })
+
+    serialized = UploadCompatResponse.model_validate(compat).model_dump()
+    assert serialized["safety_decision"]["level"] == "verified"
+    assert serialized["safety_decision"]["auto_corrected"] is False
+
+
+def test_mock_safety_decision_does_not_claim_external_data() -> None:
+    decision = pipeline._verified_safety_decision(
+        ParsedIntent(intent="arrival", bus_number="3412", transport_mode="bus"),
+        "mock",
+    )
+
+    assert all("외부 교통 데이터" not in reason for reason in decision["reasons"])
+    assert decision["auto_corrected"] is False
+    assert decision["checked_at"] is None
+
+
 def test_confirmation_contract_rejects_missing_candidate() -> None:
     with pytest.raises(ValidationError):
         UploadCompatResponse.model_validate({
@@ -405,6 +438,73 @@ def test_failed_route_search_does_not_leak_per_key_locks(monkeypatch) -> None:
         asyncio.run(exercise_failures())
         assert transport_service._route_cache == {}
         assert transport_service._route_cache_locks == {}
+    finally:
+        transport_service._route_cache.clear()
+        transport_service._route_cache_locks.clear()
+
+
+def test_successful_route_cache_eviction_also_releases_locks(monkeypatch) -> None:
+    """캐시가 최대 크기를 넘어도 Lock 사전이 함께 정리되는지 확인합니다."""
+
+    async def resolve_origin(_origin_text: str | None):
+        return "송파책박물관", 127.104, 37.498
+
+    async def resolve_destination(_place_name: str, _label: str):
+        return 127.0, 37.5
+
+    async def fake_odsay(**kwargs):
+        return TransportResult(
+            origin=kwargs["origin_name"],
+            destination=kwargs["destination_text"],
+            transport_mode="bus",
+            bus_number="3412",
+            total_time_min=20,
+            source="odsay",
+        )
+
+    monkeypatch.setattr(transport_service, "resolve_origin", resolve_origin)
+    monkeypatch.setattr(transport_service, "resolve_place_coordinates", resolve_destination)
+    monkeypatch.setattr(transport_service, "search_odsay_route", fake_odsay)
+
+    transport_service._route_cache.clear()
+    transport_service._route_cache_locks.clear()
+    max_size = transport_service._ROUTE_CACHE_MAX_SIZE
+
+    async def exercise_successes() -> None:
+        for index in range(max_size + 20):
+            await transport_service._search_route_with_odsay(
+                ParsedIntent(
+                    intent="route",
+                    destination_text=f"목적지 {index}",
+                    transport_mode="bus",
+                )
+            )
+
+    try:
+        asyncio.run(exercise_successes())
+        # LRU 축출이 캐시와 Lock을 함께 제거하므로 두 사전 모두 상한을 넘지 않아야 합니다.
+        assert len(transport_service._route_cache) <= max_size
+        assert len(transport_service._route_cache_locks) <= max_size
+        assert set(transport_service._route_cache_locks) <= set(transport_service._route_cache)
+    finally:
+        transport_service._route_cache.clear()
+        transport_service._route_cache_locks.clear()
+
+
+def test_expired_route_cache_entry_also_releases_its_lock(monkeypatch) -> None:
+    """TTL이 지난 캐시 항목을 읽을 때 대응 Lock도 함께 정리되는지 확인합니다."""
+    transport_service._route_cache.clear()
+    transport_service._route_cache_locks.clear()
+
+    key = "expired-route-key"
+    stale_timestamp = time.monotonic() - transport_service._ROUTE_CACHE_TTL - 1
+    transport_service._route_cache[key] = (TransportResult(source="odsay"), stale_timestamp)
+    transport_service._route_cache_locks[key] = asyncio.Lock()
+
+    try:
+        assert transport_service._get_cached_route(key) is None
+        assert key not in transport_service._route_cache
+        assert key not in transport_service._route_cache_locks
     finally:
         transport_service._route_cache.clear()
         transport_service._route_cache_locks.clear()
@@ -480,6 +580,112 @@ def test_odsay_segments_preserve_walk_and_bus_order() -> None:
         {"x": 127.11, "y": 37.52},
         {"x": 127.12, "y": 37.53},
     ]
+
+
+def test_odsay_segments_read_real_section_time_field() -> None:
+    """ODsay 실제 응답 키(sectionTime)에서 구간 소요시간을 읽어야 합니다.
+
+    실제 API는 subPath 소요시간을 `time`이 아니라 `sectionTime`으로 반환합니다.
+    이 값을 놓치면 gateway가 총 소요시간을 구간 수로 균등 분배해
+    41m 도보가 41분 버스 구간과 같은 시간으로 안내되는 오류가 발생합니다.
+    """
+    segments = _extract_route_segments(
+        [
+            {
+                "trafficType": 3,
+                "distance": 41,
+                "sectionTime": 1,
+                "startName": "출발지",
+                "endName": "올림픽공원역",
+            },
+            {
+                "trafficType": 2,
+                "sectionTime": 41,
+                "startName": "올림픽공원역",
+                "endName": "강남역12번출구",
+                "lane": [{"busNo": "3412"}],
+            },
+            {
+                "trafficType": 3,
+                "distance": 157,
+                "sectionTime": 2,
+                "startName": "강남역12번출구",
+                "endName": "강남역 2호선",
+            },
+        ]
+    )
+
+    assert segments is not None
+    assert [segment.time_min for segment in segments] == [1, 41, 2]
+
+
+def test_route_steps_use_real_segment_times_instead_of_even_split() -> None:
+    """구간 시간이 있으면 총 시간을 균등 분배하지 않아야 합니다."""
+    response = _build_upload_compat_response({
+        "status": "success",
+        "message": "3412번을 타세요.",
+        "data": {
+            "intent": "route",
+            "origin": "올림픽공원역",
+            "destination": "강남역 2호선",
+            "bus_number": "3412",
+            "total_time_min": 44,
+            "route_segments": [
+                {
+                    "vehicle_type": "도보", "line": "도보 41m",
+                    "start_name": "출발지", "end_name": "올림픽공원역", "time_min": 1,
+                },
+                {
+                    "vehicle_type": "버스", "line": "3412번",
+                    "start_name": "올림픽공원역", "end_name": "강남역12번출구", "time_min": 41,
+                },
+                {
+                    "vehicle_type": "도보", "line": "도보 157m",
+                    "start_name": "강남역12번출구", "end_name": "강남역 2호선", "time_min": 2,
+                },
+            ],
+        },
+    })
+
+    steps = response["buses"][0]["routeDetail"]["steps"]
+    assert [step["durationMin"] for step in steps] == [1, 41, 2]
+    # 균등 분배(44 // 3 = 15)로 무너지지 않았는지 확인합니다.
+    assert all(step["durationMin"] != 15 for step in steps)
+
+
+def test_transfer_route_keeps_each_segment_time_and_order() -> None:
+    """환승(버스 2회) 경로에서도 구간 시간과 순서가 보존되어야 합니다."""
+    response = _build_upload_compat_response({
+        "status": "success",
+        "message": "환승 경로",
+        "data": {
+            "intent": "route",
+            "origin": "올림픽공원역",
+            "destination": "서울역",
+            "bus_number": "3412",
+            "total_time_min": 62,
+            "transfer_count": 1,
+            "route_segments": [
+                {"vehicle_type": "도보", "line": "도보 90m",
+                 "start_name": "출발지", "end_name": "올림픽공원역", "time_min": 2},
+                {"vehicle_type": "버스", "line": "3412번",
+                 "start_name": "올림픽공원역", "end_name": "강남역", "time_min": 35},
+                {"vehicle_type": "도보", "line": "도보 60m",
+                 "start_name": "강남역", "end_name": "강남역환승", "time_min": 1},
+                {"vehicle_type": "버스", "line": "146번",
+                 "start_name": "강남역환승", "end_name": "서울역", "time_min": 22},
+                {"vehicle_type": "도보", "line": "도보 120m",
+                 "start_name": "서울역", "end_name": "서울역 광장", "time_min": 2},
+            ],
+        },
+    })
+
+    steps = response["buses"][0]["routeDetail"]["steps"]
+    assert [step["type"] for step in steps] == ["walk", "bus", "walk", "bus", "walk"]
+    assert [step["durationMin"] for step in steps] == [2, 35, 1, 22, 2]
+    assert sum(step["durationMin"] for step in steps) == 62
+    # 두 번째 버스 구간의 노선 번호가 첫 구간 번호로 덮이지 않아야 합니다.
+    assert [step["busNumber"] for step in steps if step["type"] == "bus"] == ["3412", "146"]
 
 
 def test_odsay_bus_mode_excludes_mixed_subway_path() -> None:
@@ -585,6 +791,9 @@ def test_arrival_intent_uses_stop_name_as_frontend_destination(monkeypatch) -> N
     assert result["status"] == "success"
     assert result["data"]["destination"] == "올림픽공원역"
     assert result["data"]["arrival_time"] == "3분후"
+    assert result["data"]["safety_decision"]["level"] == "verified"
+    assert result["data"]["safety_decision"]["auto_corrected"] is False
+    assert result["data"]["safety_decision"]["checked_at"]
 
 
 def test_frontend_http_endpoints_share_the_expected_contract(monkeypatch) -> None:

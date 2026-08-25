@@ -1,16 +1,17 @@
 import { Check, MapPin, Mic, TrainFront, Volume2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { PlaceSuggestion, TransitConfirmation } from "../../api/client";
+import type { PlaceSuggestion, SafetyDecision, TransitConfirmation } from "../../api/client";
 
 interface VoiceConfirmationProps {
   confirmation: TransitConfirmation;
   transcript: string;
   audioBase64: string;
+  safetyDecision: SafetyDecision | null;
   onSelect: (place: PlaceSuggestion) => void;
   onRetry: () => void;
 }
 
-export function VoiceConfirmation({ confirmation, transcript, audioBase64, onSelect, onRetry }: VoiceConfirmationProps) {
+export function VoiceConfirmation({ confirmation, transcript, audioBase64, safetyDecision, onSelect, onRetry }: VoiceConfirmationProps) {
   const candidate = confirmation.candidate;
   const alternatives = confirmation.alternatives || [];
   const candidateRef = useRef<HTMLButtonElement>(null);
@@ -63,6 +64,12 @@ export function VoiceConfirmation({ confirmation, transcript, audioBase64, onSel
         {confirmation.prompt}
       </h2>
       {transcript && <p className="mt-2 text-sm text-white/65">“{transcript}”로 들었어요.</p>}
+      {safetyDecision && (
+        <div className="mt-3 max-w-[520px] rounded-md border border-cyan-200/25 bg-cyan-950/25 px-3 py-2 text-sm" role="status">
+          <strong className="block text-cyan-100">{safetyDecision.title}</strong>
+          <p className="mt-1 text-white/70">{safetyDecision.reasons.join(" ")}</p>
+        </div>
+      )}
 
       <button ref={candidateRef} type="button" onClick={() => onSelect(candidate)} className="mt-4 flex w-full max-w-[520px] items-center gap-3 rounded-lg border-2 border-[#F0C929] bg-white px-4 py-3 text-left text-slate-900 shadow-xl focus:outline-none focus:ring-4 focus:ring-[#F0C929]/45">
         {candidate.category_code === "SW8" ? <TrainFront className="size-6 shrink-0 text-[#145466]" /> : <MapPin className="size-6 shrink-0 text-[#145466]" />}

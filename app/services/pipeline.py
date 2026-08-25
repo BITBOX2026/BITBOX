@@ -18,9 +18,11 @@ pipeline.py 에서 모두 잡아 사용자 친화적 메시지로 변환합니�
 import asyncio
 import time
 from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
 
 from app.core.config import settings
 from app.core.logger import get_logger
+from app.core.runtime_metrics import record_safety_decision
 from app.services.ai.llm_service import parse_transit_intent
 from app.services.ai.stt_service import transcribe_audio
 from app.services.ai.tts_service import generate_tts_audio
@@ -88,13 +90,17 @@ async def run_text_route(
         )
     except (CoordinateResolveError, TransportAPIError) as exc:
         logger.warning("[%s] text route lookup failed: error_type=%s", request_id, type(exc).__name__)
-        result = _error_response_from_parsed(exc.user_message, parsed, transcript=destination)
+        result = _error_response_from_exception(exc, parsed, transcript=destination)
     except Exception as exc:
         # 예상치 못한 시스템 오류 — 상세 메시지를 로그에만 남기고 범용 안내 반환
         # (음성 파이프라인의 _run_pipeline_core와 동일한 방어 수준을 유지)
         logger.exception("[%s] 텍스트 경로 조회 중 예상치 못한 오류: error_type=%s", request_id, type(exc).__name__)
         result = _error_response_from_parsed(
-            "요청을 처리하지 못했습니다. 다시 시도해 주세요.", parsed, transcript=destination,
+            "요청을 처리하지 못했습니다. 다시 시도해 주세요.",
+            parsed,
+            transcript=destination,
+            http_status=500,
+            error_kind="internal",
         )
 
     # 텍스트 검색은 브라우저 음성 합성을 사용해 응답 지연과 TTS 비용을 줄입니다.
@@ -156,18 +162,22 @@ async def _run_pipeline_core(
     except CoordinateResolveError as exc:
         # 장소명 → 좌표 변환 실패 — 사용자가 더 정확한 이름을 말해야 함
         logger.warning("[%s] 장소 좌표 변환 오류: error_type=%s", request_id, type(exc).__name__)
-        return _error_response_from_parsed(exc.user_message, parsed, transcript=transcript)
+        return _error_response_from_exception(exc, parsed, transcript=transcript)
 
     except (STTProcessingError, LLMParsingError, TransportAPIError) as exc:
         # 외부 API 오류 — 기술적 메시지 대신 user_message 반환
         logger.exception("[%s] 외부 서비스 오류: error_type=%s", request_id, type(exc).__name__)
-        return _error_response_from_parsed(exc.user_message, parsed, transcript=transcript)
+        return _error_response_from_exception(exc, parsed, transcript=transcript)
 
     except Exception as exc:
         # 예상치 못한 시스템 오류 — 상세 메시지를 로그에만 남기고 범용 안내 반환
         logger.exception("[%s] 예상치 못한 오류: error_type=%s", request_id, type(exc).__name__)
         return _error_response_from_parsed(
-            "요청을 처리하지 못했습니다. 다시 말씀해 주세요.", parsed, transcript=transcript,
+            "요청을 처리하지 못했습니다. 다시 말씀해 주세요.",
+            parsed,
+            transcript=transcript,
+            http_status=500,
+            error_kind="internal",
         )
 
 
@@ -202,6 +212,12 @@ async def _run_parsed_pipeline(
         transport_result.source,
     )
 
+    safety_decision = _verified_safety_decision(parsed, transport_result.source)
+    record_safety_decision(
+        safety_decision["level"],
+        transport_result.source,
+        parsed.intent,
+    )
     data = ResponseData(
         transcript=transcript,
         intent=parsed.intent,
@@ -231,6 +247,7 @@ async def _run_parsed_pipeline(
         confidence=parsed.confidence,
         source=transport_result.source,
         needs_confirmation=False,
+        safety_decision=safety_decision,
     )
     message = build_user_message(parsed=parsed, transport_result=transport_result)
     return {"status": "success", "message": message, "data": data.to_dict()}
@@ -239,7 +256,11 @@ async def _run_parsed_pipeline(
 def build_timeout_error_response() -> dict:
     """asyncio.TimeoutError 발생 시 gateway에서 반환할 일관된 오류 응답입니다."""
     result = _error_response_from_parsed(
-        "처리 시간이 초과되었습니다. 다시 시도해 주세요.", parsed=None, transcript=None,
+        "처리 시간이 초과되었습니다. 다시 시도해 주세요.",
+        parsed=None,
+        transcript=None,
+        http_status=504,
+        error_kind="timeout",
     )
     result["audio_base64"] = None
     return result
@@ -282,6 +303,7 @@ class ResponseData:
     source: str = "none"
     needs_confirmation: bool = False
     confirmation: dict | None = None
+    safety_decision: dict | None = None
 
     def to_dict(self) -> dict:
         # dataclasses.asdict는 route_segments 안의 RouteSegment(dataclass)도
@@ -293,10 +315,23 @@ def _error_response_from_parsed(
     message: str,
     parsed: ParsedIntent | None,
     transcript: str | None,
+    *,
+    http_status: int = 200,
+    error_kind: str = "request",
 ) -> dict:
     """ParsedIntent(있으면)로부터 오류 응답의 공통 필드를 채웁니다."""
+    safety_decision = _retry_safety_decision(parsed)
+    record_safety_decision(
+        safety_decision["level"],
+        "none",
+        parsed.intent if parsed else "unknown",
+    )
     if parsed is None:
-        data = ResponseData(transcript=transcript, needs_confirmation=True)
+        data = ResponseData(
+            transcript=transcript,
+            needs_confirmation=True,
+            safety_decision=safety_decision,
+        )
     else:
         data = ResponseData(
             transcript=transcript,
@@ -308,13 +343,47 @@ def _error_response_from_parsed(
             bus_number=parsed.bus_number,
             confidence=parsed.confidence,
             needs_confirmation=True,
+            safety_decision=safety_decision,
         )
-    return {"status": "error", "message": message, "data": data.to_dict()}
+    return {
+        "status": "error",
+        "message": message,
+        "data": data.to_dict(),
+        "error_kind": error_kind,
+        "_http_status": http_status,
+    }
+
+
+def _error_response_from_exception(
+    exc: Exception,
+    parsed: ParsedIntent | None,
+    transcript: str | None,
+) -> dict:
+    """Convert a typed pipeline exception into an observable API error."""
+    message = str(getattr(exc, "user_message", "")) or "요청을 처리하지 못했습니다. 다시 시도해 주세요."
+    return _error_response_from_parsed(
+        message,
+        parsed,
+        transcript,
+        http_status=int(getattr(exc, "http_status", 200)),
+        error_kind=str(getattr(exc, "error_kind", "request")),
+    )
 
 
 def _place_confirmation_response(parsed, transcript: str, resolution) -> dict:
     """경로 API 호출 전 사용자가 좌표 후보를 확정할 수 있는 응답입니다."""
     selected = resolution.selected
+    safety_decision = {
+        "level": "confirm",
+        "title": "장소 검증이 필요합니다",
+        "reasons": [
+            "이름과 카테고리가 가장 적합한 후보를 우선했습니다.",
+            "후보가 여러 개이므로 좌표를 확정하기 전에 질문합니다.",
+        ],
+        "auto_corrected": False,
+        "checked_at": None,
+    }
+    record_safety_decision(safety_decision["level"], "kakao", parsed.intent)
     data = ResponseData(
         transcript=transcript,
         intent=parsed.intent,
@@ -331,6 +400,7 @@ def _place_confirmation_response(parsed, transcript: str, resolution) -> dict:
             "candidate": selected,
             "alternatives": resolution.alternatives[:4],
         },
+        safety_decision=safety_decision,
     )
     return {"status": "success", "message": resolution.prompt, "data": data.to_dict()}
 
@@ -340,3 +410,41 @@ def _safe_float(value: object) -> float | None:
         return float(value) if value is not None else None
     except (TypeError, ValueError):
         return None
+
+
+def _verified_safety_decision(parsed: ParsedIntent, source: str) -> dict:
+    reasons: list[str] = []
+    if parsed.intent == "arrival" and parsed.bus_number:
+        if source == "public_data":
+            reasons.append("인식한 버스 번호를 운행 노선과 정확히 일치시켜 확인했습니다.")
+        else:
+            reasons.append("버스 번호 요청 형식이 검증을 통과했습니다.")
+        reasons.append("비슷한 번호로 자동 변경하지 않았습니다.")
+    elif parsed.intent == "route":
+        if source == "odsay":
+            reasons.append("확정된 목적지 좌표를 기준으로 버스 경로를 조회했습니다.")
+        else:
+            reasons.append("버스 전용 경로 요청 조건이 검증을 통과했습니다.")
+    if source in {"odsay", "public_data"}:
+        reasons.append("외부 교통 데이터 조회가 정상 완료되었습니다.")
+    return {
+        "level": "verified",
+        "title": "검증 절차 완료",
+        "reasons": reasons,
+        "auto_corrected": False,
+        "checked_at": datetime.now(UTC).isoformat() if source in {"odsay", "public_data"} else None,
+    }
+
+
+def _retry_safety_decision(parsed: ParsedIntent | None) -> dict:
+    reasons = ["확인되지 않은 정보를 임의로 안내하지 않습니다."]
+    if parsed and parsed.intent == "arrival" and parsed.bus_number:
+        reasons.insert(0, "현재 정류장에서 해당 번호를 확인하지 못했습니다.")
+        reasons.append("가장 가까운 번호로 자동 변경하지 않았습니다.")
+    return {
+        "level": "retry",
+        "title": "다시 확인해 주세요",
+        "reasons": reasons,
+        "auto_corrected": False,
+        "checked_at": None,
+    }

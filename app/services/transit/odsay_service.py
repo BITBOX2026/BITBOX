@@ -12,7 +12,11 @@ from typing import Any
 import httpx
 
 from app.services.core.constants import ODSAY_ROUTE_URL
-from app.services.core.exceptions import TransportAPIError
+from app.services.core.exceptions import (
+    ExternalServiceError,
+    RouteNotFoundError,
+    TransportAPIError,
+)
 from app.services.core.http_client import get_http_client
 from app.services.core.http_utils import http_retry as _http_retry
 from app.services.core.service_types import RouteSegment, TransportResult
@@ -35,9 +39,18 @@ async def _odsay_fetch(params: dict) -> dict:
     response = await get_http_client().get(ODSAY_ROUTE_URL, params=params)
     response.raise_for_status()
     try:
-        return response.json()
+        payload = response.json()
     except ValueError as exc:
-        raise TransportAPIError("ODsay API 응답을 파싱하지 못했습니다.") from exc
+        raise ExternalServiceError("경로 API 응답을 파싱하지 못했습니다.") from exc
+
+    if "error" in payload:
+        error_text = str(payload["error"])
+        auth_failed = "ApiKeyAuthFailed" in error_text
+        raise ExternalServiceError(
+            f"경로 API 오류: {error_text}",
+            retryable=not auth_failed,
+        )
+    return payload
 
 
 async def search_odsay_route(
@@ -66,24 +79,21 @@ async def search_odsay_route(
         payload = await _odsay_fetch(params)
 
     except httpx.HTTPStatusError as exc:
-        raise TransportAPIError(
+        raise ExternalServiceError(
             f"ODsay API HTTP 오류: {exc.response.status_code}"
         ) from exc
 
-    except httpx.RequestError as exc:
-        raise TransportAPIError("ODsay API 요청 오류가 발생했습니다.") from exc
-
-    if "error" in payload:
-        raise TransportAPIError(f"ODsay API 오류: {payload['error']}")
+    except httpx.HTTPError as exc:
+        raise ExternalServiceError("경로 API 요청 오류가 발생했습니다.") from exc
 
     best_path = _select_best_path(payload=payload)
 
     if not best_path:
         if transport_mode == "bus":
-            raise TransportAPIError(
+            raise RouteNotFoundError(
                 user_message="버스가 포함된 경로를 찾지 못했습니다. 다른 출발지나 목적지로 다시 말씀해 주세요."
             )
-        raise TransportAPIError(user_message="조회 가능한 버스 경로를 찾지 못했습니다.")
+        raise RouteNotFoundError(user_message="조회 가능한 버스 경로를 찾지 못했습니다.")
 
     return _convert_odsay_path_to_transport_result(
         origin=origin_name, origin_x=origin_x, origin_y=origin_y,
@@ -235,7 +245,11 @@ def _extract_route_segments(sub_paths: list[dict[str, Any]]) -> list[RouteSegmen
         end_name = sp.get("endName") or ""
         lanes = sp.get("lane") or []
 
-        seg_time = safe_int(sp.get("time"))
+        # ODsay 실제 응답은 구간 소요시간을 sectionTime 으로 반환합니다.
+        # (time 은 과거/모의 응답 호환용 예비 키)
+        seg_time = safe_int(sp.get("sectionTime"))
+        if seg_time is None:
+            seg_time = safe_int(sp.get("time"))
         start_x = _safe_float(sp.get("startX"))
         start_y = _safe_float(sp.get("startY"))
         end_x = _safe_float(sp.get("endX"))

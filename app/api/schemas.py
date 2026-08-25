@@ -34,6 +34,14 @@ class PlaceConfirmationResponse(BaseModel):
     alternatives: list[PlaceCandidateResponse] = Field(default_factory=list)
 
 
+class SafetyDecisionResponse(BaseModel):
+    level: Literal["verified", "confirm", "retry"]
+    title: str
+    reasons: list[str] = Field(default_factory=list)
+    auto_corrected: bool = False
+    checked_at: str | None = None
+
+
 class ProcessDataResponse(BaseModel):
     transcript: str | None = None
     intent: str | None = None
@@ -60,6 +68,7 @@ class ProcessDataResponse(BaseModel):
     source: str | None = None
     needs_confirmation: bool | None = None
     confirmation: PlaceConfirmationResponse | None = None
+    safety_decision: SafetyDecisionResponse | None = None
 
 
 class ProcessResponse(BaseModel):
@@ -68,6 +77,7 @@ class ProcessResponse(BaseModel):
     data: ProcessDataResponse = Field(default_factory=ProcessDataResponse)
     audio_base64: str | None = None
     request_id: str | None = None
+    error_kind: str | None = None
 
 
 class FrontendRouteStep(BaseModel):
@@ -126,6 +136,8 @@ class UploadCompatResponse(BaseModel):
     request_id: str | None = None
     needs_confirmation: bool = False
     confirmation: PlaceConfirmationResponse | None = None
+    safety_decision: SafetyDecisionResponse | None = None
+    error_kind: str | None = None
 
 
 class TextRouteRequest(BaseModel):

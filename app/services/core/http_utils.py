@@ -21,6 +21,7 @@ import httpx
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from app.core.config import settings
+from app.services.core.exceptions import ExternalServiceError
 
 
 def is_retryable(exc: BaseException) -> bool:
@@ -31,6 +32,8 @@ def is_retryable(exc: BaseException) -> bool:
     if isinstance(exc, httpx.HTTPStatusError):
         # 서버 오류(500~599)만 재시도, 클라이언트 오류(4xx)는 재시도하지 않음
         return exc.response.status_code >= 500
+    if isinstance(exc, ExternalServiceError):
+        return exc.retryable
     return False
 
 
@@ -64,11 +67,11 @@ def _record_circuit_success(name: str) -> None:
         state.open_until = 0.0
 
 
-def _record_circuit_failure(name: str) -> None:
+def _record_circuit_failure(name: str, *, force_open: bool = False) -> None:
     with _circuit_lock:
         state = _circuits.setdefault(name, _CircuitState())
         state.failures += 1
-        if state.failures >= settings.EXTERNAL_CIRCUIT_FAILURE_THRESHOLD:
+        if force_open or state.failures >= settings.EXTERNAL_CIRCUIT_FAILURE_THRESHOLD:
             state.open_until = (
                 time.monotonic() + settings.EXTERNAL_CIRCUIT_RESET_SECONDS
             )
@@ -101,7 +104,8 @@ def http_retry(function: Callable[..., Any]) -> Callable[..., Any]:
             result = await retried(*args, **kwargs)
         except Exception as exc:
             if _counts_toward_circuit(exc):
-                _record_circuit_failure(circuit_name)
+                force_open = isinstance(exc, ExternalServiceError) and not exc.retryable
+                _record_circuit_failure(circuit_name, force_open=force_open)
             raise
         _record_circuit_success(circuit_name)
         return result

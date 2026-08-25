@@ -11,8 +11,9 @@ function WaveBar({ delay }: { delay: number }) {
 
 export function VoiceMicButton({ status, onClick }: { status: string; onClick: () => void }) {
   const isListening = status === "listening";
-  const isLoading = status === "loading";
-  const label = isListening ? "음성 입력 완료" : isLoading ? "경로 조회 중" : "음성 입력 시작";
+  const isStarting = status === "starting";
+  const isLoading = status === "loading" || isStarting;
+  const label = isListening ? "음성 입력 완료" : isStarting ? "마이크 준비 중" : isLoading ? "경로 조회 중" : "음성 입력 시작";
 
   return (
     <div className="relative grid size-24 place-items-center sm:size-28">

@@ -16,6 +16,16 @@ export type TransitResponse = {
   request_id?: string | null;
   needs_confirmation?: boolean;
   confirmation?: TransitConfirmation | null;
+  safety_decision?: SafetyDecision | null;
+  error_kind?: string | null;
+};
+
+export type SafetyDecision = {
+  level: "verified" | "confirm" | "retry";
+  title: string;
+  reasons: string[];
+  auto_corrected: boolean;
+  checked_at?: string | null;
 };
 
 export type TransitConfirmation = {

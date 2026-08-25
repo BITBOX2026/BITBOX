@@ -30,12 +30,43 @@ const arrivals = {
   ],
 };
 
+const fiveRowArrivals = {
+  ...arrivals,
+  items: Array.from({ length: 7 }, (_, index) => ({
+    bus_number: String(3500 + index),
+    direction: "강남역 방향",
+    first_arrival_min: 10 + index,
+    message: `${3500 + index}번 버스가 약 ${10 + index}분 후 도착합니다.`,
+    raw_arrmsg1: `${10 + index}분후[${index + 2}번째 전]`,
+    raw_arrmsg2: "",
+    raw_congestion1: "3",
+    raw_congestion2: "0",
+    raw_is_last1: "0",
+    raw_is_last2: "0",
+    raw_bus_type1: "0",
+    raw_bus_type2: "0",
+    raw_is_full_flag1: "0",
+    raw_is_full_flag2: "0",
+    raw_station_nm1: `테스트정류장${index + 1}`,
+    raw_station_nm2: "",
+    raw_veh_id1: `layout-vehicle-${index + 1}`,
+    raw_veh_id2: "0",
+  })),
+};
+
 const routeResult = {
   success: true,
   destination: "강남역 2호선",
   destination_text: "강남역 2호선",
   message: "정류장까지 3분 걸어간 뒤 3412번 버스를 타세요.",
   audio_base64: null,
+  safety_decision: {
+    level: "verified",
+    title: "검증 절차 완료",
+    reasons: ["확정된 목적지 좌표를 기준으로 버스 경로를 조회했습니다."],
+    auto_corrected: false,
+    checked_at: "2026-08-25T02:00:00+09:00",
+  },
   buses: [
     {
       id: "route-3412-0",
@@ -110,6 +141,12 @@ const placeConfirmationResult = {
   buses: [],
   audio_base64: null,
   needs_confirmation: true,
+  safety_decision: {
+    level: "confirm",
+    title: "장소 검증이 필요합니다",
+    reasons: ["후보가 여러 개이므로 좌표를 확정하기 전에 질문합니다."],
+    auto_corrected: false,
+  },
   confirmation: {
     kind: "place",
     prompt: "강남역 2호선이 맞나요?",
@@ -144,6 +181,31 @@ const terminalArrivalResult = {
   audio_base64: null,
   needs_confirmation: false,
   confirmation: null,
+  safety_decision: {
+    level: "verified",
+    title: "검증 절차 완료",
+    reasons: ["인식한 버스 번호를 운행 노선과 정확히 일치시켜 확인했습니다."],
+    auto_corrected: false,
+    checked_at: "2026-08-25T02:00:00+09:00",
+  },
+};
+
+const unknownBusResult = {
+  success: false,
+  intent: "arrival",
+  bus_number: "3423",
+  destination: "올림픽공원역",
+  message: "현재 정류장에서 3423번 노선을 확인하지 못했습니다. 버스 번호를 다시 말씀해 주세요.",
+  buses: [],
+  audio_base64: null,
+  needs_confirmation: true,
+  confirmation: null,
+  safety_decision: {
+    level: "retry",
+    title: "다시 확인해 주세요",
+    reasons: ["가장 가까운 번호로 자동 변경하지 않았습니다."],
+    auto_corrected: false,
+  },
 };
 
 async function mockBoard(page: Page) {
@@ -159,8 +221,17 @@ async function installFakeRecorder(page: Page) {
   await page.addInitScript(() => {
     localStorage.setItem("bitbox.voiceConsent.v1", "accepted");
 
+    const trackedWindow = window as Window & {
+      __getUserMediaCalls?: number;
+      __stoppedAudioTracks?: number;
+      __closedAudioContexts?: number;
+    };
+    trackedWindow.__getUserMediaCalls = 0;
+    trackedWindow.__stoppedAudioTracks = 0;
+    trackedWindow.__closedAudioContexts = 0;
+
     const stream = {
-      getTracks: () => [{ stop() {} }],
+      getTracks: () => [{ stop() { trackedWindow.__stoppedAudioTracks = (trackedWindow.__stoppedAudioTracks || 0) + 1; } }],
     };
 
     class FakeAudioContext {
@@ -173,7 +244,11 @@ async function installFakeRecorder(page: Page) {
       }
       createMediaStreamSource() { return { connect() {} }; }
       resume() { return Promise.resolve(); }
-      close() { this.state = "closed"; return Promise.resolve(); }
+      close() {
+        this.state = "closed";
+        trackedWindow.__closedAudioContexts = (trackedWindow.__closedAudioContexts || 0) + 1;
+        return Promise.resolve();
+      }
     }
 
     class FakeMediaRecorder {
@@ -196,7 +271,13 @@ async function installFakeRecorder(page: Page) {
 
     Object.defineProperty(navigator, "mediaDevices", {
       configurable: true,
-      value: { getUserMedia: async () => stream },
+      value: {
+        getUserMedia: async () => {
+          trackedWindow.__getUserMediaCalls = (trackedWindow.__getUserMediaCalls || 0) + 1;
+          await new Promise((resolve) => window.setTimeout(resolve, 200));
+          return stream;
+        },
+      },
     });
     Object.defineProperty(window, "AudioContext", { configurable: true, value: FakeAudioContext });
     Object.defineProperty(window, "webkitAudioContext", { configurable: true, value: FakeAudioContext });
@@ -219,12 +300,16 @@ test.beforeEach(async ({ page }) => {
     Object.defineProperty(window, "speechSynthesis", {
       value: {
         speaking: false,
-        cancel() { this.speaking = false; },
+        cancel() {
+          const trackedWindow = window as Window & { __speechCancelCalls?: number };
+          trackedWindow.__speechCancelCalls = (trackedWindow.__speechCancelCalls || 0) + 1;
+          this.speaking = false;
+        },
         speak(utterance: FakeUtterance) {
           const trackedWindow = window as Window & { __spokenPrompts?: string[] };
           trackedWindow.__spokenPrompts = [...(trackedWindow.__spokenPrompts || []), utterance.text];
           this.speaking = true;
-          window.setTimeout(() => { this.speaking = false; utterance.onend?.(); }, 20);
+          window.setTimeout(() => { this.speaking = false; utterance.onend?.(); }, 1_000);
         },
       },
     });
@@ -239,6 +324,91 @@ test("shows a stable live board on desktop and mobile", async ({ page }, testInf
   await expect(page.getByText("저상버스", { exact: true })).toBeVisible();
   await expectNoHorizontalOverflow(page);
   await page.screenshot({ path: testInfo.outputPath("home.png"), fullPage: true });
+});
+
+test("keeps five bus rows readable without overlap across target viewports", async ({ page }, testInfo) => {
+  await page.unroute("**/api/bus/default");
+  await page.route("**/api/bus/default", (route) => route.fulfill({ json: fiveRowArrivals }));
+
+  const viewports = [
+    { name: "mobile", width: 390, height: 844 },
+    { name: "tablet", width: 768, height: 1024 },
+    { name: "desktop", width: 1280, height: 800 },
+    { name: "kiosk", width: 1080, height: 1920 },
+  ];
+
+  for (const viewport of viewports) {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.goto("/");
+
+    const rows = page.getByTestId("main-bus-row");
+    await expect(rows).toHaveCount(5);
+    const metrics = await page.getByTestId("main-bus-scroll").evaluate((element) => ({
+      clientHeight: element.clientHeight,
+      clientWidth: element.clientWidth,
+      scrollHeight: element.scrollHeight,
+      scrollWidth: element.scrollWidth,
+    }));
+    const boxes = await rows.evaluateAll((elements) => elements.map((element) => {
+      const rect = element.getBoundingClientRect();
+      return {
+        top: rect.top,
+        bottom: rect.bottom,
+        height: rect.height,
+        clientHeight: element.clientHeight,
+        scrollHeight: element.scrollHeight,
+      };
+    }));
+    const expectedMinimumHeight = viewport.width >= 640 ? 68 : 56;
+
+    for (const box of boxes) {
+      expect(box.height).toBeGreaterThanOrEqual(expectedMinimumHeight);
+      expect(box.scrollHeight).toBeLessThanOrEqual(box.clientHeight + 1);
+    }
+    for (let index = 1; index < boxes.length; index += 1) {
+      expect(boxes[index].top).toBeGreaterThanOrEqual(boxes[index - 1].bottom - 0.5);
+    }
+    expect(metrics.scrollWidth).toBeLessThanOrEqual(metrics.clientWidth + 1);
+
+    const totalRowHeight = boxes.reduce((sum, box) => sum + box.height, 0);
+    if (totalRowHeight <= metrics.clientHeight + 1) {
+      expect(metrics.scrollHeight).toBeLessThanOrEqual(metrics.clientHeight + 1);
+    } else {
+      expect(metrics.scrollHeight).toBeGreaterThan(metrics.clientHeight);
+    }
+
+    await expectNoHorizontalOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath(`five-rows-${viewport.name}.png`), fullPage: true });
+  }
+});
+
+test("cancels an active tracked-bus announcement when tracking is disabled", async ({ page }) => {
+  await page.clock.install();
+  await page.unroute("**/api/bus/default");
+  let calls = 0;
+  await page.route("**/api/bus/default", (route) => {
+    calls += 1;
+    const remainingStops = calls === 1 ? 4 : 2;
+    return route.fulfill({ json: {
+      ...fiveRowArrivals,
+      items: fiveRowArrivals.items.map((item, index) => index === 0
+        ? { ...item, raw_arrmsg1: `10분후[${remainingStops}번째 전]` }
+        : item),
+    } });
+  });
+
+  await page.goto("/");
+  const trackedRow = page.getByTestId("main-bus-row").first();
+  await trackedRow.click();
+  await page.clock.fastForward(15_000);
+  await expect.poll(() => page.evaluate(() => (
+    window as Window & { __spokenPrompts?: string[] }
+  ).__spokenPrompts?.length || 0)).toBe(1);
+
+  await trackedRow.click();
+  await expect.poll(() => page.evaluate(() => (
+    window as Window & { __speechCancelCalls?: number }
+  ).__speechCancelCalls || 0)).toBeGreaterThanOrEqual(1);
 });
 
 test("submits the exact autocomplete coordinates and renders walk steps", async ({ page }, testInfo) => {
@@ -257,6 +427,7 @@ test("submits the exact autocomplete coordinates and renders walk steps", async 
   await page.getByRole("button", { name: "버스 경로 검색" }).click();
 
   await expect(page.getByText("강남역 2호선 방면")).toBeVisible();
+  await expect(page.getByText("검증 절차 완료")).toBeVisible();
   await expect(page.getByText("도보 180m")).toBeVisible();
   await expect(page.getByText("3412번 탑승")).toBeVisible();
   await expect(page.getByText("출발지 출발")).toBeVisible();
@@ -307,7 +478,9 @@ test("confirms an ambiguous station before requesting its route", async ({ page 
 
   const confirmation = page.getByRole("dialog", { name: "강남역 2호선이 맞나요?" });
   await expect(confirmation).toBeVisible();
+  await expect(confirmation.getByRole("heading", { name: "강남역 2호선이 맞나요?" })).not.toHaveAttribute("aria-live");
   await expect(confirmation.getByText("강남역 신분당선")).toBeVisible();
+  await expect(confirmation.getByText("장소 검증이 필요합니다")).toBeVisible();
   const primaryCandidate = confirmation.getByRole("button", { name: /강남역 2호선/ });
   await expect(primaryCandidate).toBeFocused();
   await expect.poll(() => page.evaluate(() => (
@@ -360,6 +533,28 @@ test("uploads a browser recording and opens place confirmation", async ({ page }
   expect(uploadContentType).toContain("multipart/form-data");
 });
 
+test("starts only one recorder when the microphone button is activated twice quickly", async ({ page }) => {
+  await installFakeRecorder(page);
+  await page.route("**/api/upload", (route) => route.fulfill({ json: terminalArrivalResult }));
+
+  await page.goto("/");
+  const startButton = page.getByRole("button", { name: "음성 입력 시작" });
+  await startButton.evaluate((button) => {
+    button.click();
+    button.click();
+  });
+
+  await expect(page.getByRole("button", { name: "마이크 준비 중" })).toBeDisabled();
+  await expect.poll(() => page.evaluate(() => (
+    window as Window & { __getUserMediaCalls?: number }
+  ).__getUserMediaCalls || 0)).toBe(1);
+  await page.getByRole("button", { name: "음성 입력 완료" }).click();
+  await expect(page.getByText("운행이 종료되었습니다.").last()).toBeVisible();
+  await expect.poll(() => page.evaluate(() => (
+    window as Window & { __closedAudioContexts?: number }
+  ).__closedAudioContexts || 0)).toBe(1);
+});
+
 test("renders terminal arrival as information instead of an error", async ({ page }) => {
   await installFakeRecorder(page);
   await page.route("**/api/upload", (route) => route.fulfill({ json: terminalArrivalResult }));
@@ -372,6 +567,19 @@ test("renders terminal arrival as information instead of an error", async ({ pag
   await expect(informationCard).toBeVisible();
   await expect(informationCard.getByText(/3412번 버스는 운행이 종료되었습니다/)).toBeVisible();
   await expect(page.getByRole("alert")).toHaveCount(0);
+});
+
+test("explains that an unknown bus number was not automatically replaced", async ({ page }) => {
+  await installFakeRecorder(page);
+  await page.route("**/api/upload", (route) => route.fulfill({ json: unknownBusResult }));
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "음성 입력 시작" }).click();
+  await page.getByRole("button", { name: "음성 입력 완료" }).click();
+
+  const alert = page.getByRole("alert");
+  await expect(alert).toContainText("3423번 노선을 확인하지 못했습니다");
+  await expect(alert).toContainText("가장 가까운 번호로 자동 변경하지 않았습니다");
 });
 
 test("requires voice consent and clears local recent destinations", async ({ page }) => {

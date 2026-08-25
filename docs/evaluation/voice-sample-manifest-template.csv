@@ -1,0 +1,4 @@
+sample_id,audio_path,expected_intent,expected_bus_number,expected_outcome,environment,speaker_group
+S001,voice-samples/S001.webm,arrival,3412,success,quiet,adult
+S002,voice-samples/S002.webm,arrival,3423,reconfirm,bus_stop_noise,adult
+S003,voice-samples/S003.webm,route,,confirmation,quiet,older_adult

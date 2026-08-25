@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { requestTextRoute, uploadVoiceAudio, type RouteDestination, type TransitConfirmation, type PlaceSuggestion } from "../api/client";
+import { requestTextRoute, uploadVoiceAudio, type RouteDestination, type TransitConfirmation, type PlaceSuggestion, type SafetyDecision } from "../api/client";
 import { BusOption } from "../types/bus";
 
-type RecorderStatus = "idle" | "listening" | "loading" | "confirming" | "result";
+type RecorderStatus = "idle" | "starting" | "listening" | "loading" | "confirming" | "result";
 const NO_SPEECH_TIMEOUT_MS = 8_000;
 const MAX_RECORDING_MS = 20_000;
 const REQUEST_TIMEOUT_MS = 35_000;
@@ -34,6 +34,7 @@ export function useVoiceRecorder() {
   const [audioBase64, setAudioBase64] = useState("");
   const [error, setError] = useState("");
   const [confirmation, setConfirmation] = useState<TransitConfirmation | null>(null);
+  const [safetyDecision, setSafetyDecision] = useState<SafetyDecision | null>(null);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -41,12 +42,15 @@ export function useVoiceRecorder() {
   const maxDurationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const requestControllerRef = useRef<AbortController | null>(null);
+  const recordingStartIdRef = useRef(0);
+  const isStartingRef = useRef(false);
   const audioChunks = useRef<Blob[]>([]);
   const hasDetectedSound = useRef(false);
   const isTimeoutRef = useRef(false);
 
   const applyResult = (result: Awaited<ReturnType<typeof uploadVoiceAudio>>) => {
     setTranscript(result.text || "");
+    setSafetyDecision(result.safety_decision || null);
     if (
       result.needs_confirmation
       && result.confirmation?.kind === "place"
@@ -64,6 +68,7 @@ export function useVoiceRecorder() {
     if (result.needs_confirmation && !result.confirmation && result.success) {
       setError("확인할 장소 정보가 올바르지 않습니다. 목적지를 다시 말씀해 주세요.");
       setConfirmation(null);
+      setSafetyDecision(null);
       setStatus("idle");
       return;
     }
@@ -128,6 +133,7 @@ export function useVoiceRecorder() {
     setError("");
     setMessage("");
     setAudioBase64("");
+    setSafetyDecision(null);
     try {
       const result = await requestTextRoute(
         { ...value, name: value.name.trim() },
@@ -173,8 +179,8 @@ export function useVoiceRecorder() {
 
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
       mediaRecorderRef.current.stop();
-      mediaRecorderRef.current.stream.getTracks().forEach((track) => track.stop());
     }
+    mediaRecorderRef.current?.stream.getTracks().forEach((track) => track.stop());
 
     if (audioContextRef.current && audioContextRef.current.state !== "closed") {
       audioContextRef.current.close();
@@ -189,7 +195,13 @@ export function useVoiceRecorder() {
   }, []);
 
   const startRecording = async () => {
+    if (isStartingRef.current || mediaRecorderRef.current?.state === "recording") return;
+
+    isStartingRef.current = true;
+    const startId = ++recordingStartIdRef.current;
+    setStatus("starting");
     let stream: MediaStream | null = null;
+    let audioContext: AudioContext | null = null;
     try {
       if (!window.isSecureContext && window.location.hostname !== "localhost" && window.location.hostname !== "127.0.0.1") {
         throw new Error("음성 기능은 HTTPS 연결에서만 사용할 수 있습니다. 목적지를 직접 입력해 주세요.");
@@ -202,10 +214,15 @@ export function useVoiceRecorder() {
         throw new Error("이 브라우저는 음성 녹음을 지원하지 않습니다.");
       }
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (recordingStartIdRef.current !== startId) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
       audioChunks.current = [];
       isTimeoutRef.current = false;
       hasDetectedSound.current = false;
       setConfirmation(null);
+      setSafetyDecision(null);
       setMessage("");
       setAudioBase64("");
       setError("");
@@ -214,7 +231,7 @@ export function useVoiceRecorder() {
         webkitAudioContext?: typeof AudioContext;
       }).webkitAudioContext;
       if (!AudioContextClass) throw new Error("이 브라우저는 음성 분석을 지원하지 않습니다.");
-      const audioContext = new AudioContextClass();
+      audioContext = new AudioContextClass();
       if (audioContext.state === "suspended") {
         await audioContext.resume();
       }
@@ -278,23 +295,30 @@ export function useVoiceRecorder() {
       checkVolume();
     } catch (err: unknown) {
       stream?.getTracks().forEach((track) => track.stop());
-      if (audioContextRef.current?.state !== "closed") void audioContextRef.current?.close();
+      if (audioContext?.state !== "closed") void audioContext?.close();
+      if (recordingStartIdRef.current !== startId) return;
       console.error("Recording failed:", err);
       const message = err instanceof Error ? err.message : "마이크를 시작하지 못했습니다.";
       setError(`마이크를 사용할 수 없습니다. ${message}`);
       setStatus("idle");
+    } finally {
+      if (recordingStartIdRef.current === startId) isStartingRef.current = false;
     }
   };
 
   const reset = () => {
     clearTimers();
+    recordingStartIdRef.current += 1;
+    isStartingRef.current = false;
     isTimeoutRef.current = true;
     requestControllerRef.current?.abort("reset");
     requestControllerRef.current = null;
     if (mediaRecorderRef.current?.state !== "inactive") {
       mediaRecorderRef.current?.stop();
-      mediaRecorderRef.current?.stream.getTracks().forEach((track) => track.stop());
     }
+    // 녹음기가 이미 inactive 여도 스트림이 살아 있으면 마이크 표시가 남으므로 항상 정리합니다.
+    mediaRecorderRef.current?.stream.getTracks().forEach((track) => track.stop());
+    if (audioContextRef.current?.state !== "closed") void audioContextRef.current?.close();
     window.speechSynthesis?.cancel();
     setStatus("idle");
     setDestination("");
@@ -303,10 +327,13 @@ export function useVoiceRecorder() {
     setAudioBase64("");
     setError("");
     setConfirmation(null);
+    setSafetyDecision(null);
   };
 
   useEffect(() => () => {
     clearTimers();
+    recordingStartIdRef.current += 1;
+    isStartingRef.current = false;
     isTimeoutRef.current = true;
     requestControllerRef.current?.abort("unmount");
     if (mediaRecorderRef.current?.state !== "inactive") {
@@ -325,6 +352,7 @@ export function useVoiceRecorder() {
     audioBase64,
     error,
     confirmation,
+    safetyDecision,
     startRecording,
     stopRecording,
     submitTextRoute,

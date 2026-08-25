@@ -35,6 +35,12 @@ Local runtime counters, paid-request usage and external circuit states are
 available only from EC2 with `curl http://127.0.0.1:8001/internal/status`.
 Nginx returns `404` for every external `/internal/` request.
 
+The runtime snapshot also aggregates privacy-safe counts for safety decision
+levels (`verified`, `confirm`, `retry`), pipeline intent and provider source.
+These counters never store transcripts, destinations, bus numbers or audio.
+They are process-local and reset on restart, so export snapshots externally
+before using them in a longitudinal report.
+
 ## Incident checks
 
 ```bash

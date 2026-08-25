@@ -49,7 +49,7 @@ function CircleTimer({ arrivalMin }: { arrivalMin: number }) {
   const color = arrivalMin <= 5 ? "#F59E0B" : "#FACC15";
 
   return (
-    <svg width="76" height="76" viewBox="0 0 76 76">
+    <svg viewBox="0 0 76 76" className="size-12 sm:size-14 md:size-16" aria-label={`${arrivalMin}분 후 도착`}>
       <circle cx="38" cy="38" r={r} fill="none" stroke="#E2E8F0" strokeWidth="6" />
       <circle
         cx="38" cy="38" r={r}
@@ -84,25 +84,28 @@ function StopsDot({ remaining }: { remaining: number }) {
   const dots = Array.from({ length: showStops }, (_, i) => showStops - i);
 
   return (
-    <div className="flex items-center gap-0 mt-1.5">
-      <BusFront className="mr-1 size-4 shrink-0 text-[#2563EB]" aria-hidden="true" />
-      <div className="h-[2px] w-2 bg-[#CBD5E1]" />
-      {dots.map((n, i) => (
-        <div key={n} className="flex items-center">
-          <div className={`w-[18px] h-[18px] rounded-full border-2 flex items-center justify-center
-            ${i === 0 ? "bg-[#3B82F6] border-[#2563EB]" : "bg-white border-[#CBD5E1]"}`}>
-            <span className={`text-[9px] font-black leading-none ${i === 0 ? "text-white" : "text-[#64748B]"}`}>
-              {n}
-            </span>
+    <>
+      <span className="mt-1 text-[11px] font-bold text-[#475569] sm:hidden">{remaining}정거장 전</span>
+      <div className="mt-1.5 hidden items-center gap-0 sm:flex">
+        <BusFront className="mr-1 size-4 shrink-0 text-[#2563EB]" aria-hidden="true" />
+        <div className="h-[2px] w-2 bg-[#CBD5E1]" />
+        {dots.map((n, i) => (
+          <div key={n} className="flex items-center">
+            <div className={`w-[18px] h-[18px] rounded-full border-2 flex items-center justify-center
+              ${i === 0 ? "bg-[#3B82F6] border-[#2563EB]" : "bg-white border-[#CBD5E1]"}`}>
+              <span className={`text-[9px] font-black leading-none ${i === 0 ? "text-white" : "text-[#64748B]"}`}>
+                {n}
+              </span>
+            </div>
+            {i < dots.length - 1 && <div className="h-[2px] w-2 bg-[#CBD5E1]" />}
           </div>
-          {i < dots.length - 1 && <div className="h-[2px] w-2 bg-[#CBD5E1]" />}
+        ))}
+        <div className="h-[2px] w-2 bg-[#CBD5E1]" />
+        <div className="w-[18px] h-[18px] rounded-full bg-red-500 border-2 border-red-400 flex items-center justify-center">
+          <div className="w-2 h-2 rounded-full bg-white" />
         </div>
-      ))}
-      <div className="h-[2px] w-2 bg-[#CBD5E1]" />
-      <div className="w-[18px] h-[18px] rounded-full bg-red-500 border-2 border-red-400 flex items-center justify-center">
-        <div className="w-2 h-2 rounded-full bg-white" />
       </div>
-    </div>
+    </>
   );
 }
 
@@ -130,7 +133,7 @@ function SoonCard({ bus, isTracked, onTrack }: { bus: BusInfo; isTracked: boolea
 // ─── 로딩 스켈레톤 ───────────────────────────────────────────
 function SkeletonRow({ idx }: { idx: number }) {
   return (
-    <div className={`grid min-h-0 flex-1 grid-cols-[minmax(78px,1fr)_82px_minmax(120px,2fr)] items-center border-b border-[#E2E8F0] md:grid-cols-[150px_110px_1fr] ${idx % 2 === 0 ? "bg-white" : "bg-[#F8FAFC]"}`}>
+    <div className={`grid min-h-[56px] min-w-0 w-full flex-1 shrink-0 grid-cols-[minmax(78px,1fr)_82px_minmax(120px,2fr)] items-center border-b border-[#E2E8F0] sm:min-h-[68px] md:grid-cols-[150px_110px_1fr] ${idx % 2 === 0 ? "bg-white" : "bg-[#F8FAFC]"}`}>
       <div className="flex justify-center px-4 border-r border-[#E2E8F0] h-full items-center">
         <div className="h-9 w-20 bg-gray-200 rounded animate-pulse" />
       </div>
@@ -194,8 +197,16 @@ export function BusInfoList() {
   const [largeTextMode, toggleLargeTextMode] = useAccessibilityDisplay();
   const [trackedBusId, setTrackedBusId] = useState<string | null>(null);
   const lastRemainingStopsRef = useRef<number | null>(null);
+  const approachUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
   const now = useLiveClock();
   const { buses, liveStationName, loading, error, lastUpdated, refetch } = useBusArrivals();
+
+  const cancelApproachSpeech = useCallback(() => {
+    if (approachUtteranceRef.current && "speechSynthesis" in window) {
+      window.speechSynthesis.cancel();
+      approachUtteranceRef.current = null;
+    }
+  }, []);
 
   useEffect(() => {
     if (!trackedBusId) {
@@ -215,7 +226,10 @@ export function BusInfoList() {
       lastRemainingStopsRef.current = tracked.remainingStops;
       return;
     }
-    if (window.speechSynthesis.speaking) return;
+    if (window.speechSynthesis.speaking) {
+      lastRemainingStopsRef.current = tracked.remainingStops;
+      return;
+    }
     lastRemainingStopsRef.current = tracked.remainingStops;
 
     const message = crossed === 0
@@ -226,10 +240,24 @@ export function BusInfoList() {
     const utterance = new SpeechSynthesisUtterance(message);
     utterance.lang = "ko-KR";
     utterance.rate = 0.9;
+    approachUtteranceRef.current = utterance;
+    const releaseUtterance = () => {
+      if (approachUtteranceRef.current === utterance) {
+        approachUtteranceRef.current = null;
+      }
+    };
+    utterance.onend = releaseUtterance;
+    utterance.onerror = releaseUtterance;
     window.speechSynthesis.speak(utterance);
-  }, [buses, trackedBusId]);
+    return () => {
+      if (approachUtteranceRef.current === utterance) {
+        cancelApproachSpeech();
+      }
+    };
+  }, [buses, cancelApproachSpeech, trackedBusId]);
 
   const toggleTracking = (bus: BusInfo) => {
+    cancelApproachSpeech();
     const trackingId = bus.plainNo || bus.id;
     setTrackedBusId((current) => current === trackingId ? null : trackingId);
     lastRemainingStopsRef.current = null;
@@ -311,7 +339,7 @@ export function BusInfoList() {
             <Accessibility className="size-4" /><span className="hidden sm:inline">저상·여유 우선</span>
           </button>
           <div className="text-right text-white">
-          <div className="mb-1 hidden text-[13px] text-white/45 sm:block">{yy}년 {mm}월 {dd}일 ({day})</div>
+          <div className="mb-1 hidden text-[13px] text-white/65 sm:block">{yy}년 {mm}월 {dd}일 ({day})</div>
           <div className="flex items-baseline gap-1 font-mono text-[22px] font-black leading-none text-white sm:text-[36px] md:gap-2 md:text-[44px]">
             <span className="text-[12px] text-yellow-400 sm:text-[20px] md:text-[24px]">{ampm}</span>
             {displayH}:{displayM}:{displayS}
@@ -324,7 +352,7 @@ export function BusInfoList() {
       {error && (
         <div className="bg-red-600 text-white text-[13px] font-bold px-5 py-2 flex items-center justify-between shrink-0">
           <span>{error}</span>
-          <button onClick={refetch} className="ml-4 inline-flex items-center gap-1 text-white/90 hover:text-white"><RefreshCw className="size-3.5" />다시 시도</button>
+          <button onClick={refetch} className="ml-4 inline-flex items-center gap-1 text-white hover:text-white/90"><RefreshCw className="size-3.5" />다시 시도</button>
         </div>
       )}
 
@@ -333,9 +361,9 @@ export function BusInfoList() {
         <div className="flex justify-between items-end mb-3">
           <div className="flex flex-col text-left">
             <span className="text-[20px] font-black leading-tight text-[#2C2A1A] sm:text-[24px]">잠시 후 도착</span>
-            <span className="text-[12px] font-bold text-[#645716] sm:text-[13px]">3분 이내 도착 차량</span>
+            <span className="text-[12px] font-bold text-[#4E3F0C] sm:text-[13px]">3분 이내 도착 차량</span>
           </div>
-          {lastUpdatedStr && <span className={`text-[12px] font-bold ${isStale ? "text-red-700" : "text-[#92400E]"}`}>{isStale ? `정보 지연 · ${lastUpdatedStr}` : lastUpdatedStr}</span>}
+          {lastUpdatedStr && <span className={`text-[12px] font-bold ${isStale ? "text-red-700" : "text-[#78350F]"}`}>{isStale ? `정보 지연 · ${lastUpdatedStr}` : lastUpdatedStr}</span>}
         </div>
 
         {loading ? (
@@ -357,7 +385,7 @@ export function BusInfoList() {
                 style={{ gridColumn: `span ${SOON_PER_PAGE - currentSoon.length}` }}
               >
                 <span className="grid size-10 shrink-0 place-items-center rounded-full bg-black/10"><Radio className="size-5" /></span>
-                <span className="text-left"><strong className="block text-sm font-black">실시간 도착정보 수신 중</strong><span className="text-xs font-bold opacity-75">새로운 차량이 확인되면 바로 표시됩니다.</span></span>
+                <span className="text-left"><strong className="block text-sm font-black">실시간 도착정보 수신 중</strong><span className="text-xs font-bold text-[#4E4214]">새로운 차량이 확인되면 바로 표시됩니다.</span></span>
               </div>
             )}
           </div>
@@ -376,8 +404,8 @@ export function BusInfoList() {
         </div>
 
         {/* 목록 본문 */}
-        <div className="flex-1 flex flex-col min-h-0 bg-[#F1F5F9]">
-          <div className="flex flex-col h-full">
+        <div data-testid="main-bus-scroll" className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto bg-[#F1F5F9]">
+          <div className="flex min-h-full min-w-0 flex-col">
             {loading
               ? Array.from({ length: MAIN_PER_PAGE }).map((_, i) => <SkeletonRow key={i} idx={i} />)
               : currentMain.map((bus, idx) => {
@@ -386,7 +414,7 @@ export function BusInfoList() {
                   const isArriving = bus.traTimeSec < SOON_ARRIVE;
 
                   return (
-                    <button type="button" onClick={() => toggleTracking(bus)} aria-pressed={trackedBusId === (bus.plainNo || bus.id)} aria-label={describeBus(bus)} key={bus.id} className={`grid min-h-0 flex-1 grid-cols-[minmax(78px,1fr)_82px_minmax(120px,2fr)] items-center border-b border-[#E2E8F0] text-left md:grid-cols-[150px_110px_1fr]
+                    <button data-testid="main-bus-row" type="button" onClick={() => toggleTracking(bus)} aria-pressed={trackedBusId === (bus.plainNo || bus.id)} aria-label={describeBus(bus)} key={bus.id} className={`grid min-h-[56px] min-w-0 w-full flex-1 shrink-0 grid-cols-[minmax(78px,1fr)_82px_minmax(120px,2fr)] items-center border-b border-[#E2E8F0] text-left sm:min-h-[68px] md:grid-cols-[150px_110px_1fr]
                       ${trackedBusId === (bus.plainNo || bus.id) ? "bg-amber-50 ring-2 ring-inset ring-[#F0C929]" : idx % 2 === 0 ? "bg-white" : "bg-[#F8FAFC]"}`}>
 
                       {/* 노선번호 */}
@@ -397,7 +425,7 @@ export function BusInfoList() {
                       </div>
 
                       {/* 예정시간 */}
-                      <div className="flex items-center justify-center border-r border-[#E2E8F0] h-full py-2">
+                      <div className="flex h-full items-center justify-center border-r border-[#E2E8F0]">
                         {isArriving ? (
                           <div className="flex flex-col items-center">
                             <span className="text-[20px] font-black text-red-500 leading-tight">곧</span>

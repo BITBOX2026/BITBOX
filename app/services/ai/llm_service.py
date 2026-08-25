@@ -1,6 +1,7 @@
 import json
 import os
 import re
+from dataclasses import replace
 
 from openai import AsyncOpenAI
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_fixed
@@ -179,7 +180,8 @@ async def parse_transit_intent(transcript: str, request_id: str = "") -> ParsedI
     llm_model = get_setting("LLM_MODEL", DEFAULT_LLM_MODEL)
 
     try:
-        return await _call_llm(_get_openai_client(), llm_model, normalized_transcript)
+        parsed = await _call_llm(_get_openai_client(), llm_model, normalized_transcript)
+        return _preserve_explicit_named_bus_number(normalized_transcript, parsed)
 
     except LLMParsingError:
         raise
@@ -211,6 +213,10 @@ def _has_ambiguous_bus_number_expression(text: str) -> bool:
     if len(explicit_numbers) > 1:
         return True
 
+    named_numbers = set(_extract_explicit_named_bus_numbers(text))
+    if len(named_numbers) > 1 or (named_numbers and explicit_numbers):
+        return True
+
     # STT often writes a choice such as "3, 4번 중에" with `번` only after
     # the last item.  This is a choice request, not a confident request for 4.
     return bool(
@@ -219,6 +225,38 @@ def _has_ambiguous_bus_number_expression(text: str) -> bool:
             text,
         )
     )
+
+
+def _extract_explicit_named_bus_numbers(text: str) -> list[str]:
+    """Return route names whose prefix or hyphen is semantically significant."""
+    matches = re.findall(
+        r"(?<![0-9A-Za-z])([A-Za-z]{1,3}\d{1,4}|\d{1,4}-\d{1,4}[가-힣]*?)"
+        r"(?=\s*번(?:\s|$|[,.!?])|\s|$|[,.!?])",
+        text,
+    )
+    return [value.upper() if value[0].isalpha() else value for value in matches]
+
+
+def _preserve_explicit_named_bus_number(text: str, parsed: ParsedIntent) -> ParsedIntent:
+    """Prevent the LLM from stripping M/N prefixes or route-name hyphens."""
+    candidates = list(dict.fromkeys(_extract_explicit_named_bus_numbers(text)))
+    if not candidates:
+        return parsed
+    if len(candidates) != 1:
+        return ParsedIntent()
+
+    candidate = candidates[0]
+    parsed_number = (parsed.bus_number or "").strip()
+    if parsed_number.upper() == candidate.upper():
+        return replace(parsed, bus_number=candidate)
+
+    if candidate[0].isalpha() and parsed_number == re.sub(r"^[A-Za-z]+", "", candidate):
+        logger.warning("LLM stripped a route prefix; restoring the explicit transcript value")
+        return replace(parsed, bus_number=candidate)
+
+    # A conflict is safety-sensitive: ask again instead of querying another route.
+    logger.warning("LLM bus number conflicts with the explicit named route; requesting confirmation")
+    return ParsedIntent()
 
 
 def _mock_parse_transit_intent(transcript: str) -> ParsedIntent:

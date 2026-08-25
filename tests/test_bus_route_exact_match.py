@@ -1,7 +1,10 @@
 import asyncio
 
+import pytest
+
 from app.services.ai import llm_service
 from app.services.ai.korean_number_normalizer import normalize_bus_number_token
+from app.services.core.service_types import ParsedIntent
 from app.services.transit import public_bus_service
 
 
@@ -57,6 +60,57 @@ def test_numeric_extractor_never_takes_suffix_from_named_routes() -> None:
     assert llm_service._extract_bus_number("N13번 언제 와요") is None
     assert llm_service._extract_bus_number("M5333번 언제 와요") is None
     assert llm_service._extract_bus_number("3413번 언제 와요") == "3413"
+
+
+@pytest.mark.parametrize(
+    ("transcript", "llm_number", "expected"),
+    [
+        ("M5333번 언제 와요", "5333", "M5333"),
+        ("N13번 언제 와요", "13", "N13"),
+        ("30-5하남 버스 언제 와요", "30-5하남", "30-5하남"),
+    ],
+)
+def test_llm_path_preserves_explicit_named_route(
+    monkeypatch,
+    transcript: str,
+    llm_number: str,
+    expected: str,
+) -> None:
+    async def fake_call_llm(*_args, **_kwargs) -> ParsedIntent:
+        return ParsedIntent(
+            intent="arrival",
+            transport_mode="bus",
+            bus_number=llm_number,
+            confidence=0.9,
+        )
+
+    monkeypatch.setattr(llm_service, "_call_llm", fake_call_llm)
+    monkeypatch.setattr(llm_service, "get_bool_setting", lambda *_args: False)
+    monkeypatch.setattr(llm_service, "is_mock_mode", lambda: False)
+    monkeypatch.setattr(
+        llm_service,
+        "get_setting",
+        lambda name, default=None: "configured" if name == "OPENAI_API_KEY" else default,
+    )
+    monkeypatch.setattr(llm_service, "_get_openai_client", object)
+
+    parsed = asyncio.run(llm_service.parse_transit_intent(transcript))
+    assert parsed.intent == "arrival"
+    assert parsed.bus_number == expected
+
+
+def test_llm_conflict_with_hyphenated_route_requires_reconfirmation() -> None:
+    parsed = llm_service._preserve_explicit_named_bus_number(
+        "30-5하남 버스 언제 와요",
+        ParsedIntent(intent="arrival", bus_number="305", confidence=0.9),
+    )
+    assert parsed == ParsedIntent()
+    assert llm_service._extract_explicit_named_bus_numbers("30-5하남번 언제 와요") == [
+        "30-5하남"
+    ]
+    assert llm_service._has_ambiguous_bus_number_expression(
+        "M5333번 또는 5333번 중에"
+    )
 
 
 def test_bus_number_token_never_invents_a_number() -> None:
