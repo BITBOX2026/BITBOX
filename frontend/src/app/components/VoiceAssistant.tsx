@@ -51,8 +51,11 @@ export function VoiceAssistant({ onResultModeChange }: VoiceAssistantProps) {
   }, [reset]);
 
   useEffect(() => {
-    // 공용 키오스크에서는 브라우저 재시작 뒤 이전 이용자의 목적지를 복원하지 않습니다.
+    // 공용 키오스크에서는 브라우저 재시작 뒤 이전 이용자의 흔적을 복원하지 않습니다.
+    // 동의도 함께 지웁니다. 화면이 다시 뜬 시점의 이용자는 직전 이용자와 다른
+    // 사람일 수 있으므로, 이전 이용자의 동의로 새 이용자의 음성을 녹음하면 안 됩니다.
     clearRecentDestinationHistory();
+    removeKioskStorage(VOICE_CONSENT_KEY);
   }, []);
 
   useEffect(() => {
@@ -113,7 +116,7 @@ export function VoiceAssistant({ onResultModeChange }: VoiceAssistantProps) {
   }
 
   return (
-    <section className="relative flex h-full w-full overflow-hidden bg-[#123E49] font-['Noto_Sans_KR'] text-white">
+    <section className="relative flex h-full w-full overflow-hidden bg-[#123E49] font-kiosk text-white">
       <div className="absolute inset-x-0 top-0 h-1 bg-[#F0C929]" />
 
       {/* 화면을 보지 않는 사용자를 위한 상태 안내 (스크린리더 전용) */}
@@ -139,7 +142,7 @@ export function VoiceAssistant({ onResultModeChange }: VoiceAssistantProps) {
               </span>
             )}
           </span>
-          <button type="button" onClick={resetKioskSession} aria-label="오류 닫기" title="오류 닫기" className="grid size-7 shrink-0 place-items-center rounded hover:bg-red-100">
+          <button type="button" onClick={resetKioskSession} aria-label="오류 닫기" title="오류 닫기" className="grid size-11 shrink-0 place-items-center rounded hover:bg-red-100">
             <X className="size-4" />
           </button>
         </div>
@@ -190,7 +193,7 @@ export function VoiceAssistant({ onResultModeChange }: VoiceAssistantProps) {
           <span className="text-center text-xs font-bold text-white/65">
             {status === "idle" ? "음성으로 찾기" : status === "starting" ? "권한 확인 중" : status === "listening" ? "눌러서 완료" : status === "confirming" ? "후보를 선택하세요" : "조회 중"}
           </span>
-          <button type="button" onClick={() => { setConsentRequired(false); setPrivacyOpen(true); }} aria-label="개인정보 처리 안내" title="개인정보 처리 안내" className="grid size-7 place-items-center rounded text-white/55 hover:bg-white/10 hover:text-white">
+          <button type="button" onClick={() => { setConsentRequired(false); setPrivacyOpen(true); }} aria-label="개인정보 처리 안내" title="개인정보 처리 안내" className="grid size-11 place-items-center rounded text-white/55 hover:bg-white/10 hover:text-white">
             <ShieldCheck className="size-4" />
           </button>
         </div>

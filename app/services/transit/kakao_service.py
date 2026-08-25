@@ -73,6 +73,7 @@ async def _kakao_fetch(
             f"Kakao Local API HTTP 오류: {response.status_code}",
             user_message="장소 검색 서비스를 사용할 수 없습니다. 잠시 후 다시 시도해 주세요.",
             retryable=response.status_code == 429 or response.status_code >= 500,
+            provider_down=response.status_code in {401, 403},
         )
     try:
         return response.json()

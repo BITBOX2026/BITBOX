@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { BusOption as BusInfo } from "../../types/bus";
-import { getDefaultArrivals, getCongestionLabel, getCongestionColor } from "../../api/busService";
+import { getDefaultArrivals, getCongestionLabel, getCongestionColor, describeArrivalStatus } from "../../api/busService";
 import { Accessibility, BusFront, ChevronLeft, ChevronRight, MapPin, Pause, Play, Radio, RefreshCw, Volume2, Wifi, ZoomIn } from "lucide-react";
 import { useAccessibilityDisplay } from "../../hooks/useAccessibilityDisplay";
+import { cancelSpeech, speakKorean } from "../../utils/speech";
 
 const STATION_NAME = import.meta.env.VITE_STATION_NAME ?? "정류장";
 
@@ -15,6 +16,9 @@ const MAX_MIN       = 30;
 const DAY_KR = ["일", "월", "화", "수", "목", "금", "토"];
 
 export function accessibilityScore(bus: BusInfo): number {
+  // 도착 시각이 없는 행은 arrivalMin 이 -1 이라 정렬에서 맨 앞으로 튀어나옵니다.
+  // 탑승할 수 없는 노선이므로 항상 뒤로 보냅니다.
+  if (bus.status !== "live") return Number.MAX_SAFE_INTEGER;
   const fullPenalty = bus.isFullFlag ? 100 : 0;
   const lowFloorBonus = bus.busType === 1 ? -20 : 0;
   const congestionPenalty = bus.congestion === 5 ? 15 : bus.congestion === 4 ? 5 : bus.congestion === 0 ? 10 : 0;
@@ -24,6 +28,12 @@ export function accessibilityScore(bus: BusInfo): number {
 // 카드/행 전체를 스크린리더가 하나의 문장으로 읽도록 요약합니다.
 // (개별 텍스트 조각을 순서대로 읽으면 맥락 없이 끊겨 들리는 문제를 방지)
 export function describeBus(bus: BusInfo): string {
+  if (bus.status !== "live") {
+    // 음수 sentinel 을 시간 비교에 넣으면 "곧 도착"으로 잘못 읽힙니다.
+    const parts = [`${bus.busNumber}번 버스`, describeArrivalStatus(bus.status)];
+    if (bus.isLastBus) parts.push("막차");
+    return parts.join(", ");
+  }
   const arrival = bus.traTimeSec < SOON_ARRIVE ? "곧 도착" : `약 ${bus.arrivalMin}분 후 도착`;
   const congestion = getCongestionLabel(bus.congestion);
   const parts = [`${bus.busNumber}번 버스`, arrival, `혼잡도 ${congestion}`];
@@ -32,6 +42,24 @@ export function describeBus(bus: BusInfo): string {
   if (bus.isFullFlag) parts.push("만차");
   if (bus.isLastBus) parts.push("막차");
   return parts.join(", ");
+}
+
+/**
+ * 전광판 오류 배너에 쓸 한국어 문구를 고릅니다.
+ *
+ * `AbortSignal.timeout()` 이 만드는 DOMException 의 message 는 "signal timed out"
+ * 같은 영어 기술 문구입니다. 그대로 배너에 넣으면 교통약자 이용자에게 아무 의미가
+ * 없으므로, 서버가 내려 준 한국어 안내만 통과시키고 나머지는 정해진 문구로 바꿉니다.
+ */
+export function toKoreanBoardError(error: unknown): string {
+  if (error instanceof DOMException) {
+    return error.name === "TimeoutError" || error.name === "AbortError"
+      ? "도착 정보를 불러오는 데 시간이 오래 걸립니다. 잠시 후 다시 시도해 주세요."
+      : "도착 정보를 불러오지 못했습니다.";
+  }
+  const message = error instanceof Error ? error.message.trim() : "";
+  // 한글이 포함된 메시지만 서버가 준 사용자 안내로 간주합니다.
+  return /[가-힣]/.test(message) ? message : "도착 정보를 불러오지 못했습니다.";
 }
 
 export function getApproachThreshold(previous: number | null, current: number): number | null {
@@ -118,7 +146,7 @@ function SoonCard({ bus, isTracked, onTrack }: { bus: BusInfo; isTracked: boolea
       <div className={`rounded-full px-3 py-0.5 text-[12px] font-black border ${congColor}`}>
         {congLabel}
       </div>
-      <div className="max-w-full truncate text-[28px] font-black text-[#FACC15] font-mono leading-none sm:text-[36px] md:text-[42px]">
+      <div className="max-w-full truncate font-mono text-[28px] font-black leading-normal text-[#FACC15] sm:text-[36px] md:text-[42px]">
         {bus.busNumber}
       </div>
       <div className="flex flex-wrap justify-center gap-1">
@@ -180,7 +208,9 @@ function useBusArrivals() {
       setLastUpdated(new Date());
     } catch (err) {
       if (!mountedRef.current) return;
-      setError(err instanceof Error ? err.message : "도착 정보를 불러오지 못했습니다.");
+      // DOMException 의 원문("signal timed out")은 영어 기술 문구라 그대로
+      // 보여 주면 안 됩니다. 서버가 준 한국어 안내만 통과시킵니다.
+      setError(toKoreanBoardError(err));
     } finally {
       inFlightRef.current = false;
       if (mountedRef.current) setLoading(false);
@@ -211,15 +241,22 @@ export function BusInfoList() {
   const [autoRotate, setAutoRotate] = useState(true);
   const [trackedBusId, setTrackedBusId] = useState<string | null>(null);
   const lastRemainingStopsRef = useRef<number | null>(null);
-  const approachUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+  // 진행 중인 도착 알림의 세대 번호. 브라우저 음성과 서버 음성 어느 쪽으로 나가든
+  // 같은 방식으로 소유권을 판단하기 위해 객체 대신 숫자를 씁니다.
+  const approachSpeechIdRef = useRef(0);
+  const approachSpeakingRef = useRef(false);
+  const approachReleaseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const now = useLiveClock();
   const { buses, liveStationName, loading, error, lastUpdated, refetch } = useBusArrivals();
 
   const cancelApproachSpeech = useCallback(() => {
-    if (approachUtteranceRef.current && "speechSynthesis" in window) {
-      window.speechSynthesis.cancel();
-      approachUtteranceRef.current = null;
+    approachSpeechIdRef.current += 1;
+    approachSpeakingRef.current = false;
+    if (approachReleaseTimerRef.current) {
+      clearTimeout(approachReleaseTimerRef.current);
+      approachReleaseTimerRef.current = null;
     }
+    cancelSpeech();
   }, []);
 
   useEffect(() => {
@@ -228,7 +265,7 @@ export function BusInfoList() {
       return;
     }
     const tracked = buses.find((bus) => bus.id === trackedBusId || bus.plainNo === trackedBusId);
-    if (!tracked || tracked.remainingStops < 0) return;
+    if (!tracked || tracked.status !== "live" || tracked.remainingStops < 0) return;
 
     const previous = lastRemainingStopsRef.current;
     const crossed = getApproachThreshold(previous, tracked.remainingStops);
@@ -236,11 +273,8 @@ export function BusInfoList() {
       lastRemainingStopsRef.current = tracked.remainingStops;
       return;
     }
-    if (!("speechSynthesis" in window)) {
-      lastRemainingStopsRef.current = tracked.remainingStops;
-      return;
-    }
-    if (window.speechSynthesis.speaking) {
+    // 안내가 재생 중이면 잘라내지 않고 이번 임계값은 넘깁니다.
+    if (approachSpeakingRef.current) {
       lastRemainingStopsRef.current = tracked.remainingStops;
       return;
     }
@@ -251,20 +285,28 @@ export function BusInfoList() {
       : crossed === 1
         ? `${tracked.busNumber}번 버스가 한 정거장 전입니다.`
         : `${tracked.busNumber}번 버스가 세 정거장 이내로 접근했습니다.`;
-    const utterance = new SpeechSynthesisUtterance(message);
-    utterance.lang = "ko-KR";
-    utterance.rate = 0.9;
-    approachUtteranceRef.current = utterance;
-    const releaseUtterance = () => {
-      if (approachUtteranceRef.current === utterance) {
-        approachUtteranceRef.current = null;
+
+    const speechId = ++approachSpeechIdRef.current;
+    approachSpeakingRef.current = true;
+    const release = () => {
+      if (approachSpeechIdRef.current !== speechId) return;
+      approachSpeakingRef.current = false;
+      if (approachReleaseTimerRef.current) {
+        clearTimeout(approachReleaseTimerRef.current);
+        approachReleaseTimerRef.current = null;
       }
     };
-    utterance.onend = releaseUtterance;
-    utterance.onerror = releaseUtterance;
-    window.speechSynthesis.speak(utterance);
+    // 재생 종료 신호가 오지 않는 경우에도 다음 알림이 영영 막히지 않도록 상한을 둡니다.
+    approachReleaseTimerRef.current = setTimeout(release, 15_000);
+
+    // 기기에 한국어 음성이 없으면 서버 음성으로 대체됩니다. 둘 다 안 되면
+    // 화면의 도착 표시로만 안내되며, 알림 자체는 조용히 실패합니다.
+    void speakKorean(message, { onEnd: release }).then((outcome) => {
+      if (outcome === "unavailable") release();
+    });
+
     return () => {
-      if (approachUtteranceRef.current === utterance) {
+      if (approachSpeechIdRef.current === speechId) {
         cancelApproachSpeech();
       }
     };
@@ -284,7 +326,7 @@ export function BusInfoList() {
     [accessibleMode, buses],
   );
   const arrivingSoon = useMemo(
-    () => rankedBuses.filter((bus) => bus.traTimeSec < SOON_SEC),
+    () => rankedBuses.filter((bus) => bus.status === "live" && bus.traTimeSec < SOON_SEC),
     [rankedBuses],
   );
   const soonTotalPages = Math.max(1, Math.ceil(arrivingSoon.length / SOON_PER_PAGE));
@@ -320,7 +362,7 @@ export function BusInfoList() {
   const isStale = !loading && (!lastUpdated || now.getTime() - lastUpdated.getTime() > 45_000);
 
   return (
-    <div className="flex h-full w-full flex-col overflow-hidden bg-[#EDF1F3] font-['Noto_Sans_KR']">
+    <div className="flex h-full w-full flex-col overflow-hidden bg-[#EDF1F3] font-kiosk">
 
       {/* ── 헤더 ─────────────────────────────────── */}
       <div className="flex shrink-0 items-center justify-between border-b-4 border-[#F0C929] bg-[#171D23] px-3 py-2 sm:px-6 sm:py-3">
@@ -330,7 +372,7 @@ export function BusInfoList() {
           </div>
           <div className="min-w-0">
             <span className="mb-0.5 hidden text-[13px] font-bold text-white/50 sm:block">서울특별시 · 실시간 버스정보</span>
-            <span className="block max-w-[36vw] truncate text-[18px] font-black leading-tight text-white sm:max-w-[44vw] sm:text-[28px] md:text-[32px]">{liveStationName || STATION_NAME}</span>
+            <span className="block max-w-[36vw] truncate text-[18px] font-black leading-normal text-white sm:max-w-[44vw] sm:text-[28px] md:text-[32px]">{liveStationName || STATION_NAME}</span>
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2 sm:gap-3">
@@ -338,7 +380,7 @@ export function BusInfoList() {
             type="button"
             onClick={toggleLargeTextMode}
             aria-pressed={largeTextMode}
-            className={`inline-flex items-center gap-2 rounded-md border p-2 text-xs font-black sm:px-3 ${largeTextMode ? "border-[#F0C929] bg-[#F0C929] text-[#171D23]" : "border-white/20 bg-white/10 text-white"}`}
+            className={`inline-flex min-h-11 min-w-11 items-center justify-center gap-2 rounded-md border p-2 text-xs font-black sm:px-3 ${largeTextMode ? "border-[#F0C929] bg-[#F0C929] text-[#171D23]" : "border-white/20 bg-white/10 text-white"}`}
             title="큰 글씨·고대비 화면으로 전환"
           >
             <ZoomIn className="size-4" /><span className="hidden sm:inline">큰 글씨</span>
@@ -347,7 +389,7 @@ export function BusInfoList() {
             type="button"
             onClick={() => { setAccessibleMode((enabled) => !enabled); setMainPage(0); setSoonPage(0); }}
             aria-pressed={accessibleMode}
-            className={`inline-flex items-center gap-2 rounded-md border p-2 text-xs font-black sm:px-3 ${accessibleMode ? "border-[#F0C929] bg-[#F0C929] text-[#171D23]" : "border-white/20 bg-white/10 text-white"}`}
+            className={`inline-flex min-h-11 min-w-11 items-center justify-center gap-2 rounded-md border p-2 text-xs font-black sm:px-3 ${accessibleMode ? "border-[#F0C929] bg-[#F0C929] text-[#171D23]" : "border-white/20 bg-white/10 text-white"}`}
             title="저상·비혼잡 도착 차량 우선 표시"
           >
             <Accessibility className="size-4" /><span className="hidden sm:inline">저상·여유 우선</span>
@@ -371,7 +413,11 @@ export function BusInfoList() {
       )}
 
       {/* ── 잠시 후 도착 (3분 미만, 시간 없음) ───── */}
-      <div className="shrink-0 border-b border-[#C99F11] bg-[#F0C929] px-3 pb-3 pt-2 sm:px-5 sm:pb-4 sm:pt-3">
+      {/*
+        화면이 낮을 때 이 영역이 줄어들 수 있어야 합니다. 여기 있는 차량은 아래
+        목록에도 다시 나오므로, 공간이 부족하면 목록을 살리는 쪽이 맞습니다.
+      */}
+      <div className="min-h-0 shrink border-b border-[#C99F11] bg-[#F0C929] px-3 pb-3 pt-2 sm:px-5 sm:pb-4 sm:pt-3">
         <div className="flex justify-between items-end mb-3">
           <div className="flex flex-col text-left">
             <span className="text-[20px] font-black leading-tight text-[#2C2A1A] sm:text-[24px]">잠시 후 도착</span>
@@ -407,7 +453,7 @@ export function BusInfoList() {
       </div>
 
       {/* ── 메인 버스 목록 ───────────────────────── */}
-      <div className="flex-1 flex flex-col min-h-0 bg-white">
+      <div className="flex min-h-[232px] flex-1 flex-col bg-white">
         {/* 테이블 헤더 */}
         <div className="grid shrink-0 grid-cols-[minmax(78px,1fr)_82px_minmax(120px,2fr)] border-b border-[#374151] bg-[#1C1F26] md:grid-cols-[150px_110px_1fr]">
           {["노선번호", "예정시간", "버스 현재 위치"].map((label, i) => (
@@ -418,29 +464,45 @@ export function BusInfoList() {
         </div>
 
         {/* 목록 본문 */}
-        <div data-testid="main-bus-scroll" className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto bg-[#F1F5F9]">
+        {/*
+          스크롤 영역에는 키보드로 도달할 수 있어야 합니다(WCAG 2.1.1). 평소에는 안에
+          있는 버스 행 버튼이 그 역할을 하지만, 도착 정보가 하나도 없을 때(외부 API 장애
+          등)는 초점을 받을 요소가 없어 키보드·스크린리더 이용자가 이 영역을 스크롤할
+          수 없게 됩니다. 그래서 영역 자체를 초점 대상으로 만들고 이름을 붙입니다.
+        */}
+        <div
+          data-testid="main-bus-scroll"
+          tabIndex={0}
+          role="region"
+          aria-label="버스 도착 목록"
+          className="flex min-h-[112px] min-w-0 flex-1 flex-col overflow-y-auto bg-[#F1F5F9] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[#123E49]"
+        >
           <div className="flex min-h-full min-w-0 flex-col">
             {loading
               ? Array.from({ length: MAIN_PER_PAGE }).map((_, i) => <SkeletonRow key={i} idx={i} />)
               : currentMain.map((bus, idx) => {
                   const congLabel = getCongestionLabel(bus.congestion);
                   const congColor = getCongestionColor(bus.congestion);
-                  const isArriving = bus.traTimeSec < SOON_ARRIVE;
+                  const isArriving = bus.status === "live" && bus.traTimeSec < SOON_ARRIVE;
 
                   return (
-                    <button data-testid="main-bus-row" type="button" onClick={() => toggleTracking(bus)} aria-pressed={trackedBusId === (bus.plainNo || bus.id)} aria-label={describeBus(bus)} key={bus.id} className={`grid min-h-[56px] min-w-0 w-full flex-1 shrink-0 grid-cols-[minmax(78px,1fr)_82px_minmax(120px,2fr)] items-center border-b border-[#E2E8F0] text-left sm:min-h-[68px] md:grid-cols-[150px_110px_1fr]
+                    <button data-testid="main-bus-row" type="button" disabled={bus.status !== "live"} onClick={() => toggleTracking(bus)} aria-pressed={bus.status === "live" ? trackedBusId === (bus.plainNo || bus.id) : undefined} aria-label={describeBus(bus)} key={bus.id} className={`grid min-h-[56px] min-w-0 w-full flex-1 shrink-0 grid-cols-[minmax(78px,1fr)_82px_minmax(120px,2fr)] items-center border-b border-[#E2E8F0] text-left disabled:cursor-default sm:min-h-[68px] md:grid-cols-[150px_110px_1fr]
                       ${trackedBusId === (bus.plainNo || bus.id) ? "bg-amber-50 ring-2 ring-inset ring-[#F0C929]" : idx % 2 === 0 ? "bg-white" : "bg-[#F8FAFC]"}`}>
 
                       {/* 노선번호 */}
                       <div className="flex items-center justify-center px-4 border-r border-[#E2E8F0] h-full">
-                        <span className="max-w-full truncate text-[22px] font-black leading-none text-[#1E293B] sm:text-[27px] md:text-[32px]">
+                        <span className="max-w-full truncate text-[22px] font-black leading-normal text-[#1E293B] sm:text-[27px] md:text-[32px]">
                           {bus.busNumber}
                         </span>
                       </div>
 
                       {/* 예정시간 */}
                       <div className="flex h-full items-center justify-center border-r border-[#E2E8F0]">
-                        {isArriving ? (
+                        {bus.status !== "live" ? (
+                          <span className="px-1 text-center text-[13px] font-black leading-tight text-slate-500">
+                            {describeArrivalStatus(bus.status)}
+                          </span>
+                        ) : isArriving ? (
                           <div className="flex flex-col items-center">
                             <span className="text-[20px] font-black text-red-500 leading-tight">곧</span>
                             <span className="text-[20px] font-black text-red-500 leading-tight">도착</span>
@@ -452,12 +514,14 @@ export function BusInfoList() {
 
                       {/* 버스 현재 위치 */}
                       <div className="flex items-center px-4 h-full gap-3">
-                        <div className={`border rounded-lg px-2 py-1 shrink-0 ${congColor}`}>
-                          <span className="text-[12px] font-black">{congLabel}</span>
-                        </div>
+                        {bus.status === "live" && (
+                          <div className={`border rounded-lg px-2 py-1 shrink-0 ${congColor}`}>
+                            <span className="text-[12px] font-black">{congLabel}</span>
+                          </div>
+                        )}
                         <div className="flex flex-col min-w-0">
-                          <span className="truncate text-[14px] font-black leading-tight text-[#1E293B] sm:text-[17px] md:text-[20px]">
-                            {bus.currentStationName}
+                          <span className="truncate text-[14px] font-black leading-normal text-[#1E293B] sm:text-[17px] md:text-[20px]">
+                            {bus.status === "live" ? bus.currentStationName : bus.arrivalMsg}
                           </span>
                           <StopsDot remaining={bus.remainingStops} />
                           <div className="mt-1 flex gap-1">
@@ -487,23 +551,25 @@ export function BusInfoList() {
         {/* 푸터 */}
         <div className="flex shrink-0 items-center justify-between border-t border-[#CBD5E1] bg-[#EDF1F3] px-3 py-2 sm:px-5">
           <div className="flex min-w-0 items-center gap-3">
-            <button type="button" onClick={refetch} className={`inline-flex items-center gap-1.5 text-[12px] font-bold hover:text-[#1B2930] ${isStale ? "text-red-700" : "text-[#52616B]"}`} title="도착 정보 새로고침">
-              <Wifi className={`size-3.5 ${isStale ? "text-red-600" : "text-emerald-600"}`} /> {isStale ? "정보 갱신 지연 · 다시 시도" : "실시간 · 15초마다 갱신"}
+            <button type="button" onClick={refetch} className={`inline-flex min-h-11 min-w-0 items-center gap-1.5 text-left text-[12px] font-bold hover:text-[#1B2930] ${isStale ? "text-red-700" : "text-[#52616B]"}`} title="도착 정보 새로고침">
+              <Wifi className={`size-4 shrink-0 ${isStale ? "text-red-600" : "text-emerald-600"}`} /> <span className="truncate">{isStale ? "정보 갱신 지연 · 다시 시도" : "실시간 · 15초마다 갱신"}</span>
             </button>
             {trackedBusId && <span className="hidden items-center gap-1 truncate text-[12px] font-black text-[#145466] sm:inline-flex"><Volume2 className="size-3.5" /> 선택 차량 도착 알림 중</span>}
           </div>
           <div className="flex items-center gap-1.5" aria-label="버스 목록 페이지 제어">
             {mainTotalPages > 1 && (
-              <button type="button" onClick={() => { setAutoRotate(false); setMainPage((page) => (page - 1 + mainTotalPages) % mainTotalPages); }} className="grid size-7 place-items-center rounded border border-slate-300 bg-white text-slate-700" aria-label="이전 버스 목록"><ChevronLeft className="size-4" /></button>
+              <button type="button" onClick={() => { setAutoRotate(false); setMainPage((page) => (page - 1 + mainTotalPages) % mainTotalPages); }} className="grid size-11 place-items-center rounded border border-slate-300 bg-white text-slate-700" aria-label="이전 버스 목록"><ChevronLeft className="size-4" /></button>
             )}
             {(mainTotalPages > 1 || soonTotalPages > 1) && (
-              <button type="button" onClick={() => setAutoRotate((enabled) => !enabled)} aria-pressed={!autoRotate} className="grid size-7 place-items-center rounded border border-slate-300 bg-white text-slate-700" aria-label={autoRotate ? "자동 페이지 넘김 중지" : "자동 페이지 넘김 시작"}>{autoRotate ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}</button>
+              <button type="button" onClick={() => setAutoRotate((enabled) => !enabled)} aria-pressed={!autoRotate} className="grid size-11 place-items-center rounded border border-slate-300 bg-white text-slate-700" aria-label={autoRotate ? "자동 페이지 넘김 중지" : "자동 페이지 넘김 시작"}>{autoRotate ? <Pause className="size-4" /> : <Play className="size-4" />}</button>
             )}
             {Array.from({ length: mainTotalPages }).map((_, i) => (
-              <button key={i} type="button" onClick={() => { setAutoRotate(false); setMainPage(i); }} aria-label={`버스 목록 ${i + 1}페이지`} aria-current={i === curMainPage ? "page" : undefined} className={`h-2 rounded-full transition-all duration-300 ${i === curMainPage ? "w-6 bg-[#475569]" : "w-2 bg-[#CBD5E1]"}`} />
+              <button key={i} type="button" onClick={() => { setAutoRotate(false); setMainPage(i); }} aria-label={`버스 목록 ${i + 1}페이지`} aria-current={i === curMainPage ? "page" : undefined} className="grid h-11 w-6 shrink-0 place-items-center rounded">
+                <span className={`block h-2 rounded-full transition-all duration-300 ${i === curMainPage ? "w-6 bg-[#475569]" : "w-2 bg-[#CBD5E1]"}`} />
+              </button>
             ))}
             {mainTotalPages > 1 && (
-              <button type="button" onClick={() => { setAutoRotate(false); setMainPage((page) => (page + 1) % mainTotalPages); }} className="grid size-7 place-items-center rounded border border-slate-300 bg-white text-slate-700" aria-label="다음 버스 목록"><ChevronRight className="size-4" /></button>
+              <button type="button" onClick={() => { setAutoRotate(false); setMainPage((page) => (page + 1) % mainTotalPages); }} className="grid size-11 place-items-center rounded border border-slate-300 bg-white text-slate-700" aria-label="다음 버스 목록"><ChevronRight className="size-4" /></button>
             )}
           </div>
         </div>

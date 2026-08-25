@@ -72,6 +72,9 @@ class Settings(BaseSettings):
     VOICE_DAILY_REQUEST_LIMIT: int = 500
     ROUTE_MAX_CONCURRENT_REQUESTS: int = 12
     ROUTE_DAILY_REQUEST_LIMIT: int = 5000
+    # 브라우저가 한국어를 말하지 못하는 기기에서만 쓰이는 서버 음성 합성 한도.
+    # 같은 문구가 반복되어 캐시 적중률이 높으므로 실제 호출은 이보다 훨씬 적습니다.
+    SPEECH_DAILY_REQUEST_LIMIT: int = 2000
     PLACE_MAX_CONCURRENT_REQUESTS: int = 12
     PLACE_DAILY_REQUEST_LIMIT: int = 10000
     EXTERNAL_CIRCUIT_FAILURE_THRESHOLD: int = 5
@@ -142,6 +145,7 @@ def validate_required_settings() -> None:
         "VOICE_MAX_CONCURRENT_REQUESTS", "VOICE_DAILY_REQUEST_LIMIT",
         "ROUTE_MAX_CONCURRENT_REQUESTS", "ROUTE_DAILY_REQUEST_LIMIT",
         "PLACE_MAX_CONCURRENT_REQUESTS", "PLACE_DAILY_REQUEST_LIMIT",
+        "SPEECH_DAILY_REQUEST_LIMIT",
         "EXTERNAL_CIRCUIT_FAILURE_THRESHOLD", "EXTERNAL_CIRCUIT_RESET_SECONDS",
     )
     for name in positive_settings:

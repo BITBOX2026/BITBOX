@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { requestTextRoute, uploadVoiceAudio, type RouteDestination, type TransitConfirmation, type PlaceSuggestion, type SafetyDecision } from "../api/client";
 import { BusOption } from "../types/bus";
+import { cancelSpeech } from "../utils/speech";
 
 type RecorderStatus = "idle" | "starting" | "listening" | "loading" | "confirming" | "result";
 const NO_SPEECH_TIMEOUT_MS = 8_000;
@@ -221,9 +222,8 @@ export function useVoiceRecorder() {
       if (!window.isSecureContext && window.location.hostname !== "localhost" && window.location.hostname !== "127.0.0.1") {
         throw new Error("음성 기능은 HTTPS 연결에서만 사용할 수 있습니다. 목적지를 직접 입력해 주세요.");
       }
-      if ("speechSynthesis" in window && window.speechSynthesis.speaking) {
-        window.speechSynthesis.cancel();
-      }
+      // 녹음 시작 전에 진행 중인 안내 음성을 멈춥니다(브라우저·서버 양쪽).
+      cancelSpeech();
 
       if (!("MediaRecorder" in window)) {
         throw new Error("이 브라우저는 음성 녹음을 지원하지 않습니다.");
@@ -333,7 +333,7 @@ export function useVoiceRecorder() {
     // 녹음기가 이미 inactive 여도 스트림이 살아 있으면 마이크 표시가 남으므로 항상 정리합니다.
     mediaRecorderRef.current?.stream.getTracks().forEach((track) => track.stop());
     if (audioContextRef.current?.state !== "closed") void audioContextRef.current?.close();
-    window.speechSynthesis?.cancel();
+    cancelSpeech();
     setStatus("idle");
     setDestination("");
     setBuses([]);

@@ -49,6 +49,7 @@ async def _odsay_fetch(params: dict) -> dict:
         raise ExternalServiceError(
             f"경로 API 오류: {error_text}",
             retryable=not auth_failed,
+            provider_down=auth_failed,
         )
     return payload
 

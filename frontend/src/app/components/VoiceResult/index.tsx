@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Home, Info, MapPin, Mic, Play, RotateCcw, ShieldCheck, Square, Volume2 } from "lucide-react";
 import type { SafetyDecision } from "../../../api/client";
 import type { BusOption } from "../../../types/bus";
+import { cancelSpeech, speakKorean, SPEECH_CANCEL_EVENT } from "../../../utils/speech";
 import { BusList } from "./BusList";
 import { RouteDetailOverlay } from "./RouteDetail";
 
@@ -41,6 +42,7 @@ export function VoiceResult({
   const [selectedBus, setSelectedBus] = useState<BusOption | null>(buses[0] ?? null);
   const [playbackStatus, setPlaybackStatus] = useState<"idle" | "playing" | "blocked">("idle");
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const playbackIdRef = useRef(0);
   const rawAudioData = audio_base64 || audioBase64;
   const checkedAtLabel = formatCheckedAt(safetyDecision?.checked_at);
 
@@ -48,39 +50,58 @@ export function VoiceResult({
     setSelectedBus(buses[0] ?? null);
   }, [buses]);
 
-  const stopPlayback = useCallback(() => {
+  const stopRawPlayback = useCallback(() => {
+    if (!audioRef.current) return;
+    playbackIdRef.current += 1;
     audioRef.current?.pause();
     if (audioRef.current) audioRef.current.currentTime = 0;
     audioRef.current = null;
-    window.speechSynthesis?.cancel();
     setPlaybackStatus("idle");
   }, []);
+
+  const stopPlayback = useCallback(() => {
+    stopRawPlayback();
+    cancelSpeech();
+    setPlaybackStatus("idle");
+  }, [stopRawPlayback]);
+
+  useEffect(() => {
+    window.addEventListener(SPEECH_CANCEL_EVENT, stopRawPlayback);
+    return () => window.removeEventListener(SPEECH_CANCEL_EVENT, stopRawPlayback);
+  }, [stopRawPlayback]);
 
   const playMessage = useCallback(async () => {
     if (!message) return;
     stopPlayback();
+    const playbackId = playbackIdRef.current;
     if (rawAudioData) {
       const audioUrl = rawAudioData.startsWith("data:")
         ? rawAudioData
         : `data:audio/wav;base64,${rawAudioData}`;
       const audio = new Audio(audioUrl);
       audioRef.current = audio;
-      audio.onended = () => setPlaybackStatus("idle");
-      audio.onerror = () => setPlaybackStatus("blocked");
+      audio.onended = () => {
+        if (playbackIdRef.current === playbackId) setPlaybackStatus("idle");
+      };
+      audio.onerror = () => {
+        if (playbackIdRef.current === playbackId) setPlaybackStatus("blocked");
+      };
       try {
         await audio.play();
-        setPlaybackStatus("playing");
+        if (playbackIdRef.current === playbackId && audioRef.current === audio) {
+          setPlaybackStatus("playing");
+        }
       } catch {
+        if (playbackIdRef.current === playbackId) setPlaybackStatus("blocked");
+      }
+    } else {
+      // 브라우저가 한국어를 말할 수 없는 기기(라즈베리파이 등)에서는 서버 음성으로
+      // 대체됩니다. 둘 다 안 되면 화면에 재생 버튼을 남깁니다.
+      setPlaybackStatus("playing");
+      const outcome = await speakKorean(message, { onEnd: () => setPlaybackStatus("idle") });
+      if (playbackIdRef.current === playbackId && outcome === "unavailable") {
         setPlaybackStatus("blocked");
       }
-    } else if ("speechSynthesis" in window) {
-      const utterance = new SpeechSynthesisUtterance(message);
-      utterance.lang = "ko-KR";
-      utterance.rate = 0.9;
-      utterance.onend = () => setPlaybackStatus("idle");
-      utterance.onerror = () => setPlaybackStatus("blocked");
-      setPlaybackStatus("playing");
-      window.speechSynthesis.speak(utterance);
     }
   }, [message, rawAudioData, stopPlayback]);
 
@@ -92,9 +113,17 @@ export function VoiceResult({
   }, [message, playMessage, stopPlayback]);
 
   return (
-    <div className="relative flex h-full w-full flex-col overflow-hidden bg-[#123E49] font-['Noto_Sans_KR']">
-      {/* 음성으로만 전달되던 안내 문구를 스크린리더 사용자에게도 동일하게 전달 */}
-      <p aria-live="polite" className="sr-only">{message}</p>
+    <div className="relative flex h-full w-full flex-col overflow-hidden bg-[#123E49] font-kiosk">
+      {/*
+        안내 문구는 이 화면에서 소리로 재생됩니다. 같은 문장을 aria-live에도 넣으면
+        스크린리더 낭독과 TTS가 겹쳐 두 번 들립니다. 그래서 본문에는 자동 낭독을
+        일으키지 않는 sr-only 문단으로 두어 필요할 때 탐색해 읽을 수 있게 하고,
+        소리 재생이 차단된 경우에만 aria-live로 알립니다.
+      */}
+      <p className="sr-only">{message}</p>
+      <p aria-live="polite" className="sr-only">
+        {playbackStatus === "blocked" ? message : ""}
+      </p>
 
       <header className="z-10 flex min-h-14 shrink-0 items-center justify-between gap-2 border-b border-white/15 px-3 py-2 sm:px-5">
         <div className="flex min-w-0 items-center gap-2 sm:gap-4">

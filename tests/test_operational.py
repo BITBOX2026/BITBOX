@@ -115,7 +115,7 @@ def test_production_transit_smoke_rejects_inconsistent_route_time(monkeypatch) -
             "success": True,
             "buses": [{
                 "routeDetail": {
-                    "totalMin": 45,
+                    "totalMin": 30,
                     "steps": [
                         {"type": "walk", "durationMin": 1},
                         {"type": "bus", "durationMin": 41},
@@ -166,3 +166,55 @@ def test_readiness_http_boundary_returns_503_for_open_circuit(monkeypatch) -> No
 def test_production_smoke_requires_tls_1_2_or_newer() -> None:
     context = production_smoke._secure_ssl_context()
     assert context.minimum_version >= ssl.TLSVersion.TLSv1_2
+
+
+def test_production_smoke_tolerates_provider_wait_time_in_the_total(monkeypatch) -> None:
+    """ODsay 총시간은 대기시간을 포함할 수 있어 구간합과 정확히 같지 않을 수 있습니다.
+
+    배포 스모크가 등호를 요구하면 정상 데이터에서도 배포가 실패합니다. 계약은
+    "구간합이 총시간을 넘지 않는다"이므로 그 조건만 검사해야 합니다.
+    """
+    route_payload = {
+        "success": True,
+        "buses": [{
+            "routeDetail": {
+                "totalMin": 30,
+                "steps": [
+                    {"type": "walk", "durationMin": 3},
+                    {"type": "bus", "durationMin": 20},
+                ],
+            }
+        }],
+    }
+    errors = _run_transit_verification(monkeypatch, route_payload)
+    assert not [error for error in errors if "route API" in error]
+
+
+def test_production_smoke_survives_a_malformed_suggestion_payload(monkeypatch) -> None:
+    """후보 목록이 dict 가 아니어도 traceback 대신 오류 문자열을 남겨야 합니다."""
+    errors = _run_transit_verification(
+        monkeypatch,
+        {"success": True, "buses": [{"routeDetail": {"totalMin": 5, "steps": [{"type": "bus", "durationMin": 5}]}}]},
+        suggestions=["강남역"],
+    )
+    assert any("place suggestion" in error for error in errors)
+
+
+def _run_transit_verification(monkeypatch, route_payload: dict, suggestions=None) -> list[str]:
+    """`_verify_transit_apis` 를 네트워크 없이 실행합니다."""
+    if suggestions is None:
+        suggestions = [{"category_code": "SW8", "name": "강남역"}]
+
+    def fake_request(url: str, **_kwargs):
+        if url.endswith("/api/bus/default"):
+            body = {"success": True}
+        elif "/api/places/suggest" in url:
+            body = {"suggestions": suggestions}
+        else:
+            body = route_payload
+        return 200, {}, json.dumps(body).encode("utf-8")
+
+    monkeypatch.setattr(production_smoke, "_request", fake_request)
+    errors: list[str] = []
+    production_smoke._verify_transit_apis("https://example.test", errors)
+    return errors

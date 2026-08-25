@@ -104,7 +104,11 @@ def http_retry(function: Callable[..., Any]) -> Callable[..., Any]:
             result = await retried(*args, **kwargs)
         except Exception as exc:
             if _counts_toward_circuit(exc):
-                force_open = isinstance(exc, ExternalServiceError) and not exc.retryable
+                # 제공자 자체가 사용 불가일 때만 즉시 개방합니다. 요청 하나에 대한
+                # 4xx는 재시도 불가이지만 제공자는 정상이므로 횟수만 누적합니다.
+                force_open = (
+                    isinstance(exc, ExternalServiceError) and exc.provider_down
+                )
                 _record_circuit_failure(circuit_name, force_open=force_open)
             raise
         _record_circuit_success(circuit_name)

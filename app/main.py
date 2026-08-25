@@ -22,6 +22,7 @@ from app.core.runtime_metrics import runtime_snapshot
 from app.core.usage_guard import usage_snapshot
 from app.routers.bus import router as bus_router
 from app.routers.place import router as place_router
+from app.routers.speech import router as speech_router
 from app.routers.station import router as station_router
 from app.services.core.http_client import close_http_client
 from app.services.core.http_utils import circuit_snapshot
@@ -99,6 +100,7 @@ app.add_middleware(
 app.include_router(gateway_router, prefix="/api", tags=["Gateway"])
 app.include_router(bus_router, prefix="/api/bus", tags=["Bus"])
 app.include_router(place_router, prefix="/api/places", tags=["Places"])
+app.include_router(speech_router, prefix="/api/speech", tags=["Speech"])
 app.include_router(station_router, prefix="/api/station", tags=["Station"])
 
 

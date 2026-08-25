@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { BusOption } from "../../types/bus";
-import { accessibilityScore, describeBus, getApproachThreshold } from "./BusInfoList";
+import { accessibilityScore, describeBus, getApproachThreshold, toKoreanBoardError } from "./BusInfoList";
 import { selectRecordingMimeType } from "../../hooks/useVoiceRecorder";
 
 function bus(overrides: Partial<BusOption> = {}): BusOption {
   return {
     id: "vehicle-1",
     busNumber: "3214",
+    status: "live",
     arrivalMin: 5,
     traTimeSec: 300,
     arrivalMsg: "5분 후",
@@ -74,5 +75,45 @@ describe("getApproachThreshold", () => {
 
   it("does not repeat a threshold already announced", () => {
     expect(getApproachThreshold(2, 2)).toBeNull();
+  });
+});
+
+describe("arrival status handling", () => {
+  it("never reads a standby or terminal bus as arriving soon", () => {
+    // traTimeSec = -1 을 시간 비교에 그대로 넣으면 "곧 도착"으로 잘못 읽힙니다.
+    for (const status of ["standby", "terminal", "unknown"] as const) {
+      const description = describeBus(bus({ status, arrivalMin: -1, traTimeSec: -1 }));
+      expect(description).not.toContain("곧 도착");
+      expect(description).not.toContain("분 후 도착");
+    }
+    expect(describeBus(bus({ status: "standby", arrivalMin: -1, traTimeSec: -1 })))
+      .toBe("3214번 버스, 출발 대기 중");
+    expect(describeBus(bus({ status: "terminal", arrivalMin: -1, traTimeSec: -1 })))
+      .toBe("3214번 버스, 운행 종료");
+  });
+
+  it("sorts unavailable routes behind every boardable bus", () => {
+    const boardable = accessibilityScore(bus({ isFullFlag: true, congestion: 5, arrivalMin: 29 }));
+    const unavailable = accessibilityScore(bus({ status: "terminal", arrivalMin: -1, traTimeSec: -1 }));
+    expect(unavailable).toBeGreaterThan(boardable);
+  });
+});
+
+describe("toKoreanBoardError", () => {
+  it("replaces the English abort reason with a Korean explanation", () => {
+    const timeout = new DOMException("signal timed out", "TimeoutError");
+    expect(toKoreanBoardError(timeout)).not.toContain("signal");
+    expect(toKoreanBoardError(timeout)).toContain("시간이 오래 걸립니다");
+  });
+
+  it("keeps a Korean message that the server already produced", () => {
+    expect(toKoreanBoardError(new Error("버스 도착정보 서비스를 사용할 수 없습니다.")))
+      .toBe("버스 도착정보 서비스를 사용할 수 없습니다.");
+  });
+
+  it("falls back for any other technical failure", () => {
+    expect(toKoreanBoardError(new Error("NetworkError when attempting to fetch")))
+      .toBe("도착 정보를 불러오지 못했습니다.");
+    expect(toKoreanBoardError("boom")).toBe("도착 정보를 불러오지 못했습니다.");
   });
 });

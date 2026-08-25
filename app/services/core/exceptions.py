@@ -39,7 +39,16 @@ class TransportAPIError(PipelineError):
 
 
 class ExternalServiceError(TransportAPIError):
-    """An upstream service failed independently of the user's request."""
+    """An upstream service failed independently of the user's request.
+
+    ``retryable``    같은 요청을 다시 보내면 성공할 수 있는가 (재시도 판단).
+    ``provider_down`` 제공자 자체가 망가졌는가 (회로 즉시 개방 판단).
+
+    두 값은 서로 다릅니다. 잘못된 인증 키나 미설정은 재시도해도 소용없고 제공자
+    전체가 사용 불가이므로 회로를 즉시 엽니다. 반면 특정 요청 하나에 대한 400/404는
+    재시도해도 소용없지만 제공자는 정상이므로, 회로를 즉시 열어 ``/ready``를
+    503으로 만들면 안 됩니다. 후자는 실패 횟수만 누적해 임계값에서 열립니다.
+    """
 
     http_status = 502
     error_kind = "external_service"
@@ -50,9 +59,11 @@ class ExternalServiceError(TransportAPIError):
         *,
         user_message: str = "",
         retryable: bool = True,
+        provider_down: bool = False,
     ) -> None:
         super().__init__(message, user_message=user_message)
         self.retryable = retryable
+        self.provider_down = provider_down
 
 
 class RouteNotFoundError(TransportAPIError):

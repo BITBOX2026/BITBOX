@@ -187,16 +187,44 @@ BITBOX_TLS_KEY_PATH
 서비스 전환 뒤에는 버스 도착·장소 후보·버스 전용 경로를 각각 한 번 실제 호출해
 외부 키와 응답 계약까지 확인합니다. 이는 부하테스트가 아닌 배포당 1회 점검입니다.
 
-상태 점검, 로그 확인, 장애 대응, 롤백, 개인정보 처리 범위와 확장 조건은
-[`docs/OPERATIONS.md`](docs/OPERATIONS.md) 운영 런북을 따릅니다.
+배포 검증이 실패하면 [`deploy/rollback.sh`](deploy/rollback.sh)가 직전 릴리스로
+자동 복구합니다. 이 경로는 `tests/test_rollback_script.py`가 매 CI에서 실제로
+실행해 확인합니다. `BITBOX_ALERT_WEBHOOK_URL` 시크릿을 등록하지 않으면 장애 알림이
+발송되지 않으며, 이때는 배포 로그에 경고가 남고 EC2 저널에만 기록됩니다.
 
-## 6. 안내 정확도 범위
+상태 점검, 로그 확인, 장애 대응, 롤백, 알림 채널 설정, 단일 호스트 복구, 개인정보
+처리 범위와 확장 조건은 [`docs/OPERATIONS.md`](docs/OPERATIONS.md) 운영 런북을 따릅니다.
+
+## 6. 접근성과 글꼴
+
+- 주요 화면(홈·전광판·경로 결과·장소 확인·개인정보 안내·외부 장애)에 axe-core 기반
+  WCAG 2.1 A/AA 자동 검사를 CI에서 실행합니다: [`frontend/e2e/accessibility.spec.ts`](frontend/e2e/accessibility.spec.ts).
+  스크린리더가 실제로 받는 aria 트리도 함께 확인합니다.
+- 자동 검사는 기계가 판정 가능한 규칙만 봅니다. **실제 NVDA·VoiceOver·TalkBack
+  낭독 순서와 체감은 사람이 확인해야 하며 아직 수행하지 않았습니다.**
+- 한글 글꼴을 앱과 함께 배포합니다. 키오스크에 CJK 글꼴이 없어도 정류장 이름이
+  깨지지 않도록 Noto Sans KR을 현대 한글 전체로 서브셋해 세 굵기(400/700/900)만
+  포함했습니다.
+- 기기에 한국어 음성 엔진이 없으면(라즈베리파이 최소 설치 등) 브라우저
+  `speechSynthesis`는 **오류 없이 무음으로 끝납니다**. 이때 프론트가
+  `POST /api/speech` 서버 음성 합성으로 자동 대체하므로 도착 안내가 사라지지
+  않습니다. 브라우저가 한국어를 말할 수 있는 기기에서는 이 엔드포인트를 호출하지
+  않아 추가 비용이 없고, 반복되는 안내 문구는 서버에서 캐시합니다.
+
+### 글꼴 라이선스 고지
+
+`frontend/src/assets/fonts/`의 Noto Sans KR은 SIL Open Font License 1.1로
+배포됩니다. 라이선스 전문은 같은 디렉터리의
+[`OFL.txt`](frontend/src/assets/fonts/OFL.txt)에 포함되어 있습니다.
+Copyright © The Noto Project Authors.
+
+## 7. 안내 정확도 범위
 
 - 지도 선은 ODsay 정류장 순서와 구간 좌표를 연결한 예상 경로이며 도로 중심선과 완전히 같지 않을 수 있습니다.
 - 도착 단계 알림은 서울 버스 도착정보를 15초마다 갱신한 결과이며 GPS 연속 추적이 아닙니다.
 - 저상·여유 우선 정렬은 현재 정류장 도착 차량에 적용되며 목적지 경로 자체를 재계산하지 않습니다.
 
-## 7. 실증 평가
+## 8. 실증 평가
 
 사용자 과업 비교, 실제 음성 정확도, 위험한 번호 오안내, 접근성 및 장애·부하 검증은
 [`docs/EVALUATION.md`](docs/EVALUATION.md)의 절차를 따릅니다. 저장소에는 실제 참가자

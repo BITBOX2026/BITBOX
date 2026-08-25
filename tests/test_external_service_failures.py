@@ -4,9 +4,11 @@ import asyncio
 
 import httpx
 import pytest
+from fastapi import HTTPException
 
 import app.main as main_module
 from app.api import gateway
+from app.core.config import settings
 from app.core.runtime_metrics import runtime_snapshot
 from app.routers import bus as bus_router_module
 from app.routers import place as place_router_module
@@ -222,3 +224,98 @@ def test_bus_provider_failure_is_observable_as_502(monkeypatch) -> None:
     response = asyncio.run(request_board())
     assert response.status_code == 502
     assert response.json()["success"] is False
+
+
+# ---------------------------------------------------------------------------
+# 회로차단기: "제공자 고장"과 "요청 하나의 4xx"를 구분하는지
+#
+# /ready 는 회로가 하나라도 열리면 503 을 냅니다. 그래서 요청 하나에 대한 400/404
+# 같은 클라이언트 오류로 회로를 즉시 열면, 제공자가 멀쩡한데도 서비스 전체가
+# 준비되지 않은 것으로 보고됩니다. 배포 readiness 검사와 외부 모니터가 여기에
+# 걸릴 수 있으므로, 즉시 개방은 인증·설정 실패에만 적용되어야 합니다.
+# ---------------------------------------------------------------------------
+
+def test_request_level_client_error_does_not_open_the_circuit_immediately(monkeypatch) -> None:
+    circuit_name = "app.services.transit.kakao_service._kakao_fetch"
+    http_utils._circuits.pop(circuit_name, None)
+
+    class _NotFoundResponse:
+        status_code = 404
+
+        def json(self) -> dict:
+            return {}
+
+    class _NotFoundClient:
+        async def get(self, *_args, **_kwargs):
+            return _NotFoundResponse()
+
+    monkeypatch.setattr(kakao_service, "get_http_client", lambda: _NotFoundClient())
+
+    try:
+        with pytest.raises(ExternalServiceError) as exc_info:
+            asyncio.run(kakao_service._kakao_fetch("key", "존재하지 않는 장소"))
+
+        assert exc_info.value.retryable is False
+        assert exc_info.value.provider_down is False
+        snapshot = http_utils.circuit_snapshot()[circuit_name]
+        assert snapshot["open"] is False, "요청 단위 4xx가 회로를 즉시 열면 안 됩니다"
+        assert snapshot["failures"] == 1
+        # 제공자가 정상이므로 준비 상태도 유지되어야 합니다.
+        assert main_module.readiness_check().status == "ready"
+    finally:
+        http_utils._circuits.pop(circuit_name, None)
+
+
+def test_provider_authentication_failure_opens_the_circuit_immediately(monkeypatch) -> None:
+    circuit_name = "app.services.transit.kakao_service._kakao_fetch"
+    http_utils._circuits.pop(circuit_name, None)
+
+    class _ForbiddenResponse:
+        status_code = 401
+
+        def json(self) -> dict:
+            return {}
+
+    class _ForbiddenClient:
+        async def get(self, *_args, **_kwargs):
+            return _ForbiddenResponse()
+
+    monkeypatch.setattr(kakao_service, "get_http_client", lambda: _ForbiddenClient())
+
+    try:
+        with pytest.raises(ExternalServiceError) as exc_info:
+            asyncio.run(kakao_service._kakao_fetch("bad-key", "강남역"))
+
+        assert exc_info.value.provider_down is True
+        assert http_utils.circuit_snapshot()[circuit_name]["open"] is True
+        with pytest.raises(HTTPException) as ready_exc:
+            main_module.readiness_check()
+        assert ready_exc.value.status_code == 503
+    finally:
+        http_utils._circuits.pop(circuit_name, None)
+
+
+def test_repeated_request_level_failures_still_open_the_circuit(monkeypatch) -> None:
+    """제공자가 계속 실패하면 임계값에서는 열려야 합니다."""
+    circuit_name = "app.services.transit.kakao_service._kakao_fetch"
+    http_utils._circuits.pop(circuit_name, None)
+
+    class _NotFoundResponse:
+        status_code = 404
+
+        def json(self) -> dict:
+            return {}
+
+    class _NotFoundClient:
+        async def get(self, *_args, **_kwargs):
+            return _NotFoundResponse()
+
+    monkeypatch.setattr(kakao_service, "get_http_client", lambda: _NotFoundClient())
+
+    try:
+        for _ in range(settings.EXTERNAL_CIRCUIT_FAILURE_THRESHOLD):
+            with pytest.raises(ExternalServiceError):
+                asyncio.run(kakao_service._kakao_fetch("key", "없는 장소"))
+        assert http_utils.circuit_snapshot()[circuit_name]["open"] is True
+    finally:
+        http_utils._circuits.pop(circuit_name, None)

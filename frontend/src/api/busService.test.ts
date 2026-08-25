@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  classifyArrival,
   cleanBusNumber,
+  describeArrivalStatus,
   getCongestionLabel,
   parseRemainingStops,
   toCongestion,
@@ -30,5 +32,27 @@ describe("bus display values", () => {
     expect(toCongestion("0")).toBe(0);
     expect(toCongestion("3")).toBe(3);
     expect(getCongestionLabel(0)).toBe("정보 없음");
+  });
+});
+
+describe("classifyArrival", () => {
+  it("keeps standby and terminal distinct from a real ETA", () => {
+    expect(classifyArrival(null, "출발대기")).toBe("standby");
+    expect(classifyArrival(null, "운행 종료")).toBe("terminal");
+    expect(classifyArrival(null, "")).toBe("unknown");
+    expect(classifyArrival(undefined, undefined)).toBe("unknown");
+    expect(classifyArrival(0, "곧 도착")).toBe("live");
+    expect(classifyArrival(4, "4분후[2번째 전]")).toBe("live");
+  });
+
+  it("prefers the provider reason over a present minute value", () => {
+    // 제공기관이 이유를 명시하면 분 값이 있어도 그 이유가 우선입니다.
+    expect(classifyArrival(0, "운행종료")).toBe("terminal");
+  });
+
+  it("describes each status in Korean for the display", () => {
+    expect(describeArrivalStatus("standby")).toBe("출발 대기 중");
+    expect(describeArrivalStatus("terminal")).toBe("운행 종료");
+    expect(describeArrivalStatus("unknown")).toBe("도착정보 없음");
   });
 });
