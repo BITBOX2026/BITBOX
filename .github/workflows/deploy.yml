@@ -48,7 +48,7 @@ jobs:
           python scripts/load_smoke.py --url http://127.0.0.1:8090/health \
             --requests 100 --concurrency 20 --max-p95-ms 1000
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
