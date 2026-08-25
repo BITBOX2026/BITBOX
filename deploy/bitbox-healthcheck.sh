@@ -15,22 +15,31 @@ send_alert() {
     [[ "$strict" == "true" ]] && return 1
     return 0
   fi
-  local payload webhook_url="$BITBOX_ALERT_WEBHOOK_URL"
+  local payload http_code webhook_url
+  # 시크릿에 섞여 들어온 공백·개행은 URL 경로를 망가뜨려 Discord가 400으로
+  # 거절합니다. 웹후크 URL에 공백이 들어갈 일은 없으므로 전부 떼어냅니다.
+  webhook_url="${BITBOX_ALERT_WEBHOOK_URL//[[:space:]]/}"
   message="${message//\\/\\\\}"
   message="${message//\"/\\\"}"
   message="${message//$'\n'/\\n}"
-  if [[ "$webhook_url" == *"discord.com/api/webhooks/"* && "$webhook_url" != */slack* ]]; then
+  # discord.com·discordapp.com·canary/ptb 서브도메인을 모두 Discord로 봅니다.
+  # 여기서 빗나가면 Slack 형식 {"text":...}을 보내고 Discord는 400으로 거절합니다.
+  if [[ "$webhook_url" == *discord*.com/api/webhooks/* && "$webhook_url" != */slack* ]]; then
     payload="{\"content\":\"$message\"}"
     [[ "$webhook_url" == *\?* ]] && webhook_url="${webhook_url}&wait=true" || webhook_url="${webhook_url}?wait=true"
   else
     payload="{\"text\":\"$message\"}"
   fi
-  if ! curl --fail --silent --show-error --max-time 5 \
+  # --fail 은 상태 코드를 삼켜버립니다. 코드를 직접 받아 남겨야 400(페이로드 형식)과
+  # 401·404(URL·토큰 문제)를 나중에 구분할 수 있습니다.
+  http_code="$(curl --silent --show-error --max-time 5 \
     -H 'Content-Type: application/json' \
     --data "$payload" \
-    "$webhook_url" >/dev/null; then
-    echo "[bitbox-healthcheck] alert delivery failed" >&2
-    logger -t bitbox-healthcheck "alert delivery failed" || true
+    --output /dev/null --write-out '%{http_code}' \
+    "$webhook_url" || true)"
+  if [[ "$http_code" != 2?? ]]; then
+    echo "[bitbox-healthcheck] alert delivery failed (HTTP ${http_code:-000})" >&2
+    logger -t bitbox-healthcheck "alert delivery failed (HTTP ${http_code:-000})" || true
     [[ "$strict" == "true" ]] && return 1
   fi
   return 0
