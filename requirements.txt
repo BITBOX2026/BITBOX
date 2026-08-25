@@ -24,7 +24,7 @@ pytest>=8.0.0
 PyYAML>=6.0
 
 # Raspberry Pi Client
-requests==2.33.0
+requests==2.34.2
 sounddevice==0.4.6
 scipy>=1.14.0,<2.0.0
 # RPi.GPIO: 라즈베리파이에서 직접 설치 → pip install RPi.GPIO
