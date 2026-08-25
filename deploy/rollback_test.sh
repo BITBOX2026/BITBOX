@@ -52,6 +52,8 @@ for arg in "\$@"; do
   case "\$arg" in http*|https*) echo "URL \$arg" >> "$bin/../alert.log" ;; esac
   prev="\$arg"
 done
+# send_alert 는 --write-out 으로 상태 코드를 받아 2xx 인지 확인합니다.
+echo "\${STUB_ALERT_HTTP_CODE:-200}"
 exit 0
 EOF
   cat > "$bin/sleep" <<'EOF'
@@ -169,6 +171,32 @@ RC="$(run_rollback "$OLD_SHA" "$CASE_DIR/www/releases/old" "https://discord.com/
 check "종료코드 0" "0" "$RC"
 check "Discord content 필드" "yes" "$(grep -q '\"content\"' "$CASE_DIR/alert.log" 2>/dev/null && echo yes || echo no)"
 check "Discord 전송 확인 대기" "yes" "$(grep -q 'wait=true' "$CASE_DIR/alert.log" 2>/dev/null && echo yes || echo no)"
+
+note ""
+note "=== 시나리오 7: 구 도메인(discordapp.com) 웹훅 ==="
+setup_case discord_legacy yes
+RC="$(run_rollback "$OLD_SHA" "$CASE_DIR/www/releases/old" "https://discordapp.com/api/webhooks/123/token")"
+check "종료코드 0" "0" "$RC"
+# 구 도메인을 놓치면 Slack 형식 {"text":...}을 보내 Discord가 400으로 거절합니다.
+check "구 도메인도 Discord content 필드" "yes" "$(grep -q '"content"' "$CASE_DIR/alert.log" 2>/dev/null && echo yes || echo no)"
+check "구 도메인도 전송 확인 대기" "yes" "$(grep -q 'wait=true' "$CASE_DIR/alert.log" 2>/dev/null && echo yes || echo no)"
+
+note ""
+note "=== 시나리오 8: 시크릿에 공백이 섞인 웹훅 URL ==="
+setup_case discord_padded yes
+RC="$(run_rollback "$OLD_SHA" "$CASE_DIR/www/releases/old" "  https://discord.com/api/webhooks/123/token  ")"
+check "종료코드 0" "0" "$RC"
+# 공백이 남으면 URL 경로가 깨져 Discord가 400으로 거절합니다.
+check "URL에 공백 없음" "yes" "$(grep -q '^URL https://discord.com/api/webhooks/123/token?wait=true$' "$CASE_DIR/alert.log" 2>/dev/null && echo yes || echo no)"
+
+note ""
+note "=== 시나리오 9: 웹훅이 4xx를 돌려줄 때 ==="
+setup_case discord_rejected yes
+RC="$(STUB_ALERT_HTTP_CODE=400 run_rollback "$OLD_SHA" "$CASE_DIR/www/releases/old" "https://discord.com/api/webhooks/123/token")"
+# 알림이 실패해도 롤백 자체는 끝까지 진행되어야 합니다.
+check "종료코드 0" "0" "$RC"
+# 상태 코드가 남아야 URL·토큰 문제인지 페이로드 문제인지 구분할 수 있습니다.
+check "실패 로그에 상태 코드" "yes" "$(grep -q 'failed to deliver rollback alert (HTTP 400)' "$CASE_DIR/stderr.log" 2>/dev/null && echo yes || echo no)"
 
 note ""
 note "==================================================="
