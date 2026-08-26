@@ -285,6 +285,9 @@ def _build_buses_from_route(data: dict) -> list[dict]:
             "type": "walk" if is_walk else "bus",
             "durationMin": duration,
             "busNumber": None if is_walk else seg_bus_number,
+            # 같은 구간의 다른 노선. 화면에도 보여야 소리를 듣지 못한 이용자가
+            # 먼저 오는 차를 그냥 보내지 않습니다.
+            "alternativeBuses": [] if is_walk else list(seg.get("alternative_lines") or []),
             "fromStop": seg.get("start_name") or "",
             "toStop": seg.get("end_name") or "",
             "description": line if is_walk else f"{line} 탑승",

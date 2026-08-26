@@ -83,8 +83,28 @@ def _build_segment_guidance(segments: list[RouteSegment]) -> list[str]:
             f"{segment.start_name}에서 {label}{_josa_reul(label)} 타고 "
             f"{segment.end_name}에 내리세요."
         )
+        alternatives = _alternative_sentence(segment)
+        if alternatives:
+            guidance.append(alternatives)
 
     return guidance
+
+
+def _alternative_sentence(segment: RouteSegment) -> str:
+    """같은 구간의 다른 노선을 알려 주는 문장을 만듭니다.
+
+    대표 노선만 안내하면 먼저 도착하는 차를 그냥 보내게 됩니다. 버스를 기다리는
+    시간이 곧 이동 시간인 이용자에게는 이 차이가 큽니다.
+    """
+    others = [number for number in (segment.alternative_lines or []) if number]
+    if not others:
+        return ""
+
+    # 문장이 길어지면 듣는 부담이 커지므로 두 개까지만 말합니다.
+    shown = others[:2]
+    numbers = ", ".join(f"{number}번" for number in shown)
+    more = " 등" if len(others) > len(shown) else ""
+    return f"{numbers}{more} 버스를 타셔도 됩니다."
 
 
 def _build_fallback_guidance(result: TransportResult) -> str:

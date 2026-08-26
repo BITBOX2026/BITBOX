@@ -4,6 +4,7 @@ import pytest
 
 from app.services.ai import llm_service
 from app.services.ai.korean_number_normalizer import normalize_bus_number_token
+from app.services.core.exceptions import TransportAPIError
 from app.services.core.service_types import ParsedIntent
 from app.services.transit import public_bus_service
 
@@ -213,3 +214,73 @@ def test_native_korean_reading_is_never_a_route_number_token() -> None:
         assert normalize_bus_number_token(value) == value
     # "이번"에서 뽑힌 `이`도 2번 노선으로 확정하지 않습니다.
     assert normalize_bus_number_token("이") == "이"
+
+
+def test_same_named_stop_resolves_to_the_device_stop(monkeypatch) -> None:
+    """같은 이름의 정류장이 상·하행 양쪽에 있으면 기기 정류장을 써야 합니다.
+
+    서울에서는 한 노선이 같은 이름의 정류장을 양방향에 두는 것이 흔합니다.
+    이름만 보고 먼저 나온 것을 고르면 반대 방향 차량의 도착 시간을 안내하게 됩니다.
+    기기가 설치된 정류장(arsId)은 방향까지 특정되므로 항상 그것을 우선합니다.
+    """
+    outbound = {"stationNm": "올림픽공원역", "station": "111", "seq": "5", "arsId": "24001"}
+    inbound = {"stationNm": "올림픽공원역", "station": "222", "seq": "40", "arsId": "24245"}
+
+    async def fake_payload(*_args, **_kwargs):
+        return {"msgBody": {"itemList": [outbound, inbound]}}
+
+    monkeypatch.setattr(public_bus_service, "request_seoul_bus_payload", fake_payload)
+    monkeypatch.setattr(
+        public_bus_service,
+        "get_setting",
+        lambda name, default=None: "24245" if name == "DEFAULT_BUS_STATION_ID" else default,
+    )
+
+    station = asyncio.run(
+        public_bus_service._find_route_station_by_stop_text("100100118", "올림픽공원역")
+    )
+    assert station is not None
+    assert station["ars_id"] == "24245", "반대 방향 정류장을 골랐습니다"
+    assert station["station_id"] == "222"
+
+
+def test_same_named_stop_without_a_device_stop_refuses_to_guess(monkeypatch) -> None:
+    """방향을 확정하지 못하면 API 순서의 첫 정류장을 임의로 쓰지 않습니다."""
+    items = [
+        {"stationNm": "강남역", "station": "111", "seq": "5", "arsId": "22001"},
+        {"stationNm": "강남역", "station": "222", "seq": "40", "arsId": "22002"},
+    ]
+
+    async def fake_payload(*_args, **_kwargs):
+        return {"msgBody": {"itemList": items}}
+
+    monkeypatch.setattr(public_bus_service, "request_seoul_bus_payload", fake_payload)
+    monkeypatch.setattr(
+        public_bus_service, "get_setting", lambda name, default=None: default
+    )
+
+    with pytest.raises(TransportAPIError) as exc_info:
+        asyncio.run(
+            public_bus_service._find_route_station_by_stop_text("100100118", "강남역")
+        )
+    assert "정류장 번호나 방향" in exc_info.value.user_message
+
+
+def test_one_exact_stop_is_not_rejected_by_unrelated_partial_matches(monkeypatch) -> None:
+    """정확한 정류장 하나는 비슷한 이름의 다른 정류장 때문에 모호해지지 않습니다."""
+    items = [
+        {"stationNm": "강남역", "station": "111", "seq": "5", "arsId": "22001"},
+        {"stationNm": "강남역사거리", "station": "222", "seq": "6", "arsId": "22002"},
+    ]
+
+    async def fake_payload(*_args, **_kwargs):
+        return {"msgBody": {"itemList": items}}
+
+    monkeypatch.setattr(public_bus_service, "request_seoul_bus_payload", fake_payload)
+    monkeypatch.setattr(public_bus_service, "get_setting", lambda _name, default=None: default)
+
+    station = asyncio.run(
+        public_bus_service._find_route_station_by_stop_text("100100118", "강남역")
+    )
+    assert station is not None
+    assert station["ars_id"] == "22001"

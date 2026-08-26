@@ -86,7 +86,7 @@ test.beforeEach(async ({ page }) => {
   await page.route("**/api/places/suggest?**", (route) => route.fulfill({ json: { suggestions: [] } }));
   await page.addInitScript(() => {
     class FakeUtterance {
-      text: string; lang = ""; rate = 1; onend: (() => void) | null = null; onerror: (() => void) | null = null;
+      text: string; lang = ""; rate = 1; onstart: (() => void) | null = null; onend: (() => void) | null = null; onerror: (() => void) | null = null;
       constructor(text: string) { this.text = text; }
     }
     Object.defineProperty(window, "SpeechSynthesisUtterance", { value: FakeUtterance });
@@ -96,7 +96,10 @@ test.beforeEach(async ({ page }) => {
       addEventListener() {},
       removeEventListener() {},
       cancel() {},
-      speak(utterance: { onend?: (() => void) | null }) { queueMicrotask(() => utterance.onend?.()); },
+      speak(utterance: { onstart?: (() => void) | null; onend?: (() => void) | null }) {
+        utterance.onstart?.();
+        queueMicrotask(() => utterance.onend?.());
+      },
     } });
   });
 });

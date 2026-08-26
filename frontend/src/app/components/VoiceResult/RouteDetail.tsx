@@ -176,6 +176,12 @@ export function RouteDetailOverlay({ route, destination, viewMode, onToggleView 
                         {step.toStop} {isWalk ? "도착" : "하차"}
                       </p>
                     )}
+                    {!isWalk && step.alternativeBuses && step.alternativeBuses.length > 0 && (
+                      <p className="mt-2 text-sm font-bold leading-relaxed text-[#145466]">
+                        {step.alternativeBuses.slice(0, 3).map((bus) => `${bus}번`).join(", ")}
+                        {step.alternativeBuses.length > 3 ? " 등" : ""} 버스를 타셔도 됩니다.
+                      </p>
+                    )}
                   </div>
                 </article>
               );

@@ -13,7 +13,8 @@ import { apiFetch, parseApiResponse } from "../api/client";
  * 서버 합성은 브라우저가 말할 수 있는 기기에서는 호출되지 않으므로 비용이 늘지 않습니다.
  */
 
-export type SpeechOutcome = "browser" | "server" | "unavailable";
+export type SpeechOutcome = "browser" | "server" | "partial" | "unavailable";
+export type SpeechActivitySource = "session" | "background";
 export const SPEECH_CANCEL_EVENT = "bitbox:speech-cancel";
 /**
  * 안내 음성이 재생되기 시작했거나 끝났음을 알립니다.
@@ -25,9 +26,9 @@ export const SPEECH_CANCEL_EVENT = "bitbox:speech-cancel";
  */
 export const SPEECH_ACTIVITY_EVENT = "bitbox:speech-activity";
 
-export function signalSpeechActivity(): void {
+export function signalSpeechActivity(source: SpeechActivitySource = "session"): void {
   if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
-    window.dispatchEvent(new Event(SPEECH_ACTIVITY_EVENT));
+    window.dispatchEvent(new CustomEvent(SPEECH_ACTIVITY_EVENT, { detail: { source } }));
   }
 }
 
@@ -39,6 +40,14 @@ const VOICE_NEGATIVE_CACHE_MS = 5 * 60 * 1_000;
 // 서버 음성 요청 상한. 이 값이 없으면 응답이 늦는 동안 화면이 "재생 중"에
 // 묶인 채 소리도 대체 버튼도 나오지 않습니다.
 const SERVER_SPEECH_TIMEOUT_MS = 12_000;
+// 서버 /api/speech 가 받아 주는 문장 길이(MAX_SPEECH_CHARS)와 같아야 합니다.
+// 넘으면 422 로 거절당해 안내가 통째로 무음이 됩니다.
+const SERVER_SPEECH_MAX_CHARS = 200;
+// 재생 Promise 가 성공한 뒤 ended/error 이벤트가 사라지는 Chromium·오디오 장치
+// 장애에서도 다음 안내를 영구히 막지 않습니다. 정상 오디오의 duration 을 읽으면
+// 실제 길이에 여유를 더한 값으로 다시 계산합니다.
+const SERVER_AUDIO_FALLBACK_TIMEOUT_MS = 60_000;
+const SERVER_AUDIO_END_GRACE_MS = 5_000;
 // speak() 직후 재생이 실제로 시작됐는지 지켜보는 창. 리눅스 Chromium 은
 // 음성이 있는데도 소리 없이 끝나거나 error 로 끝나는 사례가 있습니다.
 const BROWSER_SPEECH_START_MS = 1_200;
@@ -145,11 +154,83 @@ export function cancelSpeech(): void {
   }
 }
 
-async function playServerSpeech(
-  text: string,
-  generation: number,
-  onEnd?: () => void,
-): Promise<SpeechOutcome> {
+/**
+ * 안내 문장을 서버가 받아 주는 길이로 나눕니다.
+ *
+ * 환승이 두 번 있는 경로 안내는 236자까지 늘어나는데 `/api/speech` 는 200자를
+ * 넘으면 422 로 거절합니다. 통째로 보내면 기기에 한국어 음성이 없는 키오스크에서
+ * **경로가 복잡할수록 안내가 아예 들리지 않습니다.** 문장 단위로 끊어 순서대로
+ * 읽으면 길이 제한을 넘지 않고, 반복되는 문장은 서버 캐시에 그대로 걸립니다.
+ */
+export function splitForSpeech(text: string, limit = SERVER_SPEECH_MAX_CHARS): string[] {
+  const sentences = text.split(/(?<=[.!?])\s+/).map((part) => part.trim()).filter(Boolean);
+  const chunks: string[] = [];
+  let current = "";
+
+  for (const sentence of sentences) {
+    // 한 문장이 그 자체로 상한을 넘는 경우는 안내 문구 구조상 없지만,
+    // 넘더라도 거절당하지 않도록 잘라서 보냅니다.
+    for (let index = 0; index < sentence.length; index += limit) {
+      const piece = sentence.slice(index, index + limit);
+      if (!current) {
+        current = piece;
+      } else if (current.length + 1 + piece.length <= limit) {
+        current = `${current} ${piece}`;
+      } else {
+        chunks.push(current);
+        current = piece;
+      }
+    }
+  }
+
+  if (current) chunks.push(current);
+  return chunks;
+}
+
+/** 재생이 끝날 때까지 기다립니다. 취소되면 즉시 false 로 끝납니다. */
+function playAudioToEnd(audio: HTMLAudioElement, generation: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    let settled = false;
+    let timeoutId = window.setTimeout(() => finish(false), SERVER_AUDIO_FALLBACK_TIMEOUT_MS);
+    const finish = (completed: boolean) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timeoutId);
+      window.removeEventListener(SPEECH_CANCEL_EVENT, onCancel);
+      audio.onloadedmetadata = null;
+      audio.onended = null;
+      audio.onerror = null;
+      if (!completed) {
+        audio.pause();
+        audio.currentTime = 0;
+      }
+      resolve(completed);
+    };
+    const onCancel = () => finish(false);
+    window.addEventListener(SPEECH_CANCEL_EVENT, onCancel);
+    audio.onloadedmetadata = () => {
+      if (!Number.isFinite(audio.duration) || audio.duration <= 0) return;
+      window.clearTimeout(timeoutId);
+      timeoutId = window.setTimeout(
+        () => finish(false),
+        Math.ceil(audio.duration * 1_000) + SERVER_AUDIO_END_GRACE_MS,
+      );
+    };
+    audio.onended = () => finish(true);
+    audio.onerror = () => finish(false);
+    audio.play().then(
+      () => {
+        if (speechGeneration !== generation) {
+          audio.pause();
+          finish(false);
+        }
+      },
+      () => finish(false),
+    );
+  });
+}
+
+async function fetchSpeechAudio(text: string, generation: number): Promise<string | null> {
   const controller = new AbortController();
   activeRequest = controller;
   // 응답이 없을 때 화면이 "재생 중"에 갇히지 않도록 요청 자체에 상한을 둡니다.
@@ -165,32 +246,47 @@ async function playServerSpeech(
       response,
       "음성 안내를 준비하지 못했습니다.",
     );
-    if (speechGeneration !== generation || controller.signal.aborted) return "unavailable";
-    if (!payload.audio_base64) return "unavailable";
-
-    const audio = new Audio(`data:audio/wav;base64,${payload.audio_base64}`);
-    activeAudio = audio;
-    audio.onended = () => {
-      if (activeAudio !== audio || speechGeneration !== generation) return;
-      activeAudio = null;
-      signalSpeechActivity();
-      onEnd?.();
-    };
-    await audio.play();
-    if (speechGeneration !== generation || activeAudio !== audio) {
-      audio.pause();
-      return "unavailable";
-    }
-    signalSpeechActivity();
-    return "server";
+    if (speechGeneration !== generation || controller.signal.aborted) return null;
+    return payload.audio_base64 || null;
   } catch {
     // 자동 재생 차단·네트워크 실패 등. 화면 안내는 그대로 남으므로 무음으로 처리합니다.
-    if (activeAudio && speechGeneration === generation) activeAudio = null;
-    return "unavailable";
+    return null;
   } finally {
     window.clearTimeout(timeoutId);
     if (activeRequest === controller) activeRequest = null;
   }
+}
+
+async function playServerSpeech(
+  text: string,
+  generation: number,
+  onEnd?: () => void,
+  activitySource: SpeechActivitySource = "session",
+): Promise<SpeechOutcome> {
+  const chunks = splitForSpeech(text);
+  if (chunks.length === 0) return "unavailable";
+
+  for (let index = 0; index < chunks.length; index += 1) {
+    const audioBase64 = await fetchSpeechAudio(chunks[index], generation);
+    if (speechGeneration !== generation) return "unavailable";
+    // 뒤 조각이 실패해도 전체 안내를 완료한 것은 아닙니다. 부분 성공을 별도로
+    // 알려 화면이 재생 완료로 오인하지 않고 다시 듣기 수단을 남기게 합니다.
+    if (!audioBase64) return index === 0 ? "unavailable" : "partial";
+
+    const audio = new Audio(`data:audio/wav;base64,${audioBase64}`);
+    activeAudio = audio;
+    signalSpeechActivity(activitySource);
+
+    const completed = await playAudioToEnd(audio, generation);
+    if (activeAudio === audio) activeAudio = null;
+    if (!completed || speechGeneration !== generation) {
+      return index === 0 ? "unavailable" : "partial";
+    }
+  }
+
+  signalSpeechActivity(activitySource);
+  onEnd?.();
+  return "server";
 }
 
 /**
@@ -203,6 +299,7 @@ async function playServerSpeech(
 function speakWithBrowser(
   utterance: SpeechSynthesisUtterance,
   speech: SpeechSynthesis,
+  onStarted: () => void,
 ): Promise<boolean> {
   return new Promise((resolve) => {
     let settled = false;
@@ -212,11 +309,15 @@ function speakWithBrowser(
       window.clearTimeout(timer);
       resolve(started);
     };
-    utterance.onstart = () => finish(true);
+    utterance.onstart = () => {
+      if (settled) return;
+      onStarted();
+      finish(true);
+    };
     utterance.onerror = () => finish(false);
-    // onstart 를 보내지 않는 엔진이 있어, 짧게 기다린 뒤에도 오류가 없으면
-    // 재생이 시작된 것으로 봅니다.
-    const timer = window.setTimeout(() => finish(true), BROWSER_SPEECH_START_MS);
+    // 음성 객체가 있어도 출력과 이벤트가 모두 사라지는 Chromium 구성이 있습니다.
+    // 시작을 확인하지 못하면 성공으로 꾸미지 않고 서버 음성으로 대체합니다.
+    const timer = window.setTimeout(() => finish(false), BROWSER_SPEECH_START_MS);
     speech.speak(utterance);
   });
 }
@@ -229,7 +330,11 @@ function speakWithBrowser(
  */
 export async function speakKorean(
   text: string,
-  options: { onEnd?: () => void; rate?: number } = {},
+  options: {
+    onEnd?: () => void;
+    rate?: number;
+    activitySource?: SpeechActivitySource;
+  } = {},
 ): Promise<SpeechOutcome> {
   const message = text.trim();
   if (!message) return "unavailable";
@@ -241,27 +346,38 @@ export async function speakKorean(
   if (speechGeneration !== generation) return "unavailable";
   const speech = synthesis();
   if (voice && speech) {
+    let browserStarted = false;
     const utterance = new SpeechSynthesisUtterance(message);
     utterance.lang = "ko-KR";
     utterance.rate = options.rate ?? 0.9;
     utterance.voice = voice;
     utterance.onend = () => {
-      if (speechGeneration !== generation) return;
-      signalSpeechActivity();
+      if (!browserStarted || speechGeneration !== generation) return;
+      signalSpeechActivity(options.activitySource);
       options.onEnd?.();
     };
-    const started = await speakWithBrowser(utterance, speech);
+    const started = await speakWithBrowser(utterance, speech, () => {
+      browserStarted = true;
+    });
     if (speechGeneration !== generation) return "unavailable";
     if (started) {
-      signalSpeechActivity();
+      signalSpeechActivity(options.activitySource);
       return "browser";
     }
 
     // 브라우저 음성이 실패했습니다. 이 기기는 말할 수 없다고 보고 서버 음성으로
     // 넘깁니다. 판정을 다시 하도록 캐시도 비웁니다.
     rememberVoice(null);
+    utterance.onstart = null;
+    utterance.onend = null;
+    utterance.onerror = null;
     speech.cancel();
   }
 
-  return playServerSpeech(message, generation, options.onEnd);
+  return playServerSpeech(
+    message,
+    generation,
+    options.onEnd,
+    options.activitySource,
+  );
 }

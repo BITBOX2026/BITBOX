@@ -8,6 +8,7 @@
 3. 해당 정류장의 실시간 버스 도착 정보 조회 (getArrInfoByRoute)
 """
 
+from app.core.logger import get_logger
 from app.services.core.constants import (
     SEOUL_BUS_ARRIVAL_URL,
     SEOUL_BUS_ROUTE_SEARCH_URL,
@@ -30,6 +31,8 @@ from app.services.transit.seoul_bus_parser import (
     normalize_token,
     parse_first_bus_time,
 )
+
+logger = get_logger(__name__)
 
 
 async def search_bus_arrival(parsed: ParsedIntent) -> TransportResult:
@@ -281,28 +284,17 @@ def _arrmsg_or_minutes(raw_arrmsg: str | None, minutes: int | None) -> str | Non
     return "곧 도착" if minutes <= 0 else f"{minutes}분 후"
 
 
-async def _find_route_station_by_ars_id(
-    bus_route_id: str,
-    ars_id: str,
-) -> dict[str, str] | None:
-    """노선 경유 정류소 목록에서 arsId로 정류소 정보를 찾습니다 (기기 기본 정류장용)."""
-    payload = await request_seoul_bus_payload(
-        SEOUL_ROUTE_STATION_URL,
-        {"busRouteId": bus_route_id},
-        stage="노선 경유 정류소 조회",
-    )
-    for item in extract_items(payload):
-        route_station = build_route_station(item)
-        if route_station and route_station.get("ars_id") == ars_id:
-            return route_station
-    return None
-
-
 async def _find_route_station_by_stop_text(
     bus_route_id: str,
     stop_text: str,
 ) -> dict[str, str] | None:
-    """노선 경유 정류소 목록에서 사용자가 말한 정류장명으로 정류소 정보를 찾습니다."""
+    """노선 경유 정류소 목록에서 사용자가 말한 정류장명으로 정류소 정보를 찾습니다.
+
+    서울에서는 같은 이름의 정류장이 상·하행 양쪽에 있는 것이 흔합니다. 이름만
+    보고 먼저 나온 것을 고르면 **반대 방향 차량의 도착 시간을 안내**할 수 있습니다.
+    기기가 설치된 정류장(arsId)은 방향까지 특정되므로, 후보 중에 그 정류장이 있으면
+    항상 그것을 씁니다.
+    """
     payload = await request_seoul_bus_payload(
         SEOUL_ROUTE_STATION_URL,
         {"busRouteId": bus_route_id},
@@ -320,13 +312,41 @@ async def _find_route_station_by_stop_text(
         if contains_normalized(station_name, stop_text):
             partial_candidates.append(item)
 
-    for item in exact_candidates + partial_candidates:
-        route_station = build_route_station(item)
-        if not route_station:
-            continue
-        return route_station
+    # 정확 일치가 하나라도 있으면 부분 일치는 방향 후보에 섞지 않습니다. 예를 들어
+    # "강남역"과 "강남역사거리"가 함께 있어도 전자만 사용해야 합니다.
+    matching_items = exact_candidates or partial_candidates
+    resolved = [
+        station
+        for item in matching_items
+        if (station := build_route_station(item))
+    ]
+    if not resolved:
+        return None
 
-    return None
+    device_ars_id = str(get_setting("DEFAULT_BUS_STATION_ID") or "").strip()
+    if device_ars_id:
+        for station in resolved:
+            if station.get("ars_id") == device_ars_id:
+                return station
+
+    if len(resolved) == 1:
+        return resolved[0]
+
+    # 방향을 확정할 단서가 없습니다. API 반환 순서의 첫 항목을 쓰면 반대 방향
+    # 도착정보를 안내할 수 있으므로 조회 실패로 돌려 상위에서 재확인하게 합니다.
+    logger.warning(
+        "정류장 이름이 노선에서 여러 번 나타납니다. 방향을 확정하지 못했습니다: "
+        "route=%s matches=%d ars_ids=%s",
+        bus_route_id,
+        len(resolved),
+        ",".join(station.get("ars_id") or "?" for station in resolved[:4]),
+    )
+    raise TransportAPIError(
+        user_message=(
+            "같은 이름의 정류장이 여러 방향에 있습니다. "
+            "정류장 번호나 방향을 다시 말씀해 주세요."
+        )
+    )
 
 
 async def _find_route_station(

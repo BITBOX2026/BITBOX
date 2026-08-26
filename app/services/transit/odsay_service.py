@@ -231,6 +231,22 @@ def _select_lane_bus_number(lanes: list[dict[str, Any]]) -> str | None:
     )
 
 
+def _other_lane_bus_numbers(lanes: list[dict[str, Any]], selected: str) -> list[str] | None:
+    """대표 노선 말고 같은 구간을 달리는 노선들을 돌려줍니다.
+
+    ODsay 의 `lane` 은 그 구간에서 서로 바꿔 탈 수 있는 노선 목록입니다. 대표 하나만
+    안내하면 먼저 도착하는 다른 차를 그냥 보내게 되므로 함께 알려 줍니다.
+    """
+    others = [
+        number
+        for number in dict.fromkeys(
+            str(lane.get("busNo")) for lane in lanes if lane.get("busNo")
+        )
+        if number != selected
+    ]
+    return others or None
+
+
 def _extract_bus_numbers(sub_paths: list[dict[str, Any]]) -> list[str]:
     numbers: list[str] = []
     for sp in sub_paths:
@@ -295,6 +311,7 @@ def _extract_route_segments(sub_paths: list[dict[str, Any]]) -> list[RouteSegmen
                 segments.append(RouteSegment(
                     vehicle_type="버스",
                     line=f"{bus_no}번",
+                    alternative_lines=_other_lane_bus_numbers(lanes, bus_no),
                     start_name=start_name,
                     end_name=end_name,
                     time_min=seg_time,

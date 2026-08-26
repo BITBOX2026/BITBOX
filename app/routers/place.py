@@ -36,7 +36,9 @@ async def suggest_places(
     장소명 자동완성 후보를 반환합니다.
 
     이름·카테고리 적합도를 우선하고 거리를 보조 기준으로 최대 5개를 반환합니다.
-    Kakao API 오류 시 빈 리스트를 반환합니다.
+
+    검색 결과가 없으면 빈 목록을 반환하지만, Kakao API 장애는 오류로 노출합니다.
+    장애를 빈 목록으로 감추면 이용자가 "그런 장소가 없다"로 오해합니다.
     """
     verify_api_token(request)
     async with usage_slot(

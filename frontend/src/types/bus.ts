@@ -43,6 +43,8 @@ export interface RouteStep {
   fromStop?: string;
   toStop?: string;
   busNumber?: string;
+  /** 같은 구간을 달리는 다른 노선. 이 중 먼저 오는 차를 타면 됩니다. */
+  alternativeBuses?: string[];
 }
 
 export interface RouteDetail {
@@ -68,4 +70,6 @@ export interface RouteSegment {
   end_x?: number | null;
   end_y?: number | null;
   path_points?: Array<{ x: number; y: number }> | null;
+  /** 같은 구간을 달리는 다른 노선. 하나만 안내하면 먼저 오는 차를 놓칩니다. */
+  alternative_lines?: string[] | null;
 }

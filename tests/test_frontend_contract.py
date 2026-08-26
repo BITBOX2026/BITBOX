@@ -2,6 +2,7 @@
 
 import asyncio
 import time
+from dataclasses import asdict
 
 import httpx
 import pytest
@@ -783,6 +784,7 @@ def test_display_bus_and_segment_use_the_same_preferred_lane() -> None:
     segments = _extract_route_segments(sub_paths)
     assert segments is not None
     assert segments[0].line == "3412번"
+    assert segments[0].alternative_lines == ["N13"]
 
 
 def test_odsay_bus_mode_excludes_mixed_subway_path() -> None:
@@ -1104,3 +1106,58 @@ def test_successful_result_is_not_counted_as_a_business_error() -> None:
         StarletteResponse(), {"status": "success", "message": "ok"}
     )
     assert runtime_snapshot()["business_errors"] == before
+
+
+def test_alternative_routes_reach_the_rider_by_voice_and_screen() -> None:
+    """같은 구간의 다른 노선을 알려 주지 않으면 먼저 오는 차를 그냥 보냅니다.
+
+    ODsay 의 `lane` 은 그 구간에서 서로 바꿔 탈 수 있는 노선 목록입니다.
+    버스를 기다리는 시간이 곧 이동 시간인 이용자에게는 이 차이가 큽니다.
+    """
+    segments = [
+        RouteSegment(
+            vehicle_type="버스", line="3412번",
+            start_name="올림픽공원역", end_name="잠실역",
+            time_min=12, alternative_lines=["341", "3413"],
+        ),
+    ]
+
+    # 소리로 전달되는지
+    message = build_user_message(
+        parsed=ParsedIntent(intent="route", destination_text="잠실역", transport_mode="bus"),
+        transport_result=TransportResult(
+            origin="올림픽공원역", destination="잠실역", transport_mode="bus",
+            bus_number="3412", total_time_min=12, route_segments=segments, source="odsay",
+        ),
+    )
+    assert "341번, 3413번 버스를 타셔도 됩니다." in message
+
+    # 화면으로도 전달되는지 (소리를 듣지 못하는 이용자)
+    response = _build_upload_compat_response({
+        "status": "success",
+        "message": message,
+        "data": {
+            "intent": "route",
+            "destination": "잠실역",
+            "bus_number": "3412",
+            "total_time_min": 12,
+            "route_segments": [asdict(segment) for segment in segments],
+        },
+    })
+    step = response["buses"][0]["routeDetail"]["steps"][0]
+    assert step["alternativeBuses"] == ["341", "3413"]
+
+
+def test_walking_steps_have_no_alternative_routes() -> None:
+    segments = _extract_route_segments([{
+        "trafficType": 3,
+        "startName": "A",
+        "endName": "B",
+        "sectionTime": 3,
+        "distance": 200,
+        # 잘못된 상류 데이터가 섞여도 보행 단계에는 버스 대체편을 붙이지 않습니다.
+        "lane": [{"busNo": "3412"}],
+    }])
+    assert segments is not None
+    assert segments[0].vehicle_type == "도보"
+    assert segments[0].alternative_lines is None

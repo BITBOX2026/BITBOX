@@ -88,12 +88,6 @@ def first_item_value(item: dict[str, str], names: list[str]) -> str | None:
     return None
 
 
-def extract_arrival_time(item: dict[str, str]) -> str | None:
-    """첫 번째 버스 도착 시간을 반환합니다."""
-    first, _ = extract_arrival_times(item)
-    return first
-
-
 def extract_arrival_times(item: dict[str, str]) -> tuple[str | None, str | None]:
     """첫 번째·두 번째 버스 도착 시간을 반환합니다."""
     return (

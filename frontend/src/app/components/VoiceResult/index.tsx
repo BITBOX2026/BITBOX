@@ -19,6 +19,14 @@ interface VoiceResultProps {
 
 // 가장 긴 안내 문장을 서버 음성으로 읽어도 넉넉한 값입니다.
 const PLAYBACK_WATCHDOG_MS = 30_000;
+const RAW_AUDIO_FALLBACK_WATCHDOG_MS = 60_000;
+const RAW_AUDIO_END_GRACE_MS = 5_000;
+
+function rawAudioWatchdogMs(audio: HTMLAudioElement): number {
+  return Number.isFinite(audio.duration) && audio.duration > 0
+    ? Math.ceil(audio.duration * 1_000) + RAW_AUDIO_END_GRACE_MS
+    : RAW_AUDIO_FALLBACK_WATCHDOG_MS;
+}
 
 function formatCheckedAt(value?: string | null): string | null {
   if (!value) return null;
@@ -53,12 +61,22 @@ export function VoiceResult({
   // 재생 종료 신호가 오지 않아도 "재생 중" 표시에 갇히지 않게 하는 상한입니다.
   // 여기에 갇히면 소리도 나지 않고 대체 재생 버튼도 뜨지 않아, 이용자는 안내를
   // 들을 방법이 없어집니다. BusInfoList 의 도착 안내와 같은 보호입니다.
-  const armPlaybackWatchdog = useCallback((playbackId: number) => {
+  const armPlaybackWatchdog = useCallback((playbackId: number, timeoutMs = PLAYBACK_WATCHDOG_MS) => {
     if (watchdogRef.current) clearTimeout(watchdogRef.current);
     watchdogRef.current = setTimeout(() => {
       if (playbackIdRef.current !== playbackId) return;
+      const audio = audioRef.current;
+      if (audio) {
+        audio.onloadedmetadata = null;
+        audio.onended = null;
+        audio.onerror = null;
+        audio.pause();
+        audio.currentTime = 0;
+        audioRef.current = null;
+      }
+      cancelSpeech();
       setPlaybackStatus((current) => (current === "playing" ? "blocked" : current));
-    }, PLAYBACK_WATCHDOG_MS);
+    }, timeoutMs);
   }, []);
 
   const clearPlaybackWatchdog = useCallback(() => {
@@ -74,13 +92,19 @@ export function VoiceResult({
     if (!audioRef.current) return;
     playbackIdRef.current += 1;
     clearPlaybackWatchdog();
-    audioRef.current?.pause();
-    if (audioRef.current) audioRef.current.currentTime = 0;
+    audioRef.current.onloadedmetadata = null;
+    audioRef.current.onended = null;
+    audioRef.current.onerror = null;
+    audioRef.current.pause();
+    audioRef.current.currentTime = 0;
     audioRef.current = null;
     setPlaybackStatus("idle");
   }, [clearPlaybackWatchdog]);
 
   const stopPlayback = useCallback(() => {
+    // 서버 음성은 audioRef 를 쓰지 않으므로 stopRawPlayback 만으로는 이전 비동기
+    // 결과가 무효화되지 않습니다. 새 안내가 시작될 때 항상 세대를 바꿉니다.
+    playbackIdRef.current += 1;
     stopRawPlayback();
     clearPlaybackWatchdog();
     cancelSpeech();
@@ -104,22 +128,28 @@ export function VoiceResult({
         : `data:audio/wav;base64,${rawAudioData}`;
       const audio = new Audio(audioUrl);
       audioRef.current = audio;
+      audio.onloadedmetadata = () => {
+        if (playbackIdRef.current !== playbackId || audioRef.current !== audio) return;
+        armPlaybackWatchdog(playbackId, rawAudioWatchdogMs(audio));
+      };
       audio.onended = () => {
         if (playbackIdRef.current !== playbackId) return;
         clearPlaybackWatchdog();
+        audioRef.current = null;
         signalSpeechActivity();
         setPlaybackStatus("idle");
       };
       audio.onerror = () => {
         if (playbackIdRef.current !== playbackId) return;
         clearPlaybackWatchdog();
+        audioRef.current = null;
         setPlaybackStatus("blocked");
       };
       try {
         await audio.play();
         if (playbackIdRef.current === playbackId && audioRef.current === audio) {
           setPlaybackStatus("playing");
-          armPlaybackWatchdog(playbackId);
+          armPlaybackWatchdog(playbackId, rawAudioWatchdogMs(audio));
           signalSpeechActivity();
         }
       } catch {
@@ -129,15 +159,28 @@ export function VoiceResult({
       // 브라우저가 한국어를 말할 수 없는 기기(라즈베리파이 등)에서는 서버 음성으로
       // 대체됩니다. 둘 다 안 되면 화면에 재생 버튼을 남깁니다.
       setPlaybackStatus("playing");
-      armPlaybackWatchdog(playbackId);
+      let playbackEnded = false;
       const outcome = await speakKorean(message, {
         onEnd: () => {
           if (playbackIdRef.current !== playbackId) return;
+          playbackEnded = true;
           clearPlaybackWatchdog();
           setPlaybackStatus("idle");
         },
       });
-      if (playbackIdRef.current === playbackId && outcome === "unavailable") {
+      if (
+        playbackIdRef.current === playbackId
+        && outcome === "browser"
+        && !playbackEnded
+      ) {
+        // 브라우저 음성은 시작 후 Promise 가 바로 끝나므로 종료 이벤트 상실을
+        // 별도로 감시합니다. 서버 음성은 자체적으로 실제 duration까지 기다립니다.
+        armPlaybackWatchdog(playbackId);
+      }
+      if (
+        playbackIdRef.current === playbackId
+        && (outcome === "unavailable" || outcome === "partial")
+      ) {
         clearPlaybackWatchdog();
         setPlaybackStatus("blocked");
       }
