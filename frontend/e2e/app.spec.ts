@@ -542,6 +542,32 @@ test("clears a shared kiosk session after inactivity", async ({ page }) => {
   expect(await page.evaluate(() => localStorage.getItem("bitbox.voiceConsent.v1"))).toBeNull();
 });
 
+test("listening to the guidance counts as using the kiosk", async ({ page }) => {
+  // 안내를 듣는 동안은 화면을 만지지 않는 것이 정상입니다. 그것을 유휴로 세면
+  // 낭독 도중에 결과가 사라집니다. 초기화 시간 자체는 90초 그대로여야 합니다.
+  await page.clock.install();
+  await page.route("**/api/route", (route) => route.fulfill({ json: routeResult }));
+  await page.goto("/");
+  await page.getByLabel("버스 목적지").fill("강남역");
+  await page.getByRole("button", { name: "버스 경로 검색" }).click();
+  await expect(page.getByText("강남역 2호선 방면")).toBeVisible();
+
+  await page.clock.fastForward(80_000);
+  await expect(page.getByText("강남역 2호선 방면")).toBeVisible();
+
+  // 안내 음성이 재생되면 유휴 시간을 다시 셉니다.
+  await page.evaluate(() => window.dispatchEvent(new Event("bitbox:speech-activity")));
+
+  // 검색 시점 기준으로는 이미 140초가 지났지만, 재생 기준으로는 60초입니다.
+  await page.clock.fastForward(60_000);
+  await expect(page.getByText("강남역 2호선 방면")).toBeVisible();
+
+  // 그래도 자리를 뜨면 지워집니다. 개인정보 보장은 그대로입니다.
+  await page.clock.fastForward(40_000);
+  await expect(page.getByRole("heading", { name: "어디로 갈까요?" })).toBeVisible();
+  expect(await page.evaluate(() => localStorage.getItem("bitbox.recentDestinations"))).toBeNull();
+});
+
 test("clears voice consent after inactivity even when microphone permission fails", async ({ page, context }) => {
   await page.clock.install();
   await context.clearPermissions();

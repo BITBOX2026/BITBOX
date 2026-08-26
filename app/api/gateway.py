@@ -30,12 +30,16 @@ router = APIRouter()
 logger = get_logger(__name__)
 
 # 허용할 오디오 MIME 타입 목록
+# audio/x-matroska: 일부 Chromium 빌드의 MediaRecorder 가 WebM 대신 이 타입을
+# 보고합니다. WebM 은 Matroska 의 부분집합이라 컨테이너 검사와 STT 처리는
+# 동일하므로, 기기 차이 때문에 400 으로 막히지 않도록 함께 받습니다.
 ALLOWED_CONTENT_TYPES = {
     "audio/wav",
     "audio/x-wav",
     "audio/mpeg",
     "audio/mp3",
     "audio/webm",
+    "audio/x-matroska",
     "audio/mp4",
     "audio/ogg",
 }
@@ -46,6 +50,7 @@ AUDIO_FILENAME_BY_CONTENT_TYPE = {
     "audio/mpeg": "recording.mp3",
     "audio/mp3": "recording.mp3",
     "audio/webm": "recording.webm",
+    "audio/x-matroska": "recording.webm",
     "audio/mp4": "recording.m4a",
     "audio/ogg": "recording.ogg",
 }
@@ -437,7 +442,8 @@ def _looks_like_supported_audio(content_type: str, audio_bytes: bytes) -> bool:
             and (audio_bytes[1] & 0xE0) == 0xE0
         )
 
-    if content_type == "audio/webm":
+    if content_type in {"audio/webm", "audio/x-matroska"}:
+        # WebM 과 Matroska 는 같은 EBML 헤더로 시작합니다.
         return audio_bytes.startswith(b"\x1a\x45\xdf\xa3")
 
     if content_type == "audio/mp4":

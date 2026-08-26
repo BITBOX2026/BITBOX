@@ -1,5 +1,5 @@
 import { AlertCircle, ShieldCheck, X } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { DestinationSearch } from "./DestinationSearch";
 import { PrivacyNotice } from "./PrivacyNotice";
 import { VoiceLoading } from "./VoiceLoading";
@@ -8,6 +8,7 @@ import { VoiceRecording } from "./VoiceRecording";
 import { VoiceResult } from "./VoiceResult";
 import { VoiceConfirmation } from "./VoiceConfirmation";
 import { useVoiceRecorder } from "../../hooks/useVoiceRecorder";
+import { SPEECH_ACTIVITY_EVENT } from "../../utils/speech";
 import {
   clearRecentDestinationHistory,
   readKioskStorage,
@@ -20,11 +21,20 @@ interface VoiceAssistantProps {
   onResultModeChange?: (isResult: boolean) => void;
 }
 
+// 공용 키오스크에서 이전 이용자의 흔적이 남는 시간입니다. 개인정보 보장이므로
+// 늘리지 않습니다. 대신 "무엇이 유휴인가"를 정확히 셉니다 — 안내를 듣는 중이거나
+// 요청이 진행 중인 것은 유휴가 아닙니다.
 const KIOSK_IDLE_RESET_MS = 90_000;
+// 마이크·조회가 진행 중인 상태. 이용자가 화면을 만지지 않는 것이 정상이므로
+// 유휴로 보고 세션을 지우면 안 됩니다. 각 상태는 자체 상한이 있어 멈추지 않습니다.
+const ACTIVE_STATUSES = new Set(["starting", "listening", "loading", "confirming"]);
 
 export function VoiceAssistant({ onResultModeChange }: VoiceAssistantProps) {
   const [privacyOpen, setPrivacyOpen] = useState(false);
   const [consentRequired, setConsentRequired] = useState(false);
+  // 저장소에 동의를 남기지 못한 기기를 위한 세션 한정 기억.
+  // 세션이 끝날 때(홈·유휴 초기화) 반드시 함께 지웁니다.
+  const sessionConsentRef = useRef(false);
   const {
     status,
     transcript,
@@ -45,6 +55,7 @@ export function VoiceAssistant({ onResultModeChange }: VoiceAssistantProps) {
   const resetKioskSession = useCallback(() => {
     clearRecentDestinationHistory();
     removeKioskStorage(VOICE_CONSENT_KEY);
+    sessionConsentRef.current = false;
     setPrivacyOpen(false);
     setConsentRequired(false);
     reset();
@@ -59,6 +70,10 @@ export function VoiceAssistant({ onResultModeChange }: VoiceAssistantProps) {
   }, []);
 
   useEffect(() => {
+    // 진행 중인 요청은 스스로 끝나므로(마이크·업로드 모두 상한이 있습니다)
+    // 그동안은 유휴 타이머를 멈춰 둡니다.
+    if (ACTIVE_STATUSES.has(status)) return;
+
     let timer = window.setTimeout(resetKioskSession, KIOSK_IDLE_RESET_MS);
     const rearm = () => {
       window.clearTimeout(timer);
@@ -66,19 +81,26 @@ export function VoiceAssistant({ onResultModeChange }: VoiceAssistantProps) {
     };
     window.addEventListener("pointerdown", rearm);
     window.addEventListener("keydown", rearm);
+    // 안내를 듣는 것도 이용입니다. 화면을 만지지 않았다는 이유로 낭독 도중
+    // 결과가 사라지면 안 됩니다.
+    window.addEventListener(SPEECH_ACTIVITY_EVENT, rearm);
     return () => {
       window.clearTimeout(timer);
       window.removeEventListener("pointerdown", rearm);
       window.removeEventListener("keydown", rearm);
+      window.removeEventListener(SPEECH_ACTIVITY_EVENT, rearm);
     };
-  }, [resetKioskSession]);
+  }, [resetKioskSession, status]);
 
   useEffect(() => {
     onResultModeChange?.(status === "result");
   }, [onResultModeChange, status]);
 
   const requestRecording = () => {
-    if (readKioskStorage(VOICE_CONSENT_KEY) !== "accepted") {
+    // 저장소가 막힌 기기에서는 동의가 남지 않습니다. 그대로 두면 이용할 때마다
+    // 개인정보 안내가 다시 떠서 사실상 음성 기능을 쓸 수 없게 됩니다.
+    // 이 세션 안에서 받은 동의는 화면 상태로 기억합니다.
+    if (!sessionConsentRef.current && readKioskStorage(VOICE_CONSENT_KEY) !== "accepted") {
       setConsentRequired(true);
       setPrivacyOpen(true);
       return;
@@ -93,6 +115,7 @@ export function VoiceAssistant({ onResultModeChange }: VoiceAssistantProps) {
 
   const acceptVoiceProcessing = () => {
     writeKioskStorage(VOICE_CONSENT_KEY, "accepted");
+    sessionConsentRef.current = true;
     setPrivacyOpen(false);
     setConsentRequired(false);
     void startRecording();
