@@ -36,6 +36,8 @@ function installSpeechSynthesis(voices: VoiceLike[], options: { lateVoices?: Voi
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  // setSystemTime 으로 옮긴 시계가 다음 테스트에 남지 않도록 되돌립니다.
+  vi.useRealTimers();
   resetSpeechCapability();
 });
 
@@ -75,5 +77,16 @@ describe("resolveKoreanVoice", () => {
   it("reports none when the browser has no speech synthesis at all", async () => {
     vi.stubGlobal("window", { setTimeout: globalThis.setTimeout.bind(globalThis) });
     expect(await resolveKoreanVoice(50)).toBeNull();
+  });
+
+  it("rechecks a negative result instead of deciding once for the whole uptime", async () => {
+    // 기기 부팅 직후에는 음성 엔진 등록이 늦어 처음 조회에서 못 찾을 수 있습니다.
+    // 그 결론을 영구히 굳히면 재부팅 전까지 계속 서버 음성으로 우회하게 됩니다.
+    installSpeechSynthesis([]);
+    expect(await resolveKoreanVoice(20)).toBeNull();
+
+    installSpeechSynthesis([{ lang: "ko-KR", name: "Korean" }]);
+    vi.setSystemTime(Date.now() + 10 * 60 * 1_000);
+    expect((await resolveKoreanVoice(20))?.lang).toBe("ko-KR");
   });
 });

@@ -79,7 +79,24 @@ async def _generate_bounded_speech(text: str) -> str | None:
         max_concurrent=settings.VOICE_MAX_CONCURRENT_REQUESTS,
         daily_limit=settings.SPEECH_DAILY_REQUEST_LIMIT,
     ):
-        return await generate_tts_audio(text)
+        # 파이프라인 쪽 TTS(_generate_tts_audio_safely)와 같은 상한을 적용합니다.
+        # 이것이 없으면 OpenAI 클라이언트 기본값(읽기 600초)까지 매달린 채
+        # 동시 실행 슬롯을 붙잡아, 키오스크의 음성 안내가 통째로 멈춥니다.
+        try:
+            return await asyncio.wait_for(
+                generate_tts_audio(text),
+                timeout=settings.TTS_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            logger.warning("서버 음성 합성 타임아웃: %d초", settings.TTS_TIMEOUT_SECONDS)
+            return None
+
+
+def _discard_inflight(text: str, task: asyncio.Task[str | None]) -> None:
+    """Drop a finished task so a later request starts a fresh one."""
+    with _inflight_lock:
+        if _inflight.get(text) is task:
+            _inflight.pop(text, None)
 
 
 async def _get_or_generate_speech(text: str) -> str | None:
@@ -93,14 +110,11 @@ async def _get_or_generate_speech(text: str) -> str | None:
         if task is None:
             task = asyncio.create_task(_generate_bounded_speech(text))
             _inflight[text] = task
+            # 요청이 먼저 끊겨도 정리되도록 완료 시점에 스스로 비웁니다. finally 에만
+            # 맡기면 대기 중이던 요청이 취소됐을 때 항목이 영구히 남습니다.
+            task.add_done_callback(lambda finished: _discard_inflight(text, finished))
 
-    try:
-        return await asyncio.shield(task)
-    finally:
-        if task.done():
-            with _inflight_lock:
-                if _inflight.get(text) is task:
-                    _inflight.pop(text, None)
+    return await asyncio.shield(task)
 
 
 @router.post("", response_model=SpeechResponse)
