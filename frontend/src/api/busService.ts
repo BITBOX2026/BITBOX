@@ -1,7 +1,7 @@
 import type { BusOption, BusArrivalStatus, BusCongestion } from "../types/bus";
 import { apiFetch, parseApiResponse } from "./client";
 
-interface DefaultBackendItem {
+export interface DefaultBackendItem {
   bus_number: string;
   direction: string;
   first_arrival_min?: number | null;
@@ -29,6 +29,17 @@ interface DefaultApiResponse {
   station_id: string;
   items: DefaultBackendItem[];
   message: string;
+}
+
+/**
+ * 서울 공공데이터는 추적 중인 차량이 없을 때 vehId 를 문자열 "0" 으로 보냅니다.
+ * 자바스크립트에서 "0" 은 truthy 라 `raw_veh_id1 || fallback` 이 그대로 통과시켜,
+ * 도착 예정이 없는 노선 여러 개가 전부 같은 id("0")를 갖게 됩니다. 그러면 React
+ * 가 행 사이에서 상태를 섞고, 추적 대상 조회도 엉뚱한 노선을 먼저 집습니다.
+ */
+export function normalizeVehicleId(raw?: string | null): string {
+  const value = (raw ?? "").trim();
+  return value && value !== "0" ? value : "";
 }
 
 export function toCongestion(val?: string | null): BusCongestion {
@@ -80,8 +91,11 @@ export async function getDefaultArrivals(): Promise<{ stationName: string; buses
   const data = await parseApiResponse<DefaultApiResponse>(res, "버스 도착 정보를 불러오지 못했습니다.");
   if (!data.success) throw new Error(data.message || "기본 버스 정보를 가져오는데 실패했습니다.");
 
-  const stationName = data.station_name || "정류장";
-  const items = data.items || [];
+  return { stationName: data.station_name || "정류장", buses: toBusOptions(data.items || []) };
+}
+
+/** 백엔드 도착정보를 화면용 행 목록으로 변환합니다. 각 행의 id 는 고유해야 합니다. */
+export function toBusOptions(items: DefaultBackendItem[]): BusOption[] {
   const result: BusOption[] = [];
 
   items.forEach((item) => {
@@ -90,7 +104,7 @@ export async function getDefaultArrivals(): Promise<{ stationName: string; buses
 
     if (firstStatus === "live") {
       result.push({
-        id: item.raw_veh_id1 || `${item.bus_number}-1`,
+        id: normalizeVehicleId(item.raw_veh_id1) || `${item.bus_number}-1`,
         busNumber: cleanNum,
         status: "live",
         arrivalMin: item.first_arrival_min as number,
@@ -102,14 +116,14 @@ export async function getDefaultArrivals(): Promise<{ stationName: string; buses
         congestion: toCongestion(item.raw_congestion1),
         isFullFlag: item.raw_is_full_flag1 === "1",
         isLastBus: item.raw_is_last1 === "1",
-        plainNo: item.raw_veh_id1 || "",
+        plainNo: normalizeVehicleId(item.raw_veh_id1),
         isSecond: false,
       });
     } else {
       // 도착 시각이 없는 노선도 이유와 함께 남깁니다. 행을 지워 버리면 이용자가
       // "운행이 끝난 것"인지 "화면이 고장난 것"인지 구분할 수 없습니다.
       result.push({
-        id: item.raw_veh_id1 || `${item.bus_number}-status`,
+        id: normalizeVehicleId(item.raw_veh_id1) || `${item.bus_number}-status`,
         busNumber: cleanNum,
         status: firstStatus,
         arrivalMin: -1,
@@ -121,14 +135,14 @@ export async function getDefaultArrivals(): Promise<{ stationName: string; buses
         congestion: toCongestion(item.raw_congestion1),
         isFullFlag: false,
         isLastBus: item.raw_is_last1 === "1",
-        plainNo: item.raw_veh_id1 || "",
+        plainNo: normalizeVehicleId(item.raw_veh_id1),
         isSecond: false,
       });
     }
 
     if (classifyArrival(item.second_arrival_min, item.raw_arrmsg2) === "live") {
       result.push({
-        id: item.raw_veh_id2 || `${item.bus_number}-2`,
+        id: normalizeVehicleId(item.raw_veh_id2) || `${item.bus_number}-2`,
         busNumber: cleanNum,
         status: "live",
         arrivalMin: item.second_arrival_min as number,
@@ -140,7 +154,7 @@ export async function getDefaultArrivals(): Promise<{ stationName: string; buses
         congestion: toCongestion(item.raw_congestion2),
         isFullFlag: item.raw_is_full_flag2 === "1",
         isLastBus: item.raw_is_last2 === "1",
-        plainNo: item.raw_veh_id2 || "",
+        plainNo: normalizeVehicleId(item.raw_veh_id2),
         isSecond: true,
       });
     }
@@ -159,7 +173,7 @@ export async function getDefaultArrivals(): Promise<{ stationName: string; buses
   // 노선에 따라 stationNm 을 비워 보내기도 하는데, 그때 행을 지워 버리면 실제로
   // 도착하는 버스가 전광판에서 조용히 사라져 이용자가 놓칩니다. 위치는 화면에서
   // "위치 확인 중"으로 표시하고, 도착 시간은 그대로 안내합니다.
-  return { stationName, buses: sortedBuses };
+  return sortedBuses;
 }
 
 export function getCongestionLabel(c: BusCongestion): string {
