@@ -1,5 +1,7 @@
 """Place suggestion API routes."""
 
+import asyncio
+
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
@@ -30,7 +32,10 @@ class PlaceSuggestResponse(BaseModel):
 @limiter.limit("60/minute")
 async def suggest_places(
     request: Request,
-    query: str = Query(..., min_length=1, description="검색할 장소명"),
+    # Kakao Local 키워드 검색의 상한이 100자입니다. 여기서 막지 않으면 긴 검색어가
+    # 그대로 전달돼 Kakao가 400을 돌려주고, 그 실패가 공용 회로 차단기에 쌓여
+    # 정상 이용자의 장소 검색과 /ready 까지 함께 멈춥니다.
+    query: str = Query(..., min_length=1, max_length=100, description="검색할 장소명"),
 ) -> PlaceSuggestResponse:
     """
     장소명 자동완성 후보를 반환합니다.
@@ -47,7 +52,17 @@ async def suggest_places(
         daily_limit=settings.PLACE_DAILY_REQUEST_LIMIT,
     ):
         try:
-            results = await search_place_suggestions(query, max_results=5)
+            # 프론트의 8초 제한보다 먼저 끝내, 브라우저가 연결을 끊은 뒤에도
+            # 외부 재시도만 계속되는 요청을 남기지 않습니다.
+            results = await asyncio.wait_for(
+                search_place_suggestions(query, max_results=5),
+                timeout=settings.PLACE_REQUEST_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError as exc:
+            raise HTTPException(
+                status_code=504,
+                detail="장소 검색이 지연되고 있습니다. 잠시 후 다시 시도해 주세요.",
+            ) from exc
         except TransportAPIError as exc:
             raise HTTPException(
                 status_code=int(getattr(exc, "http_status", 502)),

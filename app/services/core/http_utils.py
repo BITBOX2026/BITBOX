@@ -21,7 +21,7 @@ import httpx
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from app.core.config import settings
-from app.services.core.exceptions import ExternalServiceError
+from app.services.core.exceptions import ExternalServiceError, ProviderUsageError
 
 
 def is_retryable(exc: BaseException) -> bool:
@@ -78,16 +78,35 @@ def _record_circuit_failure(name: str, *, force_open: bool = False) -> None:
 
 
 def _counts_toward_circuit(exc: Exception) -> bool:
+    # 로컬 일일 한도·저장소 보호 실패는 제공자 장애가 아닙니다. 이를 회로 실패로
+    # 세면 ODsay가 정상인데도 /ready가 503이 됩니다.
+    if isinstance(exc, ProviderUsageError):
+        return False
     if isinstance(exc, httpx.HTTPStatusError):
         return exc.response.status_code == 429 or exc.response.status_code >= 500
     return True
 
 
-def http_retry(function: Callable[..., Any]) -> Callable[..., Any]:
-    """Retry transient failures and temporarily open a per-provider circuit."""
+DEFAULT_HTTP_ATTEMPTS = 3
+
+
+def http_retry(
+    function: Callable[..., Any] | None = None,
+    *,
+    max_attempts: int = DEFAULT_HTTP_ATTEMPTS,
+) -> Callable[..., Any]:
+    """Retry transient failures and temporarily open a per-provider circuit.
+
+    ``max_attempts`` 를 낮추는 것은 쿼터가 매우 작은 제공자를 위한 장치입니다.
+    ODsay 는 하루 30회뿐이라 순단 한 번에 3회를 쓰면 그날 남은 시간 내내 경로
+    검색이 죽습니다. 요청 하나가 실패하는 편이 하루치를 잃는 것보다 낫습니다.
+    """
+    if function is None:
+        return functools.partial(http_retry, max_attempts=max_attempts)
+
     retried = retry(
         retry=retry_if_exception(is_retryable),
-        stop=stop_after_attempt(3),
+        stop=stop_after_attempt(max_attempts),
         wait=wait_exponential(multiplier=0.5, min=0.5, max=4),
         reraise=True,
     )(function)

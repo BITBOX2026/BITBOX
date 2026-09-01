@@ -72,7 +72,11 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
 export async function parseApiResponse<T>(response: Response, fallbackMessage: string): Promise<T> {
   const payload = await response.json().catch(() => null);
   if (!response.ok) {
-    const detail = payload?.detail || payload?.message;
+    // FastAPI 의 422 검증 오류는 detail 이 객체 배열입니다. 그대로 문자열로 쓰면
+    // 이용자에게 "[object Object]" 가 그대로 보입니다. 사람이 읽을 수 있는
+    // 문자열일 때만 서버 문구를 쓰고, 아니면 화면용 기본 문구로 대체합니다.
+    const rawDetail = payload?.detail ?? payload?.message;
+    const detail = typeof rawDetail === "string" && rawDetail.trim() ? rawDetail.trim() : "";
     throw new Error(withSupportCode(detail || `${fallbackMessage} (${response.status})`, response));
   }
   if (payload === null) {

@@ -112,7 +112,7 @@ queries, uploaded filenames, API keys, and audio content.
 
 ## Deployment and rollback
 
-Only `merge-frontend-backend` triggers deployment. CI must pass backend tests,
+Only `main` triggers deployment. CI must pass backend tests,
 frontend tests, type checking, build, E2E, and a concurrent health smoke test.
 Frontend assets are written to a commit-specific release directory and switched
 through `/var/www/bitbox-current` atomically.

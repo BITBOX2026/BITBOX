@@ -73,6 +73,16 @@ class RouteNotFoundError(TransportAPIError):
     error_kind = "route_not_found"
 
 
+class ProviderUsageError(TransportAPIError):
+    """A local allowance guard stopped an outbound provider request."""
+
+    error_kind = "usage_limit"
+
+    def __init__(self, message: str, *, http_status: int, user_message: str) -> None:
+        super().__init__(message, user_message=user_message)
+        self.http_status = http_status
+
+
 class CoordinateResolveError(TransportAPIError):
     # 장소명을 좌표로 변환하지 못한 경우 — 사용자가 더 정확한 이름을 말해야 함
     user_message = "목적지 위치를 찾지 못했습니다. 더 정확한 장소명을 말씀해 주세요."

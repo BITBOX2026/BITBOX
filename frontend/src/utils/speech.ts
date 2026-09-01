@@ -39,7 +39,9 @@ const VOICE_LOOKUP_TIMEOUT_MS = 1_500;
 const VOICE_NEGATIVE_CACHE_MS = 5 * 60 * 1_000;
 // 서버 음성 요청 상한. 이 값이 없으면 응답이 늦는 동안 화면이 "재생 중"에
 // 묶인 채 소리도 대체 버튼도 나오지 않습니다.
-const SERVER_SPEECH_TIMEOUT_MS = 12_000;
+// 백엔드 TTS 상한(기본 15초)이 먼저 끝나고 503/무음 응답을 돌려줄 수 있도록
+// 네트워크 여유 2초를 둡니다. 클라이언트가 먼저 끊어 유료 작업만 남기지 않습니다.
+const SERVER_SPEECH_TIMEOUT_MS = 17_000;
 // 서버 /api/speech 가 받아 주는 문장 길이(MAX_SPEECH_CHARS)와 같아야 합니다.
 // 넘으면 422 로 거절당해 안내가 통째로 무음이 됩니다.
 const SERVER_SPEECH_MAX_CHARS = 200;

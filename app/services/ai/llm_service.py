@@ -6,6 +6,7 @@ from dataclasses import replace
 from openai import AsyncOpenAI
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_fixed
 
+from app.core.config import settings
 from app.core.logger import get_logger
 from app.services.ai.korean_number_normalizer import (
     normalize_bus_number_token,
@@ -73,7 +74,7 @@ def _load_system_prompt() -> str:
 @retry(
     retry=retry_if_exception_type(LLMParsingError),
     stop=stop_after_attempt(2),
-    wait=wait_fixed(0.5),
+    wait=wait_fixed(settings.LLM_RETRY_WAIT_SECONDS),
     reraise=True,
 )
 async def _call_llm(client: AsyncOpenAI, llm_model: str, transcript: str) -> ParsedIntent:
@@ -82,6 +83,10 @@ async def _call_llm(client: AsyncOpenAI, llm_model: str, transcript: str) -> Par
     completion = await client.chat.completions.create(
         model=llm_model,
         temperature=0,
+        # 시도 하나의 상한입니다. 공용 클라이언트 기본값(OPENAI_TIMEOUT_SECONDS)을
+        # 그대로 쓰면 첫 시도가 LLM 단계 예산을 통째로 삼켜, 파싱 실패 시의
+        # 재시도가 시작만 하고 잘립니다. 합계 검증은 validate_required_settings 에 있습니다.
+        timeout=settings.LLM_ATTEMPT_TIMEOUT_SECONDS,
         messages=[
             {"role": "system", "content": _load_system_prompt()},
             {"role": "user", "content": transcript},

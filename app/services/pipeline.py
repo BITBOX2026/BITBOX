@@ -51,15 +51,31 @@ async def run_pipeline(
     음성 파일을 최종 안내 응답으로 변환하는 전체 파이프라인입니다.
     내부 처리 후 TTS 오디오와 request_id를 결과에 추가해 반환합니다.
     """
+    started_at = time.monotonic()
     result = await _run_pipeline_core(audio_bytes, filename, request_id)
 
     # TTS는 파이프라인 핵심 로직과 분리 — 실패해도 텍스트 응답은 반환
     result["audio_base64"] = await _generate_tts_audio_safely(
         result.get("message", ""),
         request_id=request_id,
+        budget_seconds=_remaining_tts_budget(started_at),
     )
     result["request_id"] = request_id
     return result
+
+
+# 바깥 REQUEST_TIMEOUT_SECONDS 봉투가 TTS 도중에 발동하면 asyncio.CancelledError 가
+# 되어 _generate_tts_audio_safely 의 except Exception 으로도 잡히지 않습니다. 그러면
+# 오디오뿐 아니라 이미 완성해 둔 텍스트 안내까지 통째로 사라져, "TTS가 실패해도
+# 텍스트는 반환한다"는 설계가 무너집니다. 남은 시간을 직접 계산해 텍스트를 지킵니다.
+_TTS_ENVELOPE_MARGIN_SECONDS = 1.0
+
+
+def _remaining_tts_budget(started_at: float) -> float:
+    """Seconds TTS may use without letting the outer envelope discard the answer."""
+    elapsed = time.monotonic() - started_at
+    remaining = settings.REQUEST_TIMEOUT_SECONDS - elapsed - _TTS_ENVELOPE_MARGIN_SECONDS
+    return min(float(settings.TTS_TIMEOUT_SECONDS), remaining)
 
 
 async def run_text_route(
@@ -109,16 +125,27 @@ async def run_text_route(
     return result
 
 
-async def _generate_tts_audio_safely(text: str, request_id: str) -> str | None:
+async def _generate_tts_audio_safely(
+    text: str,
+    request_id: str,
+    budget_seconds: float | None = None,
+) -> str | None:
     """TTS가 느리거나 실패해도 텍스트 응답은 그대로 반환합니다."""
     if not text or not text.strip():
+        return None
+
+    timeout = float(settings.TTS_TIMEOUT_SECONDS) if budget_seconds is None else budget_seconds
+    if timeout <= 0:
+        # 앞 단계가 예산을 다 썼습니다. 여기서 TTS를 시작하면 봉투가 먼저 터져
+        # 텍스트 안내까지 함께 버려집니다. 오디오를 포기하고 텍스트를 지킵니다.
+        logger.warning("[%s] 남은 시간이 없어 TTS를 건너뜁니다 (텍스트 안내는 정상)", request_id)
         return None
 
     started_at = time.monotonic()
     try:
         return await asyncio.wait_for(
             generate_tts_audio(text),
-            timeout=settings.TTS_TIMEOUT_SECONDS,
+            timeout=timeout,
         )
     except asyncio.TimeoutError:
         logger.warning("[%s] TTS 타임아웃", request_id)
@@ -143,13 +170,31 @@ async def _run_pipeline_core(
 
     try:
         # 1단계: STT — 음성 파일을 한국어 텍스트로 변환
+        # 단계 상한이 없으면 느리기만 한(실패도 아닌) 호출 하나가 전체 봉투를 다 써,
+        # 이용자는 무엇이 잘못됐는지 알 수 없는 일반 타임아웃만 받습니다.
         t0 = time.monotonic()
-        transcript = await transcribe_audio(audio_bytes=audio_bytes, filename=filename, request_id=request_id)
+        try:
+            transcript = await asyncio.wait_for(
+                transcribe_audio(audio_bytes=audio_bytes, filename=filename, request_id=request_id),
+                timeout=settings.STT_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            raise STTProcessingError(
+                f"STT stage exceeded {settings.STT_TIMEOUT_SECONDS}s"
+            ) from None
         logger.info("[%s] STT %.2fs", request_id, time.monotonic() - t0)
 
         # 2단계: LLM — 텍스트를 intent/출발지/목적지/버스번호 등으로 구조화
         t1 = time.monotonic()
-        parsed = await parse_transit_intent(transcript, request_id=request_id)
+        try:
+            parsed = await asyncio.wait_for(
+                parse_transit_intent(transcript, request_id=request_id),
+                timeout=settings.LLM_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            raise LLMParsingError(
+                f"LLM stage exceeded {settings.LLM_TIMEOUT_SECONDS}s"
+            ) from None
         logger.info(
             "[%s] LLM %.2fs — intent=%s confidence=%.2f",
             request_id, time.monotonic() - t1, parsed.intent, parsed.confidence,

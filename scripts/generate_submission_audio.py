@@ -9,7 +9,6 @@ from pathlib import Path
 
 import httpx
 
-
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_DIR = ROOT / "artifacts" / "submission-audio"
 SPEECH_URL = "http://127.0.0.1:8000/api/speech"

@@ -10,10 +10,14 @@ ODsay 버스 경로 검색 클라이언트
 from typing import Any
 
 import httpx
+from fastapi import HTTPException
 
+from app.core.config import settings
+from app.core.usage_guard import usage_slot
 from app.services.core.constants import ODSAY_ROUTE_URL
 from app.services.core.exceptions import (
     ExternalServiceError,
+    ProviderUsageError,
     RouteNotFoundError,
     TransportAPIError,
 )
@@ -33,10 +37,28 @@ def _safe_float(value: object) -> float | None:
         return None
 
 
-@_http_retry
+# ODsay 무료 등급은 하루 30회입니다. 순단 한 번에 3회를 쓰면 그날 남은 시간
+# 내내 경로 검색이 죽습니다. 이용자는 다시 누르면 되지만 소진된 하루치는 돌아오지
+# 않으므로, 자가 치유보다 "요청 1건 = 호출 1회"의 예측 가능성을 택합니다.
+# (쿼터가 넉넉한 Kakao·공공데이터는 기본 3회를 그대로 씁니다.)
+@_http_retry(max_attempts=1)
 async def _odsay_fetch(params: dict) -> dict:
-    """ODsay 경로 검색 API를 호출합니다. 실패 시 자동 재시도합니다."""
-    response = await get_http_client().get(ODSAY_ROUTE_URL, params=params)
+    """ODsay 경로 검색 API를 호출합니다. 재시도하지 않습니다 — 호출 1회로 끝냅니다."""
+    # 이 위치는 http_retry가 감싸는 함수 본문 안입니다. 따라서 실제 HTTP 재시도
+    # 하나마다 정확히 1회를 예약하고, 메모리 경로 캐시 적중은 전혀 차감하지 않습니다.
+    try:
+        async with usage_slot(
+            "odsay",
+            max_concurrent=settings.ODSAY_MAX_CONCURRENT_REQUESTS,
+            daily_limit=settings.ODSAY_DAILY_CALL_LIMIT,
+        ):
+            response = await get_http_client().get(ODSAY_ROUTE_URL, params=params)
+    except HTTPException as exc:
+        raise ProviderUsageError(
+            "ODsay usage guard rejected an outbound request",
+            http_status=exc.status_code,
+            user_message=str(exc.detail),
+        ) from None
     response.raise_for_status()
     try:
         payload = response.json()
@@ -82,10 +104,10 @@ async def search_odsay_route(
     except httpx.HTTPStatusError as exc:
         raise ExternalServiceError(
             f"ODsay API HTTP 오류: {exc.response.status_code}"
-        ) from exc
+        ) from None
 
-    except httpx.HTTPError as exc:
-        raise ExternalServiceError("경로 API 요청 오류가 발생했습니다.") from exc
+    except httpx.HTTPError:
+        raise ExternalServiceError("경로 API 요청 오류가 발생했습니다.") from None
 
     best_path = _select_best_path(payload=payload)
 

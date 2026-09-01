@@ -12,6 +12,12 @@ const SOON_ARRIVE = 60;     // 곧 도착 기준: 60초 미만
 const SOON_PER_PAGE = 5;
 const MAIN_PER_PAGE = 5;
 const REFRESH_MS    = 15_000;
+// 서버 TTS 상한(15초) 직후 실제 오디오가 재생되는 경우까지 포함합니다. 이 값이
+// 폴링 주기와 같으면 다음 폴링이 새 안내를 시작해 막 재생된 음성을 다시 끊습니다.
+const APPROACH_SPEECH_RELEASE_MS = 30_000;
+// 추적 차량이 도착정보에서 사라졌다고 판정하기까지 필요한 연속 폴링 횟수.
+// 한 번의 일시적 누락으로 추적을 풀면 이용자가 고른 버스를 놓칩니다.
+const TRACKED_BUS_MISSING_POLLS = 2;
 const MAX_MIN       = 30;
 const DAY_KR = ["일", "월", "화", "수", "목", "금", "토"];
 
@@ -66,6 +72,12 @@ export function getApproachThreshold(previous: number | null, current: number): 
   return [0, 1, 3].find(
     (threshold) => current <= threshold && (previous === null || previous > threshold),
   ) ?? null;
+}
+
+export function approachMessage(busNumber: string, crossed: number): string {
+  if (crossed === 0) return `${busNumber}번 버스가 곧 도착합니다. 승차를 준비해 주세요.`;
+  if (crossed === 1) return `${busNumber}번 버스가 한 정거장 전입니다.`;
+  return `${busNumber}번 버스가 세 정거장 이내로 접근했습니다.`;
 }
 
 // ─── 원형 프로그레스 ─────────────────────────────────────────
@@ -248,10 +260,30 @@ export function BusInfoList() {
   const approachReleaseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const now = useLiveClock();
   const { buses, liveStationName, loading, error, lastUpdated, refetch } = useBusArrivals();
+  const trackedBus = useMemo(
+    () => buses.find((bus) => bus.id === trackedBusId || bus.plainNo === trackedBusId),
+    [buses, trackedBusId],
+  );
+  const trackedBusNumber = trackedBus?.busNumber;
+  const trackedBusStatus = trackedBus?.status;
+  const trackedRemainingStops = trackedBus?.remainingStops;
+
+  // 재생이 끝난 뒤 보관해 둔 임계값을 다시 평가할 때, 그 사이 차량 상태가 바뀌지
+  // 않았는지 확인하기 위한 최신 스냅샷입니다.
+  const trackedSnapshotRef = useRef<{
+    busNumber?: string; status?: string; remainingStops?: number;
+  }>({});
+  // 안내가 재생 중이라 아직 말하지 못한 임계값. 그냥 버리면 "곧 도착" 처럼 가장
+  // 중요한 안내가 영영 사라집니다.
+  const pendingApproachRef = useRef<{ crossed: number; busNumber: string } | null>(null);
+  const flushPendingApproachRef = useRef<() => void>(() => {});
+  // 추적 차량이 도착정보에서 연속으로 보이지 않은 폴링 횟수입니다.
+  const trackedMissRef = useRef(0);
 
   const cancelApproachSpeech = useCallback(() => {
     approachSpeechIdRef.current += 1;
     approachSpeakingRef.current = false;
+    pendingApproachRef.current = null;
     if (approachReleaseTimerRef.current) {
       clearTimeout(approachReleaseTimerRef.current);
       approachReleaseTimerRef.current = null;
@@ -259,35 +291,13 @@ export function BusInfoList() {
     cancelSpeech();
   }, []);
 
-  useEffect(() => {
-    if (!trackedBusId) {
-      lastRemainingStopsRef.current = null;
-      return;
-    }
-    const tracked = buses.find((bus) => bus.id === trackedBusId || bus.plainNo === trackedBusId);
-    if (!tracked || tracked.status !== "live" || tracked.remainingStops < 0) return;
-
-    const previous = lastRemainingStopsRef.current;
-    const crossed = getApproachThreshold(previous, tracked.remainingStops);
-    if (crossed === null) {
-      lastRemainingStopsRef.current = tracked.remainingStops;
-      return;
-    }
-    // 안내가 재생 중이면 잘라내지 않고 이번 임계값은 넘깁니다.
-    if (approachSpeakingRef.current) {
-      lastRemainingStopsRef.current = tracked.remainingStops;
-      return;
-    }
-    lastRemainingStopsRef.current = tracked.remainingStops;
-
-    const message = crossed === 0
-      ? `${tracked.busNumber}번 버스가 곧 도착합니다. 승차를 준비해 주세요.`
-      : crossed === 1
-        ? `${tracked.busNumber}번 버스가 한 정거장 전입니다.`
-        : `${tracked.busNumber}번 버스가 세 정거장 이내로 접근했습니다.`;
-
+  const startApproachSpeech = useCallback((busNumber: string, crossed: number) => {
     const speechId = ++approachSpeechIdRef.current;
     approachSpeakingRef.current = true;
+    if (approachReleaseTimerRef.current) {
+      clearTimeout(approachReleaseTimerRef.current);
+      approachReleaseTimerRef.current = null;
+    }
     const release = () => {
       if (approachSpeechIdRef.current !== speechId) return;
       approachSpeakingRef.current = false;
@@ -295,22 +305,105 @@ export function BusInfoList() {
         clearTimeout(approachReleaseTimerRef.current);
         approachReleaseTimerRef.current = null;
       }
+      // 보관해 둔 임계값은 재생이 끝나야 말할 수 있습니다. ref 만 바꾸면 아래
+      // effect 는 의존값이 그대로여서 다시 실행되지 않으므로 여기서 직접 평가합니다.
+      flushPendingApproachRef.current();
     };
     // 재생 종료 신호가 오지 않는 경우에도 다음 알림이 영영 막히지 않도록 상한을 둡니다.
-    approachReleaseTimerRef.current = setTimeout(release, 15_000);
+    approachReleaseTimerRef.current = setTimeout(release, APPROACH_SPEECH_RELEASE_MS);
 
     // 기기에 한국어 음성이 없으면 서버 음성으로 대체됩니다. 둘 다 안 되면
     // 화면의 도착 표시로만 안내되며, 알림 자체는 조용히 실패합니다.
-    void speakKorean(message, { onEnd: release, activitySource: "background" }).then((outcome) => {
+    void speakKorean(approachMessage(busNumber, crossed), {
+      onEnd: release,
+      activitySource: "background",
+    }).then((outcome) => {
       if (outcome === "unavailable") release();
     });
+  }, []);
 
-    return () => {
-      if (approachSpeechIdRef.current === speechId) {
-        cancelApproachSpeech();
-      }
+  const flushPendingApproach = useCallback(() => {
+    const pending = pendingApproachRef.current;
+    if (!pending) return;
+    pendingApproachRef.current = null;
+    const snapshot = trackedSnapshotRef.current;
+    // 같은 차량이 아직 운행 중이고, 보관한 임계값이 여전히 사실일 때만 말합니다.
+    // 이미 더 가까워졌다면 다음 폴링이 더 급한 안내를 만들어 냅니다.
+    if (snapshot.busNumber !== pending.busNumber) return;
+    if (snapshot.status !== "live") return;
+    if (snapshot.remainingStops == null || snapshot.remainingStops > pending.crossed) return;
+    startApproachSpeech(pending.busNumber, pending.crossed);
+  }, [startApproachSpeech]);
+
+  useEffect(() => {
+    flushPendingApproachRef.current = flushPendingApproach;
+  }, [flushPendingApproach]);
+
+  useEffect(() => {
+    trackedSnapshotRef.current = {
+      busNumber: trackedBusNumber,
+      status: trackedBusStatus,
+      remainingStops: trackedRemainingStops,
     };
-  }, [buses, cancelApproachSpeech, trackedBusId]);
+    if (!trackedBusId) {
+      lastRemainingStopsRef.current = null;
+      return;
+    }
+    if (
+      !trackedBusNumber
+      || trackedBusStatus !== "live"
+      || trackedRemainingStops == null
+      || trackedRemainingStops < 0
+    ) return;
+
+    const previous = lastRemainingStopsRef.current;
+    const crossed = getApproachThreshold(previous, trackedRemainingStops);
+    if (crossed === null) {
+      lastRemainingStopsRef.current = trackedRemainingStops;
+      return;
+    }
+    lastRemainingStopsRef.current = trackedRemainingStops;
+
+    if (approachSpeakingRef.current) {
+      // 곧 도착(0정거장)은 승차 준비 신호라 가장 급합니다. 재생 중인 안내를
+      // 대체하지 않으면 이 안내는 영영 나가지 못합니다.
+      if (crossed === 0) {
+        pendingApproachRef.current = null;
+        startApproachSpeech(trackedBusNumber, 0);
+        return;
+      }
+      // 나머지는 잘라내지도, 버리지도 않고 보관했다가 재생이 끝난 뒤 평가합니다.
+      const pending = pendingApproachRef.current;
+      if (!pending || pending.busNumber !== trackedBusNumber || crossed < pending.crossed) {
+        pendingApproachRef.current = { crossed, busNumber: trackedBusNumber };
+      }
+      return;
+    }
+
+    // 폴링으로 remainingStops가 바뀌어도 진행 중 안내를 cleanup에서 취소하지
+    // 않습니다. 추적 해제·다른 버스 선택은 toggleTracking이 명시적으로 취소하고,
+    // 컴포넌트 제거는 아래 전용 cleanup이 담당합니다.
+    startApproachSpeech(trackedBusNumber, crossed);
+  }, [trackedBusId, trackedBusNumber, trackedBusStatus, trackedRemainingStops, startApproachSpeech]);
+
+  // 추적하던 차량은 언젠가 반드시 도착해 목록에서 사라집니다. 그때 추적 상태가
+  // 남아 있으면 "선택 차량 도착 알림 중" 표시가 켜진 채로 자동 페이지 전환이
+  // 영구히 멈춰, 뒤에 온 이용자는 2페이지의 노선을 볼 수 없습니다. 무인 키오스크
+  // 에서는 아무도 되돌릴 수 없으므로 스스로 해제합니다.
+  useEffect(() => {
+    if (!trackedBusId || trackedBus) {
+      trackedMissRef.current = 0;
+      return;
+    }
+    trackedMissRef.current += 1;
+    if (trackedMissRef.current < TRACKED_BUS_MISSING_POLLS) return;
+    trackedMissRef.current = 0;
+    cancelApproachSpeech();
+    lastRemainingStopsRef.current = null;
+    setTrackedBusId(null);
+  }, [buses, trackedBus, trackedBusId, cancelApproachSpeech]);
+
+  useEffect(() => () => cancelApproachSpeech(), [cancelApproachSpeech]);
 
   const toggleTracking = (bus: BusInfo) => {
     cancelApproachSpeech();

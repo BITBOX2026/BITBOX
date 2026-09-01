@@ -5,8 +5,9 @@ import sqlite3
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
 
@@ -22,10 +23,27 @@ class _UsageState:
 
 _states: dict[str, _UsageState] = {}
 _lock = asyncio.Lock()
+_SERVICE_TIMEZONE = ZoneInfo("Asia/Seoul")
 
 
 class _DailyLimitReached(Exception):
     pass
+
+
+def _service_now() -> datetime:
+    """Return the clock used by Korean provider daily allowances."""
+    return datetime.now(_SERVICE_TIMEZONE)
+
+
+def _daily_retry_after_seconds(now: datetime | None = None) -> int:
+    """Seconds until the next Korean calendar day, never less than one."""
+    current = now or _service_now()
+    next_midnight = datetime.combine(
+        current.date() + timedelta(days=1),
+        time.min,
+        tzinfo=_SERVICE_TIMEZONE,
+    )
+    return max(1, int((next_midnight - current).total_seconds()))
 
 
 def _reserve_persistent_usage(name: str, day: date, daily_limit: int) -> int:
@@ -79,7 +97,7 @@ async def usage_slot(
     daily_limit: int,
 ) -> AsyncIterator[None]:
     """Reserve one bounded provider slot and release its active count afterward."""
-    today = datetime.now(UTC).date()
+    today = _service_now().date()
     async with _lock:
         state = _states.setdefault(name, _UsageState(day=today))
         if state.day != today:
@@ -89,7 +107,7 @@ async def usage_slot(
             raise HTTPException(
                 status_code=429,
                 detail="오늘의 서비스 요청 한도에 도달했습니다. 잠시 후 다시 이용해 주세요.",
-                headers={"Retry-After": "3600"},
+                headers={"Retry-After": str(_daily_retry_after_seconds())},
             )
         if state.active >= max_concurrent:
             raise HTTPException(
@@ -104,10 +122,34 @@ async def usage_slot(
                 raise HTTPException(
                     status_code=429,
                     detail="오늘의 서비스 요청 한도에 도달했습니다. 잠시 후 다시 이용해 주세요.",
-                    headers={"Retry-After": "3600"},
+                    headers={"Retry-After": str(_daily_retry_after_seconds())},
                 ) from exc
         else:
             state.used += 1
+        state.active += 1
+
+    try:
+        yield
+    finally:
+        async with _lock:
+            state.active = max(0, state.active - 1)
+
+
+@asynccontextmanager
+async def concurrency_slot(name: str, *, max_concurrent: int) -> AsyncIterator[None]:
+    """Bound in-flight work without consuming a paid-provider daily call."""
+    today = _service_now().date()
+    async with _lock:
+        state = _states.setdefault(name, _UsageState(day=today))
+        if state.day != today:
+            state.day = today
+            state.used = 0
+        if state.active >= max_concurrent:
+            raise HTTPException(
+                status_code=429,
+                detail="현재 요청이 많습니다. 잠시 후 다시 시도해 주세요.",
+                headers={"Retry-After": "5"},
+            )
         state.active += 1
 
     try:

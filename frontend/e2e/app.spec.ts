@@ -348,6 +348,30 @@ test("shows a stable live board on desktop and mobile", async ({ page }, testInf
   await page.screenshot({ path: testInfo.outputPath("home.png"), fullPage: true });
 });
 
+test("large-text mode remains usable without horizontal clipping", async ({ page }) => {
+  await page.unroute("**/api/bus/default");
+  await page.route("**/api/bus/default", (route) => route.fulfill({ json: fiveRowArrivals }));
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/");
+
+  await page.getByTitle("큰 글씨·고대비 화면으로 전환").click();
+  await expect(page.locator("html")).toHaveAttribute("data-a11y-large", "");
+  await expect(page.getByRole("combobox", { name: "버스 목적지" })).toBeVisible();
+  await expect(page.getByTestId("main-bus-row").first()).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await expect(page.getByRole("combobox", { name: "버스 목적지" })).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+});
+
+test("destination input is bounded to the backend place-query limit", async ({ page }) => {
+  await page.goto("/");
+  const input = page.getByRole("combobox", { name: "버스 목적지" });
+  await input.fill("가".repeat(101));
+  await expect(input).toHaveValue("가".repeat(100));
+});
+
 test("keeps five bus rows readable without overlap across target viewports", async ({ page }, testInfo) => {
   await page.unroute("**/api/bus/default");
   await page.route("**/api/bus/default", (route) => route.fulfill({ json: fiveRowArrivals }));
@@ -1148,6 +1172,194 @@ test("falls back to server speech for tracked-bus arrival announcements", async 
   // 브라우저 음성으로는 시도조차 하지 않아야 합니다(무음이 되므로).
   const silentCalls = await page.evaluate(() => (window as Window & { __silentSpeakCalls?: number }).__silentSpeakCalls || 0);
   expect(silentCalls).toBe(0);
+});
+
+test("bus polling never cancels an in-flight tracked-bus announcement", async ({ page }) => {
+  await page.clock.install();
+  await installDeviceWithoutKoreanVoice(page);
+
+  let busCalls = 0;
+  let speechRequests = 0;
+  let releaseSpeech: () => void = () => {};
+  const speechGate = new Promise<void>((resolve) => { releaseSpeech = resolve; });
+
+  await page.unroute("**/api/bus/default");
+  await page.route("**/api/bus/default", async (route) => {
+    busCalls += 1;
+    const remainingStops = busCalls === 1 ? 4 : busCalls === 2 ? 2 : 1;
+    if (busCalls >= 3) releaseSpeech();
+    await route.fulfill({ json: {
+      success: true, station_name: "올림픽공원역", station_id: "24245", message: "정상",
+      items: [{
+        bus_number: "3412", direction: "강남역 방향", first_arrival_min: 5, message: "x",
+        raw_arrmsg1: `5분후[${remainingStops}번째 전]`, raw_congestion1: "3",
+        raw_bus_type1: "1", raw_station_nm1: "몽촌토성역", raw_veh_id1: "poll-safe-1",
+      }],
+    } });
+  });
+  await page.route("**/api/speech", async (route) => {
+    speechRequests += 1;
+    await speechGate;
+    await route.fulfill({
+      json: { audio_base64: "UklGRiQAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YQAAAAA=" },
+    }).catch(() => {});
+  });
+
+  await page.goto("/");
+  await page.getByTestId("main-bus-row").first().click();
+  await page.clock.fastForward(15_000);
+  await expect.poll(() => speechRequests).toBe(1);
+
+  // 다음 폴링이 새 buses 배열과 remainingStops를 넣어도 기존 요청은 살아 있어야 합니다.
+  await page.clock.fastForward(15_000);
+  await expect.poll(() => busCalls).toBeGreaterThanOrEqual(3);
+  await expect.poll(() => page.evaluate(() => (
+    window as Window & { __playedAudio?: string[] }
+  ).__playedAudio?.length || 0)).toBe(1);
+  expect(speechRequests).toBe(1);
+});
+
+// 추적하던 차량은 반드시 도착해서 떠나고, 떠나면 도착정보에서 사라집니다.
+// 그때 추적 상태가 남아 있으면 무인 키오스크의 자동 페이지 전환이 영구히 멈춰
+// 뒤에 온 이용자는 2페이지의 노선을 영영 볼 수 없습니다.
+test("clears a tracked bus that has left so the board keeps rotating", async ({ page }) => {
+  await page.clock.install();
+  let trackedVehiclePresent = true;
+  const boardOf = (present: boolean) => ({
+    success: true, station_name: "올림픽공원역", station_id: "24245", message: "정상",
+    items: Array.from({ length: 7 }, (_, index) => ({
+      bus_number: String(3600 + index),
+      direction: "강남역 방향",
+      first_arrival_min: 10 + index,
+      message: "x",
+      // 0번 노선의 차량만 교체됩니다. 화면에 보이는 글자는 그대로이고
+      // 차량 번호(추적 대상)만 달라지는, 실제로 버스가 떠난 상황입니다.
+      raw_veh_id1: index === 0 ? (present ? "leaving-1" : "replacement-1") : `stay-${index}`,
+      raw_arrmsg1: `${10 + index}분후[${index + 2}번째 전]`,
+      raw_congestion1: "3", raw_bus_type1: "0",
+      raw_station_nm1: `테스트정류장${index + 1}`,
+    })),
+  });
+
+  await page.unroute("**/api/bus/default");
+  await page.route("**/api/bus/default", (route) =>
+    route.fulfill({ json: boardOf(trackedVehiclePresent) }));
+
+  await page.goto("/");
+  await expect(page.getByTestId("main-bus-row")).toHaveCount(5);
+
+  // 추적을 시작하면 자동 페이지 전환이 멈춥니다(의도된 동작).
+  await page.getByTestId("main-bus-row").first().click();
+  await page.clock.fastForward(5_000);
+  await expect(page.getByTestId("main-bus-row")).toHaveCount(5);
+
+  // 추적하던 차량이 떠납니다. 폴링 두 번이면 일시적 누락이 아님이 확정됩니다.
+  trackedVehiclePresent = false;
+  await page.clock.fastForward(15_000);
+  await page.clock.fastForward(15_000);
+
+  // 추적이 풀렸으므로 자동 페이지 전환이 재개돼 2페이지(2대)가 나타나야 합니다.
+  // 추적이 남아 있으면 5초를 아무리 흘려보내도 계속 5대에 머뭅니다.
+  await expect.poll(async () => {
+    await page.clock.fastForward(5_000);
+    return page.getByTestId("main-bus-row").count();
+  }, { timeout: 15_000 }).toBe(2);
+});
+
+// 안내가 재생 중일 때 통과한 임계값을 그냥 버리면, 가장 중요한 "곧 도착"이
+// 영영 발화되지 않을 수 있습니다. 0정거장은 진행 중 안내를 대체해야 합니다.
+test("an imminent arrival replaces an announcement that is still playing", async ({ page }) => {
+  await page.clock.install();
+  await installDeviceWithoutKoreanVoice(page);
+
+  const spokenTexts: string[] = [];
+  let releaseSpeech: () => void = () => {};
+  const speechGate = new Promise<void>((resolve) => { releaseSpeech = resolve; });
+  await page.route("**/api/speech", async (route) => {
+    const text = JSON.parse(route.request().postData() || "{}").text;
+    spokenTexts.push(text);
+    // 첫 안내(세 정거장)는 붙잡아 두어 "재생 중" 상태를 유지합니다.
+    if (spokenTexts.length === 1) await speechGate;
+    await route.fulfill({
+      json: { audio_base64: "UklGRiQAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YQAAAAA=" },
+    }).catch(() => {});
+  });
+
+  let remainingStops = 4;
+  await page.unroute("**/api/bus/default");
+  await page.route("**/api/bus/default", (route) => route.fulfill({ json: {
+    success: true, station_name: "올림픽공원역", station_id: "24245", message: "정상",
+    items: [{
+      bus_number: "3412", direction: "강남역 방향", first_arrival_min: 5, message: "x",
+      raw_arrmsg1: `5분후[${remainingStops}번째 전]`, raw_congestion1: "3",
+      raw_bus_type1: "1", raw_station_nm1: "몽촌토성역", raw_veh_id1: "urgent-1",
+    }],
+  } }));
+
+  await page.goto("/");
+  await page.getByTestId("main-bus-row").first().click();
+
+  // 3정거장 안내가 시작되고, 응답이 붙잡혀 재생 중 상태가 유지됩니다.
+  remainingStops = 3;
+  await page.clock.fastForward(15_000);
+  await expect.poll(() => spokenTexts.length).toBe(1);
+  expect(spokenTexts[0]).toContain("세 정거장");
+
+  // 재생이 끝나기 전에 곧 도착에 진입합니다.
+  remainingStops = 0;
+  await page.clock.fastForward(15_000);
+
+  await expect
+    .poll(() => spokenTexts.join(" "), { timeout: 10_000 })
+    .toContain("곧 도착합니다");
+  releaseSpeech();
+});
+
+// 긴급하지 않은 임계값도 버리지 않고, 재생이 끝난 뒤 다시 평가되어야 합니다.
+test("a threshold crossed during playback is announced once playback ends", async ({ page }) => {
+  await page.clock.install();
+  await installDeviceWithoutKoreanVoice(page);
+
+  const spokenTexts: string[] = [];
+  let releaseSpeech: () => void = () => {};
+  const speechGate = new Promise<void>((resolve) => { releaseSpeech = resolve; });
+  await page.route("**/api/speech", async (route) => {
+    spokenTexts.push(JSON.parse(route.request().postData() || "{}").text);
+    if (spokenTexts.length === 1) await speechGate;
+    await route.fulfill({
+      json: { audio_base64: "UklGRiQAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YQAAAAA=" },
+    }).catch(() => {});
+  });
+
+  let remainingStops = 4;
+  await page.unroute("**/api/bus/default");
+  await page.route("**/api/bus/default", (route) => route.fulfill({ json: {
+    success: true, station_name: "올림픽공원역", station_id: "24245", message: "정상",
+    items: [{
+      bus_number: "3412", direction: "강남역 방향", first_arrival_min: 5, message: "x",
+      raw_arrmsg1: `5분후[${remainingStops}번째 전]`, raw_congestion1: "3",
+      raw_bus_type1: "1", raw_station_nm1: "몽촌토성역", raw_veh_id1: "pending-1",
+    }],
+  } }));
+
+  await page.goto("/");
+  await page.getByTestId("main-bus-row").first().click();
+
+  remainingStops = 3;
+  await page.clock.fastForward(15_000);
+  await expect.poll(() => spokenTexts.length).toBe(1);
+
+  // 재생 중에 한 정거장 전을 통과합니다. 지금은 발화하지 않지만 버려서도 안 됩니다.
+  remainingStops = 1;
+  await page.clock.fastForward(15_000);
+
+  // 재생이 끝나면 보관해 둔 임계값이 다시 평가되어야 합니다. 헤드리스에서는
+  // 오디오 ended 이벤트가 오지 않으므로 30초 안전 해제 타이머로 종료시킵니다.
+  releaseSpeech();
+  await page.clock.fastForward(30_000);
+  await expect
+    .poll(() => spokenTexts.join(" "), { timeout: 10_000 })
+    .toContain("한 정거장 전");
 });
 
 test("a cancelled server speech request can never play after a newer announcement", async ({ page }) => {

@@ -23,9 +23,12 @@ def isolate_external_circuit_state():
     """Make readiness assertions independent of test order and prior providers."""
     with http_utils._circuit_lock:
         http_utils._circuits.clear()
+    from app.core import usage_guard
+    usage_guard._states.pop("odsay", None)
     yield
     with http_utils._circuit_lock:
         http_utils._circuits.clear()
+    usage_guard._states.pop("odsay", None)
 
 
 class _BusinessErrorResponse:

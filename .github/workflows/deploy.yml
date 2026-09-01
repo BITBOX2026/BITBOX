@@ -2,11 +2,19 @@ name: Deploy merged app to EC2
 
 on:
   push:
-    branches: [merge-frontend-backend]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
+
+# 두 커밋이 짧은 간격으로 push 되면, 먼저 시작한 배포가 EC2에서 나중 커밋을 받아
+# 프론트(러너 빌드)와 백엔드(EC2 체크아웃)가 서로 다른 커밋이 될 수 있습니다.
+# cancel-in-progress 는 쓰지 않습니다. 배포를 중간에 끊으면 systemd 재시작이나
+# 심볼릭 링크 교체 도중에 멈춰 반쯤 적용된 상태가 남습니다. 취소가 아니라 대기입니다.
+concurrency:
+  group: bitbox-deploy
+  cancel-in-progress: false
 
 jobs:
   verify-and-build:
@@ -104,6 +112,7 @@ jobs:
         uses: appleboy/ssh-action@v1.0.3
         env:
           EC2_HOST: ${{ secrets.EC2_HOST }}
+          RELEASE_SHA: ${{ github.sha }}
           BITBOX_SERVER_NAME: ${{ secrets.BITBOX_SERVER_NAME }}
           BITBOX_TLS_CERT_PATH: ${{ secrets.BITBOX_TLS_CERT_PATH }}
           BITBOX_TLS_KEY_PATH: ${{ secrets.BITBOX_TLS_KEY_PATH }}
@@ -111,11 +120,12 @@ jobs:
           host: ${{ secrets.EC2_HOST }}
           username: ubuntu
           key: ${{ secrets.EC2_SSH_KEY }}
-          envs: EC2_HOST,BITBOX_SERVER_NAME,BITBOX_TLS_CERT_PATH,BITBOX_TLS_KEY_PATH
+          envs: EC2_HOST,RELEASE_SHA,BITBOX_SERVER_NAME,BITBOX_TLS_CERT_PATH,BITBOX_TLS_KEY_PATH
           script: |
             set -euo pipefail
             cd /home/ubuntu/BITBOX
-            git fetch origin merge-frontend-backend
+            [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+            git fetch --no-tags origin main
             previous_sha="$(curl --fail --silent --max-time 5 http://127.0.0.1:8001/health \
               | .venv/bin/python -c 'import json, sys; print(json.load(sys.stdin).get("release_sha", ""))' \
               2>/dev/null || true)"
@@ -129,8 +139,13 @@ jobs:
             else
               sudo rm -f /etc/bitbox/previous_release_sha
             fi
-            git checkout merge-frontend-backend
-            git pull --ff-only origin merge-frontend-backend
+            # 이 워크플로를 실행시킨 바로 그 커밋만 체크아웃합니다. `checkout main` +
+            # `pull` 은 배포가 도는 동안 push 된 다음 커밋을 끌어와, 러너에서 빌드한
+            # 프론트와 EC2 백엔드가 서로 다른 커밋이 되게 만듭니다. 그 불일치는
+            # /health 가 RELEASE_SHA 환경변수를 그대로 되돌려주기 때문에 감지되지도
+            # 않습니다. rollback.sh 도 같은 방식(--detach)으로 되돌립니다.
+            git cat-file -e "${RELEASE_SHA}^{commit}"
+            git checkout --quiet --force --detach "$RELEASE_SHA"
             if ! command -v nginx >/dev/null 2>&1 || ! command -v envsubst >/dev/null 2>&1 || ! command -v certbot >/dev/null 2>&1 || ! command -v rsync >/dev/null 2>&1; then
               sudo apt-get update -qq
               sudo apt-get install -y nginx gettext-base certbot rsync
@@ -208,7 +223,7 @@ jobs:
 
             sudo install -d -m 700 /etc/bitbox
             sudo install -d -o ubuntu -g ubuntu -m 750 /var/lib/bitbox
-            printf 'APP_ENV=prod\nUSE_MOCK_EXTERNALS=false\nCORS_ALLOWED_ORIGINS=\nAPI_AUTH_TOKEN=%s\nOPENAI_API_KEY=%s\nKAKAO_REST_API_KEY=%s\nODSAY_API_KEY=%s\nPUBLIC_DATA_SERVICE_KEY=%s\nRELEASE_SHA=%s\nUSAGE_DB_PATH=/var/lib/bitbox/usage.sqlite3\nDEFAULT_ORIGIN_NAME=올림픽공원역\nDEFAULT_BUS_STOP_NAME=올림픽공원역\nDEFAULT_BUS_STATION_ID=24245\n' \
+            printf 'APP_ENV=prod\nUSE_MOCK_EXTERNALS=false\nCORS_ALLOWED_ORIGINS=\nAPI_AUTH_TOKEN=%s\nOPENAI_API_KEY=%s\nKAKAO_REST_API_KEY=%s\nODSAY_API_KEY=%s\nPUBLIC_DATA_SERVICE_KEY=%s\nRELEASE_SHA=%s\nUSAGE_DB_PATH=/var/lib/bitbox/usage.sqlite3\nDEFAULT_ORIGIN_NAME=올림픽공원역\nDEFAULT_BUS_STOP_NAME=올림픽공원역\nDEFAULT_BUS_STATION_ID=24245\nEXTERNAL_HTTP_TIMEOUT_SECONDS=8\nPLACE_REQUEST_TIMEOUT_SECONDS=7\nOPENAI_TIMEOUT_SECONDS=20\nOPENAI_MAX_RETRIES=0\nSTT_TIMEOUT_SECONDS=12\nLLM_TIMEOUT_SECONDS=10\nLLM_ATTEMPT_TIMEOUT_SECONDS=4\nLLM_RETRY_WAIT_SECONDS=0.5\nODSAY_MAX_CONCURRENT_REQUESTS=3\nODSAY_DAILY_CALL_LIMIT=30\n' \
               "$API_AUTH_TOKEN" "$OPENAI_API_KEY" "$KAKAO_REST_API_KEY" "$ODSAY_API_KEY" "$PUBLIC_DATA_SERVICE_KEY" "$RELEASE_SHA" \
               | sudo tee /etc/bitbox/bitbox.env >/dev/null
             sudo chmod 600 /etc/bitbox/bitbox.env
@@ -321,6 +336,24 @@ jobs:
           --url "https://$BITBOX_SERVER_NAME"
           --expected-release-sha "${{ github.sha }}"
           --check-transit
+
+      # ODsay 무료 등급은 하루 30회입니다. 배포 검증(--check-transit)이 그중 몇 회를
+      # 썼는지 로그에 남겨야 시연 당일 남은 예산을 계획할 수 있습니다. /internal/status
+      # 는 localhost 전용이라 외부에는 404 이고, 이 조회 자체는 ODsay 를 쓰지 않습니다.
+      - name: Report today's ODsay call usage
+        if: always()
+        continue-on-error: true
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -uo pipefail
+            cd /home/ubuntu/BITBOX
+            curl --fail --silent --max-time 5 http://127.0.0.1:8001/internal/status \
+              | .venv/bin/python -c 'import json, sys; u = (json.load(sys.stdin).get("usage") or {}).get("odsay") or {}; print("ODsay usage today (%s KST): used=%s of %s active=%s" % (u.get("day", "?"), u.get("used", "?"), 30, u.get("active", "?")))' \
+              || echo "ODsay usage could not be read (backend not answering on localhost)"
 
       - name: Mark deployment verified
         if: success()

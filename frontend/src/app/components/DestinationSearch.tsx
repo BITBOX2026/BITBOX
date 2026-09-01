@@ -69,7 +69,9 @@ export function DestinationSearch({ disabled, onSubmit }: DestinationSearchProps
       setSuggestionError("");
       abortTimer = window.setTimeout(() => controller.abort(), SUGGEST_TIMEOUT_MS);
       try {
-        setSuggestions(await suggestPlaces(trimmedDestination, controller.signal));
+        const nextSuggestions = await suggestPlaces(trimmedDestination, controller.signal);
+        if (superseded) return;
+        setSuggestions(nextSuggestions);
         setActiveIndex(-1);
       } catch (error) {
         if (superseded) return;
@@ -129,6 +131,7 @@ export function DestinationSearch({ disabled, onSubmit }: DestinationSearchProps
         <form className="flex h-12 overflow-hidden rounded-md border border-white/20 bg-white shadow-lg" onSubmit={(event) => { event.preventDefault(); void submit(); }}>
           <input
             value={destination}
+            maxLength={100}
             onChange={(event) => { setDestination(event.target.value); setSelectedDestination(null); }}
             onFocus={() => setIsFocused(true)}
             onBlur={() => window.setTimeout(() => setIsFocused(false), 120)}

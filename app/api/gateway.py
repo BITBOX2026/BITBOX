@@ -19,7 +19,7 @@ from app.core.logger import get_logger
 from app.core.rate_limiter import limiter
 from app.core.request_context import request_id_for
 from app.core.runtime_metrics import record_business_error
-from app.core.usage_guard import usage_slot
+from app.core.usage_guard import concurrency_slot, usage_slot
 from app.services.pipeline import (
     build_timeout_error_response,
     run_pipeline,
@@ -159,10 +159,9 @@ async def process_text_route(
     request_id = request_id_for(request)[:12]
 
     try:
-        async with usage_slot(
+        async with concurrency_slot(
             "route",
             max_concurrent=settings.ROUTE_MAX_CONCURRENT_REQUESTS,
-            daily_limit=settings.ROUTE_DAILY_REQUEST_LIMIT,
         ):
             result = await asyncio.wait_for(
                 run_text_route(

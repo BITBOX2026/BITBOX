@@ -61,17 +61,33 @@ class Settings(BaseSettings):
     # -------------------------------------------------------------------------
     MAX_AUDIO_SIZE_MB: int = 10       # 업로드 허용 최대 오디오 파일 크기 (MB)
     REQUEST_TIMEOUT_SECONDS: int = 30  # 파이프라인 전체 타임아웃 (초)
+    EXTERNAL_HTTP_TIMEOUT_SECONDS: float = 8.0
+    PLACE_REQUEST_TIMEOUT_SECONDS: float = 7.0
     CORS_ALLOWED_ORIGINS: str = "http://localhost:5173,http://127.0.0.1:5173"
     RATE_LIMIT_ENABLED: bool = True
     API_AUTH_TOKEN: str | None = None   # 설정 시 /api/process 호출에 토큰 필요
     RELEASE_SHA: str | None = None
     USAGE_DB_PATH: str | None = None
     TTS_TIMEOUT_SECONDS: int = 15       # TTS 단독 타임아웃 (초, 콜드 스타트 포함)
+    OPENAI_TIMEOUT_SECONDS: float = 20.0
+    OPENAI_MAX_RETRIES: int = 0
+    # 음성 파이프라인의 단계별 상한입니다. 이 값이 없으면 느린(실패가 아닌) OpenAI
+    # 호출 하나가 전체 예산을 다 써, 이용자는 원인을 알 수 없는 일반 타임아웃만
+    # 보게 됩니다. 합계는 REQUEST_TIMEOUT_SECONDS 보다 작아야 합니다.
+    STT_TIMEOUT_SECONDS: float = 12.0
+    LLM_TIMEOUT_SECONDS: float = 10.0
+    # LLM 단계는 파싱 실패에 한해 한 번 더 시도합니다. 한 번의 시도가 단계 예산의
+    # 절반을 넘으면 그 재시도는 시작만 하고 잘려, 아무 일도 하지 못합니다.
+    LLM_ATTEMPT_TIMEOUT_SECONDS: float = 4.0
+    LLM_RETRY_WAIT_SECONDS: float = 0.5
     ALLOW_KNOWN_PLACE_FALLBACK: bool | None = None
     VOICE_MAX_CONCURRENT_REQUESTS: int = 4
     VOICE_DAILY_REQUEST_LIMIT: int = 500
     ROUTE_MAX_CONCURRENT_REQUESTS: int = 12
-    ROUTE_DAILY_REQUEST_LIMIT: int = 5000
+    # 사용자 경로 요청 수가 아니라 실제 ODsay HTTP 시도 횟수를 제한합니다.
+    # 재시도도 제공자 호출 1회이므로 _odsay_fetch 내부에서 매번 차감합니다.
+    ODSAY_MAX_CONCURRENT_REQUESTS: int = 3
+    ODSAY_DAILY_CALL_LIMIT: int = 30
     # 브라우저가 한국어를 말하지 못하는 기기에서만 쓰이는 서버 음성 합성 한도.
     # 같은 문구가 반복되어 캐시 적중률이 높으므로 실제 호출은 이보다 훨씬 적습니다.
     SPEECH_DAILY_REQUEST_LIMIT: int = 2000
@@ -143,7 +159,8 @@ def validate_required_settings() -> None:
 
     positive_settings = (
         "VOICE_MAX_CONCURRENT_REQUESTS", "VOICE_DAILY_REQUEST_LIMIT",
-        "ROUTE_MAX_CONCURRENT_REQUESTS", "ROUTE_DAILY_REQUEST_LIMIT",
+        "ROUTE_MAX_CONCURRENT_REQUESTS",
+        "ODSAY_MAX_CONCURRENT_REQUESTS", "ODSAY_DAILY_CALL_LIMIT",
         "PLACE_MAX_CONCURRENT_REQUESTS", "PLACE_DAILY_REQUEST_LIMIT",
         "SPEECH_DAILY_REQUEST_LIMIT",
         "EXTERNAL_CIRCUIT_FAILURE_THRESHOLD", "EXTERNAL_CIRCUIT_RESET_SECONDS",
@@ -151,6 +168,45 @@ def validate_required_settings() -> None:
     for name in positive_settings:
         if getattr(settings, name) < 1:
             raise RuntimeError(f"{name}은 1 이상이어야 합니다.")
+
+    if settings.OPENAI_TIMEOUT_SECONDS <= 0:
+        raise RuntimeError("OPENAI_TIMEOUT_SECONDS는 0보다 커야 합니다.")
+    if settings.OPENAI_MAX_RETRIES < 0:
+        raise RuntimeError("OPENAI_MAX_RETRIES는 0 이상이어야 합니다.")
+    if settings.EXTERNAL_HTTP_TIMEOUT_SECONDS <= 0:
+        raise RuntimeError("EXTERNAL_HTTP_TIMEOUT_SECONDS는 0보다 커야 합니다.")
+    if settings.PLACE_REQUEST_TIMEOUT_SECONDS <= 0:
+        raise RuntimeError("PLACE_REQUEST_TIMEOUT_SECONDS는 0보다 커야 합니다.")
+
+    for name in (
+        "STT_TIMEOUT_SECONDS",
+        "LLM_TIMEOUT_SECONDS",
+        "LLM_ATTEMPT_TIMEOUT_SECONDS",
+        "LLM_RETRY_WAIT_SECONDS",
+    ):
+        if getattr(settings, name) <= 0:
+            raise RuntimeError(f"{name}은 0보다 커야 합니다.")
+
+    # 두 번의 시도와 그 사이 대기가 LLM 단계 예산 안에 들어가야, 재시도가 실제로
+    # 완료될 기회를 얻습니다. 넘치면 재시도는 시작만 하고 잘립니다.
+    llm_retry_budget = (
+        settings.LLM_ATTEMPT_TIMEOUT_SECONDS * 2 + settings.LLM_RETRY_WAIT_SECONDS
+    )
+    if llm_retry_budget > settings.LLM_TIMEOUT_SECONDS:
+        raise RuntimeError(
+            "LLM_TIMEOUT_SECONDS는 두 번의 시도와 재시도 대기를 담을 수 있어야 합니다."
+        )
+
+    # STT 와 LLM 만으로 전체 예산을 소진하면, 교통 조회·응답 생성이 시작되기도 전에
+    # 파이프라인이 잘려 구체적 오류 대신 일반 타임아웃이 나갑니다.
+    if (
+        settings.STT_TIMEOUT_SECONDS + settings.LLM_TIMEOUT_SECONDS
+        >= settings.REQUEST_TIMEOUT_SECONDS
+    ):
+        raise RuntimeError(
+            "STT_TIMEOUT_SECONDS + LLM_TIMEOUT_SECONDS는 "
+            "REQUEST_TIMEOUT_SECONDS보다 작아야 합니다."
+        )
 
     # 좌표값이 있으면 숫자 형식인지 확인
     for name in ("DEFAULT_ORIGIN_X", "DEFAULT_ORIGIN_Y", "ORIGIN_X", "ORIGIN_Y"):

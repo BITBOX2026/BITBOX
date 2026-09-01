@@ -113,13 +113,13 @@ async def request_seoul_bus_payload(
             user_message="버스 도착정보 서비스를 사용할 수 없습니다. 잠시 후 다시 시도해 주세요.",
             retryable=status_code == 429 or status_code >= 500,
             provider_down=status_code in {401, 403},
-        ) from exc
+        ) from None
 
-    except httpx.RequestError as exc:
+    except httpx.RequestError:
         raise ExternalServiceError(
             f"공공데이터 API 요청 오류({stage})",
             user_message="버스 도착정보 서비스를 사용할 수 없습니다. 잠시 후 다시 시도해 주세요.",
-        ) from exc
+        ) from None
 
     if last_auth_error:
         code, message = last_auth_error

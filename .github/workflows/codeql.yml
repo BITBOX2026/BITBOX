@@ -2,7 +2,7 @@ name: CodeQL
 
 on:
   push:
-    branches: [merge-frontend-backend]
+    branches: [main]
   pull_request:
     branches: [merge-frontend-backend, main]
   schedule:
