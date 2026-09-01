@@ -52,6 +52,9 @@ class RouteSegment:
     end_x: float | None = None    # 하차 정류장 경도
     end_y: float | None = None    # 하차 정류장 위도
     path_points: list[dict[str, float]] | None = None  # 경유 정류장 좌표
+    # 같은 구간을 달리는 다른 노선들. ODsay 는 이들을 서로 바꿔 탈 수 있는 대안으로
+    # 내려줍니다. 하나만 안내하면 먼저 오는 다른 차를 그냥 보내게 됩니다.
+    alternative_lines: list[str] | None = None
 
 
 @dataclass

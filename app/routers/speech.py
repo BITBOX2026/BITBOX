@@ -97,6 +97,18 @@ def _discard_inflight(text: str, task: asyncio.Task[str | None]) -> None:
     with _inflight_lock:
         if _inflight.get(text) is task:
             _inflight.pop(text, None)
+    # 모든 HTTP 대기자가 먼저 취소된 뒤 task 가 실패하면 예외를 읽을 주체가 없습니다.
+    # 완료 콜백에서 관측해 asyncio의 "Task exception was never retrieved" 경고와
+    # 원인 없는 운영 장애를 막습니다. 정상 대기자가 있어도 예외를 읽는 것은 안전합니다.
+    try:
+        error = task.exception()
+    except asyncio.CancelledError:
+        return
+    if error is not None:
+        logger.error(
+            "공유 서버 음성 합성 작업 실패",
+            exc_info=(type(error), error, error.__traceback__),
+        )
 
 
 async def _get_or_generate_speech(text: str) -> str | None:

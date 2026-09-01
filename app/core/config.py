@@ -66,7 +66,7 @@ class Settings(BaseSettings):
     API_AUTH_TOKEN: str | None = None   # 설정 시 /api/process 호출에 토큰 필요
     RELEASE_SHA: str | None = None
     USAGE_DB_PATH: str | None = None
-    TTS_TIMEOUT_SECONDS: int = 8        # TTS 단독 타임아웃 (초)
+    TTS_TIMEOUT_SECONDS: int = 15       # TTS 단독 타임아웃 (초, 콜드 스타트 포함)
     ALLOW_KNOWN_PLACE_FALLBACK: bool | None = None
     VOICE_MAX_CONCURRENT_REQUESTS: int = 4
     VOICE_DAILY_REQUEST_LIMIT: int = 500

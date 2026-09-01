@@ -301,7 +301,7 @@ export function BusInfoList() {
 
     // 기기에 한국어 음성이 없으면 서버 음성으로 대체됩니다. 둘 다 안 되면
     // 화면의 도착 표시로만 안내되며, 알림 자체는 조용히 실패합니다.
-    void speakKorean(message, { onEnd: release }).then((outcome) => {
+    void speakKorean(message, { onEnd: release, activitySource: "background" }).then((outcome) => {
       if (outcome === "unavailable") release();
     });
 
@@ -521,7 +521,9 @@ export function BusInfoList() {
                         )}
                         <div className="flex flex-col min-w-0">
                           <span className="truncate text-[14px] font-black leading-normal text-[#1E293B] sm:text-[17px] md:text-[20px]">
-                            {bus.status === "live" ? bus.currentStationName : bus.arrivalMsg}
+                            {bus.status === "live"
+                              ? bus.currentStationName || "위치 확인 중"
+                              : bus.arrivalMsg}
                           </span>
                           <StopsDot remaining={bus.remainingStops} />
                           <div className="mt-1 flex gap-1">

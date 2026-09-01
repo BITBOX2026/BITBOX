@@ -15,6 +15,8 @@ import pytest
 import app.main as main_module
 from app.core import auth
 from app.routers import speech as speech_module
+from app.services.core.service_types import ParsedIntent, RouteSegment, TransportResult
+from app.services.response_builder import build_user_message
 
 
 @pytest.fixture(autouse=True)
@@ -188,6 +190,76 @@ def test_a_cancelled_request_does_not_block_later_synthesis(monkeypatch) -> None
     response = asyncio.run(run())
     assert response.status_code == 200
     assert response.json()["audio_base64"] == "QUJD"
+
+
+def test_failed_shared_synthesis_is_observed_after_all_waiters_cancel(monkeypatch) -> None:
+    """연결이 먼저 끊긴 공유 task의 예외도 완료 콜백이 관측하고 정리합니다."""
+    started = asyncio.Event()
+    release = asyncio.Event()
+    logged: list[str] = []
+
+    async def failing_tts(_text: str) -> str:
+        started.set()
+        await release.wait()
+        raise RuntimeError("synthetic TTS failure")
+
+    async def run() -> None:
+        monkeypatch.setattr(speech_module, "generate_tts_audio", failing_tts)
+        monkeypatch.setattr(
+            speech_module.logger,
+            "error",
+            lambda message, *args, **kwargs: logged.append(str(message)),
+        )
+        waiter = asyncio.create_task(speech_module._get_or_generate_speech("실패 안내"))
+        await started.wait()
+        waiter.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await waiter
+        release.set()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+    asyncio.run(run())
+
+    assert not speech_module._inflight
+    assert logged == ["공유 서버 음성 합성 작업 실패"]
+
+
+def test_real_route_guidance_fits_the_length_limit_once_split() -> None:
+    """실제 안내 문장이 서버 한도를 넘는지 확인합니다.
+
+    환승이 두 번 있는 경로 안내는 200자를 넘습니다. 프론트가 문장 단위로 끊어
+    보내지 않으면 422 로 거절당하고, 기기에 한국어 음성이 없는 키오스크에서는
+    경로가 복잡할수록 안내가 통째로 무음이 됩니다.
+    프론트의 분할 규칙은 frontend/src/utils/speechChunking.test.ts 가 지킵니다.
+    """
+    segments = []
+    for index in range(3):
+        segments.append(RouteSegment(
+            vehicle_type="도보", line="도보 200m",
+            start_name=f"정류장{index}", end_name=f"한국체육대학교입구{index}", time_min=4,
+        ))
+        segments.append(RouteSegment(
+            vehicle_type="버스", line=f"{3412 + index}번",
+            start_name=f"한국체육대학교입구{index}",
+            end_name=f"잠실종합운동장사거리{index}", time_min=15,
+        ))
+
+    message = build_user_message(
+        parsed=ParsedIntent(intent="route", destination_text="강남역", transport_mode="bus"),
+        transport_result=TransportResult(
+            origin="올림픽공원역", destination="강남역 2번 출구", transport_mode="bus",
+            bus_number="3412", total_time_min=60, payment=2500,
+            route_segments=segments, source="odsay",
+        ),
+    )
+
+    assert len(message) > speech_module.MAX_SPEECH_CHARS, (
+        "안내 문장이 짧아졌다면 이 회귀 방지 테스트를 실제 상한에 맞게 갱신하세요"
+    )
+    # 한 문장씩 나누면 모든 조각이 상한 안에 들어와야 합니다.
+    for sentence in message.split(". "):
+        assert len(sentence) + 1 <= speech_module.MAX_SPEECH_CHARS
 
 
 def test_cache_does_not_grow_without_bound(monkeypatch) -> None:

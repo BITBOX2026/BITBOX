@@ -307,6 +307,7 @@ test.beforeEach(async ({ page }) => {
       text: string;
       lang = "";
       rate = 1;
+      onstart: (() => void) | null = null;
       onend: (() => void) | null = null;
       onerror: (() => void) | null = null;
       constructor(text: string) { this.text = text; }
@@ -329,6 +330,7 @@ test.beforeEach(async ({ page }) => {
           const trackedWindow = window as Window & { __spokenPrompts?: string[] };
           trackedWindow.__spokenPrompts = [...(trackedWindow.__spokenPrompts || []), utterance.text];
           this.speaking = true;
+          utterance.onstart?.();
           window.setTimeout(() => { this.speaking = false; utterance.onend?.(); }, 1_000);
         },
       },
@@ -536,6 +538,12 @@ test("clears a shared kiosk session after inactivity", async ({ page }) => {
   await expect(page.getByText("강남역 2호선 방면")).toBeVisible();
   expect(await page.evaluate(() => localStorage.getItem("bitbox.recentDestinations"))).not.toBeNull();
 
+  // 결과 안내 낭독이 시작된 뒤 종료 활동까지 반영하고, 그 이후의 실제 비활동
+  // 90초를 잽니다. 낭독 중 초기화하지 않는 계약과 개인정보 상한을 함께 검증합니다.
+  await expect.poll(() => page.evaluate(() => (
+    window as Window & { __spokenPrompts?: string[] }
+  ).__spokenPrompts?.length || 0)).toBeGreaterThanOrEqual(1);
+  await page.clock.fastForward(1_100);
   await page.clock.fastForward(90_000);
   await expect(page.getByRole("heading", { name: "어디로 갈까요?" })).toBeVisible();
   expect(await page.evaluate(() => localStorage.getItem("bitbox.recentDestinations"))).toBeNull();
@@ -566,6 +574,28 @@ test("listening to the guidance counts as using the kiosk", async ({ page }) => 
   await page.clock.fastForward(40_000);
   await expect(page.getByRole("heading", { name: "어디로 갈까요?" })).toBeVisible();
   expect(await page.evaluate(() => localStorage.getItem("bitbox.recentDestinations"))).toBeNull();
+});
+
+test("tracked-bus background speech does not extend route privacy", async ({ page }) => {
+  await page.clock.install();
+  await page.route("**/api/route", (route) => route.fulfill({ json: routeResult }));
+  await page.goto("/");
+  await page.getByLabel("버스 목적지").fill("강남역");
+  await page.getByRole("button", { name: "버스 경로 검색" }).click();
+  await expect(page.getByText("강남역 2호선 방면")).toBeVisible();
+  await expect.poll(() => page.evaluate(() => (
+    window as Window & { __spokenPrompts?: string[] }
+  ).__spokenPrompts?.length || 0)).toBeGreaterThanOrEqual(1);
+  await page.clock.fastForward(1_100);
+
+  await page.clock.fastForward(80_000);
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent(
+    "bitbox:speech-activity",
+    { detail: { source: "background" } },
+  )));
+  await page.clock.fastForward(10_100);
+
+  await expect(page.getByRole("heading", { name: "어디로 갈까요?" })).toBeVisible();
 });
 
 test("clears voice consent after inactivity even when microphone permission fails", async ({ page, context }) => {
@@ -614,6 +644,51 @@ test("confirms an ambiguous station before requesting its route", async ({ page 
   expect(requestBodies).toHaveLength(2);
   expect(requestBodies[1].destination_x).toBe(127.02800140627488);
   expect(requestBodies[1].destination_y).toBe(37.49808633653005);
+});
+
+test("keeps a live arrival whose current station name is temporarily blank", async ({ page }) => {
+  await page.unroute("**/api/bus/default");
+  await page.route("**/api/bus/default", (route) => route.fulfill({ json: {
+    success: true,
+    station_name: "올림픽공원역",
+    station_id: "24245",
+    message: "정상",
+    items: [{
+      bus_number: "3412",
+      direction: "강남역 방향",
+      first_arrival_min: 4,
+      message: "4분 후 도착",
+      raw_arrmsg1: "4분후",
+      raw_station_nm1: "",
+      raw_veh_id1: "blank-station-1",
+    }],
+  } }));
+
+  await page.goto("/");
+  const row = page.getByTestId("main-bus-row").filter({ hasText: "3412" });
+  await expect(row).toHaveCount(1);
+  await expect(row).toContainText("위치 확인 중");
+  await expect(row).toContainText("4");
+});
+
+test("clears an unanswered place confirmation after inactivity", async ({ page }) => {
+  await page.clock.install();
+  await page.route("**/api/route", (route) => route.fulfill({ json: placeConfirmationResult }));
+
+  await page.goto("/");
+  await page.getByLabel("버스 목적지").fill("강남역");
+  await page.getByRole("button", { name: "버스 경로 검색" }).click();
+  await expect(page.getByRole("group", { name: "강남역 2호선이 맞나요?" })).toBeVisible();
+
+  // 낭독 비동기 작업이 실제로 시작된 다음 종료 시점까지 진행해야, 종료 활동으로
+  // 다시 설정된 90초 타이머를 정확히 검증할 수 있습니다.
+  await expect.poll(() => page.evaluate(() => (
+    window as Window & { __spokenPrompts?: string[] }
+  ).__spokenPrompts?.length || 0)).toBeGreaterThanOrEqual(1);
+  await page.clock.fastForward(1_100);
+  await page.clock.fastForward(90_000);
+  await expect(page.getByRole("heading", { name: "어디로 갈까요?" })).toBeVisible();
+  await expect(page.getByRole("group", { name: "강남역 2호선이 맞나요?" })).toHaveCount(0);
 });
 
 test("shows route server errors instead of an empty result", async ({ page }) => {
@@ -1112,9 +1187,10 @@ test("a cancelled server speech request can never play after a newer announcemen
 });
 
 test("a new announcement also stops pre-generated route audio", async ({ page }) => {
+  const routeAudio = "UklGRiQAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YQAAAAA=";
   await installDeviceWithoutKoreanVoice(page);
   await page.route("**/api/route", (route) => route.fulfill({
-    json: { ...routeResult, audio_base64: "UkFX" },
+    json: { ...routeResult, audio_base64: routeAudio },
   }));
   await page.route("**/api/speech", (route) => route.fulfill({
     json: { audio_base64: "TkVX" },
@@ -1126,7 +1202,7 @@ test("a new announcement also stops pre-generated route audio", async ({ page })
   await expect(page.getByText("강남역 2호선 방면")).toBeVisible();
   await expect.poll(() => page.evaluate(() => (
     window as Window & { __playedAudio?: string[] }
-  ).__playedAudio || [])).toContainEqual(expect.stringContaining("UkFX"));
+  ).__playedAudio || [])).toContainEqual(expect.stringContaining(routeAudio));
 
   await page.evaluate(async () => {
     const speech = await import("/src/utils/speech.ts");
@@ -1134,7 +1210,7 @@ test("a new announcement also stops pre-generated route audio", async ({ page })
   });
   await expect.poll(() => page.evaluate(() => (
     window as Window & { __pausedAudio?: string[] }
-  ).__pausedAudio || [])).toContainEqual(expect.stringContaining("UkFX"));
+  ).__pausedAudio || [])).toContainEqual(expect.stringContaining(routeAudio));
 });
 
 test("uses the browser voice and never calls the paid endpoint when one exists", async ({ page }) => {
@@ -1149,9 +1225,11 @@ test("uses the browser voice and never calls the paid endpoint when one exists",
         speaking: false,
         getVoices: () => [{ lang: "ko-KR", name: "Korean" }],
         addEventListener() {}, removeEventListener() {}, cancel() {},
-        speak(utterance: { text: string }) {
+        speak(utterance: { text: string; onstart?: () => void; onend?: () => void }) {
           const tracked = window as Window & { __spokenPrompts?: string[] };
           tracked.__spokenPrompts = [...(tracked.__spokenPrompts || []), utterance.text];
+          utterance.onstart?.();
+          queueMicrotask(() => utterance.onend?.());
         },
       },
     });
@@ -1165,6 +1243,127 @@ test("uses the browser voice and never calls the paid endpoint when one exists",
   await expect.poll(() => page.evaluate(() => (window as Window & { __spokenPrompts?: string[] }).__spokenPrompts?.length || 0))
     .toBeGreaterThanOrEqual(1);
   expect(speechCalls).toBe(0);
+});
+
+test("falls back when a listed browser voice never starts", async ({ page }) => {
+  let speechCalls = 0;
+  await page.route("**/api/speech", async (route) => {
+    speechCalls += 1;
+    await route.fulfill({ json: { audio_base64: "UklGRiQAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YQAAAAA=" } });
+  });
+  await page.route("**/api/route", (route) => route.fulfill({ json: routeResult }));
+  await page.addInitScript(() => {
+    Object.defineProperty(window, "speechSynthesis", {
+      value: {
+        speaking: false,
+        getVoices: () => [{ lang: "ko-KR", name: "Silent Korean" }],
+        addEventListener() {}, removeEventListener() {}, cancel() {},
+        // 실제 무음 실패처럼 start/error/end 어느 이벤트도 보내지 않습니다.
+        speak() {},
+      },
+    });
+  });
+
+  await page.goto("/");
+  await page.getByRole("combobox", { name: "버스 목적지" }).fill("강남역");
+  await page.getByRole("button", { name: "버스 경로 검색" }).click();
+  await expect(page.getByText("강남역 2호선 방면")).toBeVisible();
+  await expect.poll(() => speechCalls, { timeout: 5_000 }).toBeGreaterThanOrEqual(1);
+});
+
+test("does not finish the UI before silent browser speech falls back", async ({ page }) => {
+  let speechCalls = 0;
+  await page.route("**/api/speech", async (route) => {
+    speechCalls += 1;
+    await route.fulfill({ json: { audio_base64: "UklGRiQAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YQAAAAA=" } });
+  });
+  await page.route("**/api/route", (route) => route.fulfill({ json: routeResult }));
+  await page.addInitScript(() => {
+    Object.defineProperty(window, "speechSynthesis", {
+      value: {
+        speaking: false,
+        getVoices: () => [{ lang: "ko-KR", name: "Ends Without Starting" }],
+        addEventListener() {}, removeEventListener() {}, cancel() {},
+        speak(utterance: { onend?: () => void }) {
+          queueMicrotask(() => utterance.onend?.());
+        },
+      },
+    });
+  });
+
+  await page.goto("/");
+  await page.evaluate(() => {
+    HTMLAudioElement.prototype.play = function play() {
+      // 서버 fallback이 실제 종료 신호를 기다리는 상태를 유지합니다.
+      return Promise.resolve();
+    };
+  });
+  await page.getByRole("combobox", { name: "버스 목적지" }).fill("강남역");
+  await page.getByRole("button", { name: "버스 경로 검색" }).click();
+  await expect.poll(() => speechCalls, { timeout: 5_000 }).toBe(1);
+  await expect(page.getByRole("button", { name: "음성 중지" })).toBeVisible();
+  await page.getByRole("button", { name: "음성 중지" }).click();
+});
+
+test("uses raw audio duration instead of blocking valid playback at 30 seconds", async ({ page }) => {
+  await page.clock.install();
+  await page.route("**/api/route", (route) => route.fulfill({
+    json: {
+      ...routeResult,
+      audio_base64: "UklGRiQAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YQAAAAA=",
+    },
+  }));
+  await page.goto("/");
+  await page.evaluate(() => {
+    Object.defineProperty(HTMLMediaElement.prototype, "duration", {
+      configurable: true,
+      get: () => 45,
+    });
+    HTMLAudioElement.prototype.play = function play() {
+      return Promise.resolve();
+    };
+  });
+
+  await page.getByRole("combobox", { name: "버스 목적지" }).fill("강남역");
+  await page.getByRole("button", { name: "버스 경로 검색" }).click();
+  await expect(page.getByRole("button", { name: "음성 중지" })).toBeVisible();
+
+  await page.clock.fastForward(31_000);
+  await expect(page.getByRole("button", { name: "음성 중지" })).toBeVisible();
+  await expect(page.getByText("음성 안내를 재생해 주세요.")).toBeHidden();
+
+  await page.clock.fastForward(19_100);
+  await expect(page.getByText("음성 안내를 재생해 주세요.")).toBeVisible();
+});
+
+test("reports a later server-speech chunk failure as partial", async ({ page }) => {
+  await installDeviceWithoutKoreanVoice(page);
+  const requestedTexts: string[] = [];
+  await page.route("**/api/speech", async (route) => {
+    requestedTexts.push(JSON.parse(route.request().postData() || "{}").text);
+    if (requestedTexts.length === 1) {
+      await route.fulfill({ json: { audio_base64: "UklGRg==" } });
+    } else {
+      await route.fulfill({ status: 503, json: { detail: "두 번째 조각 실패" } });
+    }
+  });
+  await page.goto("/");
+  await page.evaluate(() => {
+    HTMLAudioElement.prototype.play = function play(this: HTMLAudioElement) {
+      queueMicrotask(() => this.onended?.(new Event("ended")));
+      return Promise.resolve();
+    };
+  });
+
+  const outcome = await page.evaluate(async () => {
+    const speech = await import("/src/utils/speech.ts");
+    const message = `${"첫 번째 안내입니다. ".repeat(12)}${"두 번째 안내입니다. ".repeat(12)}`;
+    return speech.speakKorean(message);
+  });
+
+  expect(outcome).toBe("partial");
+  expect(requestedTexts.length).toBe(2);
+  expect(requestedTexts.every((text) => text.length <= 200)).toBe(true);
 });
 
 test("keeps the bus list usable on short screens", async ({ page }) => {

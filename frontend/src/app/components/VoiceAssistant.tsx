@@ -27,7 +27,7 @@ interface VoiceAssistantProps {
 const KIOSK_IDLE_RESET_MS = 90_000;
 // 마이크·조회가 진행 중인 상태. 이용자가 화면을 만지지 않는 것이 정상이므로
 // 유휴로 보고 세션을 지우면 안 됩니다. 각 상태는 자체 상한이 있어 멈추지 않습니다.
-const ACTIVE_STATUSES = new Set(["starting", "listening", "loading", "confirming"]);
+const ACTIVE_STATUSES = new Set(["starting", "listening", "loading"]);
 
 export function VoiceAssistant({ onResultModeChange }: VoiceAssistantProps) {
   const [privacyOpen, setPrivacyOpen] = useState(false);
@@ -79,16 +79,25 @@ export function VoiceAssistant({ onResultModeChange }: VoiceAssistantProps) {
       window.clearTimeout(timer);
       timer = window.setTimeout(resetKioskSession, KIOSK_IDLE_RESET_MS);
     };
+    const rearmForSpeech = (event: Event) => {
+      const source = event instanceof CustomEvent
+        ? (event.detail as { source?: string } | null)?.source
+        : undefined;
+      // 전광판의 추적 버스 안내는 사용자의 경로 화면 조작이 아닙니다. 이를 활동으로
+      // 세면 자리를 떠난 뒤에도 이전 목적지가 90초보다 오래 남을 수 있습니다.
+      if (source === "background") return;
+      rearm();
+    };
     window.addEventListener("pointerdown", rearm);
     window.addEventListener("keydown", rearm);
     // 안내를 듣는 것도 이용입니다. 화면을 만지지 않았다는 이유로 낭독 도중
     // 결과가 사라지면 안 됩니다.
-    window.addEventListener(SPEECH_ACTIVITY_EVENT, rearm);
+    window.addEventListener(SPEECH_ACTIVITY_EVENT, rearmForSpeech);
     return () => {
       window.clearTimeout(timer);
       window.removeEventListener("pointerdown", rearm);
       window.removeEventListener("keydown", rearm);
-      window.removeEventListener(SPEECH_ACTIVITY_EVENT, rearm);
+      window.removeEventListener(SPEECH_ACTIVITY_EVENT, rearmForSpeech);
     };
   }, [resetKioskSession, status]);
 

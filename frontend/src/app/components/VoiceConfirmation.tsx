@@ -60,7 +60,8 @@ export function VoiceConfirmation({ confirmation, transcript, audioBase64, safet
       }
     }
     if (playbackIdRef.current !== playbackId) return;
-    if (await speakKorean(confirmation.prompt) !== "unavailable") return;
+    const outcome = await speakKorean(confirmation.prompt);
+    if (outcome === "browser" || outcome === "server") return;
     if (playbackIdRef.current === playbackId) setPlaybackBlocked(true);
   }, [audioBase64, confirmation.prompt, stopPrompt]);
 

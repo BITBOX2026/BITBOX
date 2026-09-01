@@ -16,6 +16,7 @@ class RouteSegmentResponse(BaseModel):
     end_x: float | None = None    # 하차 정류장 경도
     end_y: float | None = None    # 하차 정류장 위도
     path_points: list[dict[str, float]] | None = None
+    alternative_lines: list[str] | None = None  # 같은 구간을 달리는 다른 노선
 
 
 class PlaceCandidateResponse(BaseModel):
@@ -87,6 +88,7 @@ class FrontendRouteStep(BaseModel):
     fromStop: str | None = None
     toStop: str | None = None
     busNumber: str | None = None
+    alternativeBuses: list[str] = Field(default_factory=list)
 
 
 class FrontendRouteDetail(BaseModel):

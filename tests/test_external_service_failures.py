@@ -18,6 +18,16 @@ from app.services.core.exceptions import ExternalServiceError, RouteNotFoundErro
 from app.services.transit import kakao_service, odsay_service, seoul_bus_client
 
 
+@pytest.fixture(autouse=True)
+def isolate_external_circuit_state():
+    """Make readiness assertions independent of test order and prior providers."""
+    with http_utils._circuit_lock:
+        http_utils._circuits.clear()
+    yield
+    with http_utils._circuit_lock:
+        http_utils._circuits.clear()
+
+
 class _BusinessErrorResponse:
     def raise_for_status(self) -> None:
         return None

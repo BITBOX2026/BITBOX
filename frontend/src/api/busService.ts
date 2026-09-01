@@ -155,14 +155,11 @@ export async function getDefaultArrivals(): Promise<{ stationName: string; buses
     return a.arrivalMin - b.arrivalMin;
   });
 
-  // 현재 위치를 모르는 것은 실시간 차량에서만 결함입니다.
-  // 상태 행에는 애초에 차량 위치가 없습니다.
-  return {
-    stationName,
-    buses: sortedBuses.filter(
-      (bus) => bus.status !== "live" || bus.currentStationName !== "",
-    ),
-  };
+  // 현재 위치를 모른다고 해서 오는 버스를 감추지는 않습니다. 서울 공공데이터는
+  // 노선에 따라 stationNm 을 비워 보내기도 하는데, 그때 행을 지워 버리면 실제로
+  // 도착하는 버스가 전광판에서 조용히 사라져 이용자가 놓칩니다. 위치는 화면에서
+  // "위치 확인 중"으로 표시하고, 도착 시간은 그대로 안내합니다.
+  return { stationName, buses: sortedBuses };
 }
 
 export function getCongestionLabel(c: BusCongestion): string {
