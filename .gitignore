@@ -48,3 +48,8 @@ evaluation-results/
 # Temporary files
 tmp/
 temp/
+
+# Submission demo: keep only final deliverables in Git
+artifacts/*
+!artifacts/BITBOX-Hanium-submission-demo.mp4
+!artifacts/BITBOX-Hanium-submission-demo.srt
