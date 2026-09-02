@@ -40,6 +40,7 @@ export function DestinationSearch({ disabled, onSubmit }: DestinationSearchProps
   const [isFocused, setIsFocused] = useState(false);
   const [isSuggesting, setIsSuggesting] = useState(false);
   const [suggestionError, setSuggestionError] = useState("");
+  const [lastSearchedQuery, setLastSearchedQuery] = useState("");
   const [selectedDestination, setSelectedDestination] = useState<RouteDestination | null>(null);
   const [activeIndex, setActiveIndex] = useState(-1);
   const trimmedDestination = useMemo(() => destination.trim(), [destination]);
@@ -55,6 +56,7 @@ export function DestinationSearch({ disabled, onSubmit }: DestinationSearchProps
       setSuggestions([]);
       setIsSuggesting(false);
       setSuggestionError("");
+      setLastSearchedQuery("");
       return;
     }
 
@@ -67,11 +69,13 @@ export function DestinationSearch({ disabled, onSubmit }: DestinationSearchProps
     const timer = window.setTimeout(async () => {
       setIsSuggesting(true);
       setSuggestionError("");
+      setLastSearchedQuery("");
       abortTimer = window.setTimeout(() => controller.abort(), SUGGEST_TIMEOUT_MS);
       try {
         const nextSuggestions = await suggestPlaces(trimmedDestination, controller.signal);
         if (superseded) return;
         setSuggestions(nextSuggestions);
+        setLastSearchedQuery(trimmedDestination);
         setActiveIndex(-1);
       } catch (error) {
         if (superseded) return;
@@ -128,7 +132,7 @@ export function DestinationSearch({ disabled, onSubmit }: DestinationSearchProps
   return (
     <div className="w-full max-w-[520px]">
       <div className="relative">
-        <form className="flex h-12 overflow-hidden rounded-md border border-white/20 bg-white shadow-lg" onSubmit={(event) => { event.preventDefault(); void submit(); }}>
+        <form className="flex h-12 overflow-hidden rounded-md border border-white/20 bg-white shadow-lg" aria-busy={isSuggesting} onSubmit={(event) => { event.preventDefault(); void submit(); }}>
           <input
             value={destination}
             maxLength={100}
@@ -158,7 +162,7 @@ export function DestinationSearch({ disabled, onSubmit }: DestinationSearchProps
                 setSuggestions([]);
               }
             }}
-            className="min-w-0 flex-1 px-4 text-[15px] font-bold text-slate-900 outline-none placeholder:font-medium placeholder:text-slate-400"
+            className="min-w-0 flex-1 px-4 text-[0.9375rem] font-bold text-slate-900 outline-none placeholder:font-medium placeholder:text-slate-400"
             disabled={disabled}
           />
           <button type="submit" aria-label="버스 경로 검색" title="버스 경로 검색" disabled={!trimmedDestination || disabled} className="grid w-12 shrink-0 place-items-center bg-[#F0C929] text-[#17343B] disabled:cursor-not-allowed disabled:opacity-45">
@@ -167,7 +171,7 @@ export function DestinationSearch({ disabled, onSubmit }: DestinationSearchProps
         </form>
 
         {isFocused && suggestions.length > 0 && (
-          <div id="destination-suggestions" role="listbox" className="absolute inset-x-0 top-[52px] z-50 max-h-44 overflow-y-auto rounded-md border border-slate-200 bg-white py-1 text-slate-900 shadow-xl">
+          <div id="destination-suggestions" role="listbox" className="absolute inset-x-0 top-[52px] z-50 max-h-52 overflow-y-auto rounded-md border border-slate-200 bg-white py-1 text-slate-900 shadow-xl">
             {suggestions.map((suggestion, index) => (
               <button
                 key={`${suggestion.name}-${suggestion.address}`}
@@ -177,10 +181,10 @@ export function DestinationSearch({ disabled, onSubmit }: DestinationSearchProps
                 aria-selected={activeIndex === index}
                 onMouseDown={(event) => event.preventDefault()}
                 onClick={() => selectSuggestion(suggestion)}
-                className={`flex w-full items-start gap-2 px-3 py-2 text-left hover:bg-slate-100 ${activeIndex === index ? "bg-slate-100" : ""}`}
+                className={`flex min-h-14 w-full items-start gap-2 px-3 py-2.5 text-left hover:bg-slate-100 ${activeIndex === index ? "bg-slate-100" : ""}`}
               >
                 <MapPin className="mt-0.5 size-4 shrink-0 text-[#145466]" />
-                <span className="min-w-0"><strong className="block truncate text-sm">{suggestion.name}</strong><span className="block truncate text-xs text-slate-500">{suggestion.category || suggestion.address}</span></span>
+                <span className="min-w-0"><strong className="block break-keep text-sm leading-snug">{suggestion.name}</strong><span className="mt-0.5 block break-keep text-xs leading-snug text-slate-600">{suggestion.category || suggestion.address}</span></span>
               </button>
             ))}
           </div>
@@ -188,15 +192,21 @@ export function DestinationSearch({ disabled, onSubmit }: DestinationSearchProps
       </div>
 
       {suggestionError && isFocused && (
-        <p role="alert" className="mt-2 text-xs font-bold text-amber-200">{suggestionError}</p>
+        <p role="alert" className="mt-2 text-sm font-bold text-amber-200">{suggestionError}</p>
       )}
+      {!suggestionError && isFocused && !isSuggesting && lastSearchedQuery === trimmedDestination && suggestions.length === 0 && (
+        <p role="status" className="mt-2 text-sm font-bold text-amber-100">일치하는 장소가 없습니다. 다른 이름이나 역 이름으로 입력해 주세요.</p>
+      )}
+      <p aria-live="polite" className="sr-only">
+        {isSuggesting ? "장소 후보를 찾고 있습니다." : suggestions.length > 0 ? `장소 후보 ${suggestions.length}개를 찾았습니다.` : ""}
+      </p>
 
       <div className="mt-2 flex items-center justify-between gap-3">
         <span className="inline-flex items-center gap-1.5 rounded bg-black/20 px-2 py-1 text-xs font-bold text-white/80"><BusFront className="size-4 text-[#F0C929]" /> 버스 전용</span>
         {recent.length > 0 && (
           <div className="flex min-w-0 items-center justify-end gap-1.5 overflow-hidden">
             <Clock3 className="size-4 shrink-0 text-white/70" />
-            {recent.map((item) => <button key={`${item.name}-${item.x ?? ""}-${item.y ?? ""}`} type="button" onClick={() => { setDestination(item.name); void submit(item); }} className="max-w-24 truncate rounded bg-white/10 px-2 py-1 text-xs font-bold text-white/85 hover:bg-white/20">{item.name}</button>)}
+            {recent.map((item) => <button key={`${item.name}-${item.x ?? ""}-${item.y ?? ""}`} type="button" title={`${item.name} 다시 검색`} onClick={() => { setDestination(item.name); void submit(item); }} className="min-h-11 max-w-28 truncate rounded bg-white/10 px-3 py-2 text-xs font-bold text-white/90 hover:bg-white/20">{item.name}</button>)}
           </div>
         )}
       </div>

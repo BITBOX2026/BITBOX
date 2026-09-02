@@ -9,6 +9,7 @@ OpenAI TTS API를 사용하며, 실패해도 파이프라인을 중단하지 않
 import base64
 
 from app.core.logger import get_logger
+from app.services.ai.spoken_korean import to_spoken_korean
 from app.services.core.constants import DEFAULT_TTS_MODEL, DEFAULT_TTS_VOICE
 from app.services.core.openai_client import get_openai_client as _get_openai_client
 from app.services.core.settings_helper import get_setting, is_mock_mode
@@ -45,7 +46,10 @@ async def generate_tts_audio(text: str) -> str | None:
         response = await client.audio.speech.create(
             model=tts_model,
             voice=tts_voice,
-            input=text,
+            # 음성 업로드 경로는 서버가 오디오를 미리 만들어 내려주므로 프론트의
+            # browser speech 변환을 거치지 않습니다. TTS 경계에서도 정규화해야
+            # `3412`, `M6405`, `N13` 같은 노선이 모든 경로에서 같은 방식으로 들립니다.
+            input=to_spoken_korean(text),
             response_format="wav",
             speed=tts_speed,
         )

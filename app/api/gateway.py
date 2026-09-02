@@ -310,6 +310,19 @@ def _build_buses_from_route(data: dict) -> list[dict]:
     route_detail = {
         "busNumber": display_bus,
         "totalMin": total_time_min,
+        # ODsay가 이미 준 핵심 의사결정 정보를 버리지 않습니다. 고령 이용자는
+        # 구간 목록을 직접 세기보다 "환승 없음/1회"와 예상 요금을 한눈에
+        # 확인할 수 있어야 합니다. 0은 유효한 값이므로 `or None`으로 바꾸지 않습니다.
+        "transferCount": (
+            max(int(data["transfer_count"]), 0)
+            if data.get("transfer_count") is not None
+            else None
+        ),
+        "payment": (
+            max(int(data["payment"]), 0)
+            if data.get("payment") is not None
+            else None
+        ),
         "steps": steps,
         "origin_x": data.get("origin_x"),
         "origin_y": data.get("origin_y"),

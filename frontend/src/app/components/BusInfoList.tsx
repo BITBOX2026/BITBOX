@@ -4,6 +4,8 @@ import { getDefaultArrivals, getCongestionLabel, getCongestionColor, describeArr
 import { Accessibility, BusFront, ChevronLeft, ChevronRight, MapPin, Pause, Play, Radio, RefreshCw, Volume2, Wifi, ZoomIn } from "lucide-react";
 import { useAccessibilityDisplay } from "../../hooks/useAccessibilityDisplay";
 import { cancelSpeech, speakKorean } from "../../utils/speech";
+import { busNumberFontSize } from "../../utils/busNumberFit";
+import { useElementHeight, useVisibleRowCount } from "../../hooks/useVisibleRowCount";
 
 const STATION_NAME = import.meta.env.VITE_STATION_NAME ?? "정류장";
 
@@ -12,12 +14,20 @@ const SOON_ARRIVE = 60;     // 곧 도착 기준: 60초 미만
 const SOON_PER_PAGE = 5;
 const MAIN_PER_PAGE = 5;
 const REFRESH_MS    = 15_000;
+// 한 화면을 읽고 의미를 파악할 시간을 충분히 줍니다. 5초는 표의 다섯 행을
+// 읽는 고령 이용자에게 너무 짧았고, 수동 조작 시에는 기존처럼 자동 전환을 멈춥니다.
+const PAGE_ROTATION_MS = 10_000;
 // 서버 TTS 상한(15초) 직후 실제 오디오가 재생되는 경우까지 포함합니다. 이 값이
 // 폴링 주기와 같으면 다음 폴링이 새 안내를 시작해 막 재생된 음성을 다시 끊습니다.
 const APPROACH_SPEECH_RELEASE_MS = 30_000;
 // 추적 차량이 도착정보에서 사라졌다고 판정하기까지 필요한 연속 폴링 횟수.
 // 한 번의 일시적 누락으로 추적을 풀면 이용자가 고른 버스를 놓칩니다.
 const TRACKED_BUS_MISSING_POLLS = 2;
+// "잠시 후 도착" 패널은 172px 를 씁니다. 전광판이 이보다 낮으면 이 패널 때문에
+// 정작 도착 목록이 한두 줄로 줄어듭니다. 여기 실린 차량은 아래 목록에도 그대로
+// 나오므로, 공간이 부족하면 중복 요약을 접고 목록을 살리는 쪽이 맞습니다.
+// 값의 근거: 전광판 640px = 머리글 98 + 패널 172 + 표 머리글·바닥 106 + 3행(240).
+const SOON_PANEL_MIN_BOARD_HEIGHT = 640;
 const MAX_MIN       = 30;
 const DAY_KR = ["일", "월", "화", "수", "목", "금", "토"];
 
@@ -99,11 +109,11 @@ function CircleTimer({ arrivalMin }: { arrivalMin: number }) {
         style={{ transition: "stroke-dasharray 0.5s ease" }}
       />
       <text x="38" y="35" textAnchor="middle" dominantBaseline="middle"
-        fontSize="22" fontWeight="900" fill="#1E293B" fontFamily="monospace">
+        fontSize="1.375rem" fontWeight="900" fill="#1E293B" fontFamily="monospace">
         {arrivalMin}
       </text>
       <text x="38" y="54" textAnchor="middle"
-        fontSize="12" fontWeight="700" fill="#64748B">
+        fontSize="0.75rem" fontWeight="700" fill="#64748B">
         분
       </text>
     </svg>
@@ -114,7 +124,7 @@ function CircleTimer({ arrivalMin }: { arrivalMin: number }) {
 function StopsDot({ remaining }: { remaining: number }) {
   if (remaining < 0) return null;
   if (remaining === 0) return (
-    <span className="text-[12px] font-black text-red-500 bg-red-50 border border-red-200 rounded px-2 py-0.5 mt-1 inline-block">
+    <span className="mt-1 inline-block rounded border border-red-200 bg-red-50 px-2 py-0.5 text-[0.75rem] font-black text-red-700">
       정류소 곧 도착
     </span>
   );
@@ -125,7 +135,7 @@ function StopsDot({ remaining }: { remaining: number }) {
 
   return (
     <>
-      <span className="mt-1 text-[11px] font-bold text-[#475569] sm:hidden">{remaining}정거장 전</span>
+      <span className="mt-1 text-[0.6875rem] font-bold text-[#475569] sm:hidden">{remaining}정거장 전</span>
       <div className="mt-1.5 hidden items-center gap-0 sm:flex">
         <BusFront className="mr-1 size-4 shrink-0 text-[#2563EB]" aria-hidden="true" />
         <div className="h-[2px] w-2 bg-[#CBD5E1]" />
@@ -133,7 +143,7 @@ function StopsDot({ remaining }: { remaining: number }) {
           <div key={n} className="flex items-center">
             <div className={`w-[18px] h-[18px] rounded-full border-2 flex items-center justify-center
               ${i === 0 ? "bg-[#3B82F6] border-[#2563EB]" : "bg-white border-[#CBD5E1]"}`}>
-              <span className={`text-[9px] font-black leading-none ${i === 0 ? "text-white" : "text-[#64748B]"}`}>
+              <span className={`text-[0.5625rem] font-black leading-none ${i === 0 ? "text-white" : "text-[#64748B]"}`}>
                 {n}
               </span>
             </div>
@@ -154,17 +164,21 @@ function SoonCard({ bus, isTracked, onTrack }: { bus: BusInfo; isTracked: boolea
   const congLabel = getCongestionLabel(bus.congestion);
   const congColor = getCongestionColor(bus.congestion);
   return (
-    <button type="button" onClick={onTrack} aria-pressed={isTracked} aria-label={describeBus(bus)} className={`flex min-w-0 flex-col items-center justify-center gap-2 rounded-xl border bg-[#171D23] px-2 py-3 shadow-[0_8px_18px_rgba(23,29,35,0.22)] transition-transform hover:-translate-y-0.5 ${isTracked ? "border-white ring-2 ring-white" : "border-[#303842]"}`}>
-      <div className={`rounded-full px-3 py-0.5 text-[12px] font-black border ${congColor}`}>
+    <button type="button" onClick={onTrack} aria-pressed={isTracked} aria-label={describeBus(bus)} className={`flex min-w-0 flex-col items-center justify-center gap-2 rounded-xl border bg-[#171D23] px-2 py-2 [container-type:inline-size] shadow-[0_8px_18px_rgba(23,29,35,0.22)] transition-transform hover:-translate-y-0.5 ${isTracked ? "border-white ring-2 ring-white" : "border-[#303842]"}`}>
+      <div className={`rounded-full border px-3 py-0.5 text-[0.75rem] font-black ${congColor}`}>
         {congLabel}
       </div>
-      <div className="max-w-full truncate font-mono text-[28px] font-black leading-normal text-[#FACC15] sm:text-[36px] md:text-[42px]">
+      <div
+        className="max-w-full whitespace-nowrap text-center font-mono font-black leading-tight text-[#FACC15]"
+        style={{ fontSize: busNumberFontSize(bus.busNumber, 2) }}
+        title={`${bus.busNumber}번 버스`}
+      >
         {bus.busNumber}
       </div>
       <div className="flex flex-wrap justify-center gap-1">
-        {bus.busType === 1 && <span className="rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-black text-sky-800">저상</span>}
-        {bus.isFullFlag && <span className="rounded bg-red-600 px-1.5 py-0.5 text-[10px] font-black text-white">만차</span>}
-        {bus.isLastBus && <span className="rounded bg-red-600 px-1.5 py-0.5 text-[10px] font-black text-white">막차</span>}
+        {bus.busType === 1 && <span className="rounded bg-sky-100 px-1.5 py-0.5 text-[0.625rem] font-black text-sky-800">저상</span>}
+        {bus.isFullFlag && <span className="rounded bg-red-600 px-1.5 py-0.5 text-[0.625rem] font-black text-white">만차</span>}
+        {bus.isLastBus && <span className="rounded bg-red-600 px-1.5 py-0.5 text-[0.625rem] font-black text-white">막차</span>}
       </div>
     </button>
   );
@@ -173,7 +187,7 @@ function SoonCard({ bus, isTracked, onTrack }: { bus: BusInfo; isTracked: boolea
 // ─── 로딩 스켈레톤 ───────────────────────────────────────────
 function SkeletonRow({ idx }: { idx: number }) {
   return (
-    <div className={`grid min-h-[56px] min-w-0 w-full flex-1 shrink-0 grid-cols-[minmax(78px,1fr)_82px_minmax(120px,2fr)] items-center border-b border-[#E2E8F0] sm:min-h-[68px] md:grid-cols-[150px_110px_1fr] ${idx % 2 === 0 ? "bg-white" : "bg-[#F8FAFC]"}`}>
+    <div className={`grid min-h-[56px] w-full min-w-0 shrink-0 grid-cols-[minmax(78px,1fr)_82px_minmax(120px,2fr)] items-center border-b border-[#E2E8F0] sm:min-h-[68px] md:grid-cols-[150px_110px_1fr] ${idx % 2 === 0 ? "bg-white" : "bg-[#F8FAFC]"}`}>
       <div className="flex justify-center px-4 border-r border-[#E2E8F0] h-full items-center">
         <div className="h-9 w-20 bg-gray-200 rounded animate-pulse" />
       </div>
@@ -245,13 +259,15 @@ function useBusArrivals() {
 }
 
 // ─── 메인 컴포넌트 ───────────────────────────────────────────
-export function BusInfoList() {
+export function BusInfoList({ compact = false }: { compact?: boolean }) {
   const [mainPage, setMainPage] = useState(0);
   const [soonPage, setSoonPage] = useState(0);
   const [accessibleMode, setAccessibleMode] = useState(false);
   const [largeTextMode, toggleLargeTextMode] = useAccessibilityDisplay();
   const [autoRotate, setAutoRotate] = useState(true);
   const [trackedBusId, setTrackedBusId] = useState<string | null>(null);
+  const mainScrollRef = useRef<HTMLDivElement>(null);
+  const boardRef = useRef<HTMLDivElement>(null);
   const lastRemainingStopsRef = useRef<number | null>(null);
   // 진행 중인 도착 알림의 세대 번호. 브라우저 음성과 서버 음성 어느 쪽으로 나가든
   // 같은 방식으로 소유권을 판단하기 위해 객체 대신 숫자를 씁니다.
@@ -423,24 +439,30 @@ export function BusInfoList() {
     [rankedBuses],
   );
   const soonTotalPages = Math.max(1, Math.ceil(arrivingSoon.length / SOON_PER_PAGE));
-  const mainTotalPages = Math.max(1, Math.ceil(rankedBuses.length / MAIN_PER_PAGE));
+  // 큰 글씨 모드에서는 행이 높아져 5행이 들어가지 않습니다. 잘린 행을 보여 주는
+  // 대신 페이지에 담는 행 수를 줄입니다. 나머지는 자동 페이지 전환이 보여 줍니다.
+  const mainPerPage = useVisibleRowCount(mainScrollRef, "[data-testid=main-bus-row]", {
+    max: MAIN_PER_PAGE,
+    resetKey: `${largeTextMode}:${accessibleMode}:${rankedBuses.length}`,
+  });
+  const mainTotalPages = Math.max(1, Math.ceil(rankedBuses.length / mainPerPage));
 
   useEffect(() => {
     if (!autoRotate || soonTotalPages <= 1 || trackedBusId) return;
-    const id = setInterval(() => setSoonPage((p) => (p + 1) % soonTotalPages), 5000);
+    const id = setInterval(() => setSoonPage((p) => (p + 1) % soonTotalPages), PAGE_ROTATION_MS);
     return () => clearInterval(id);
   }, [autoRotate, soonTotalPages, trackedBusId]);
 
   useEffect(() => {
     if (!autoRotate || mainTotalPages <= 1 || trackedBusId) return;
-    const id = setInterval(() => setMainPage((p) => (p + 1) % mainTotalPages), 5000);
+    const id = setInterval(() => setMainPage((p) => (p + 1) % mainTotalPages), PAGE_ROTATION_MS);
     return () => clearInterval(id);
   }, [autoRotate, mainTotalPages, trackedBusId]);
 
   const curSoonPage = Math.min(soonPage, soonTotalPages - 1);
   const curMainPage = Math.min(mainPage, mainTotalPages - 1);
   const currentSoon = arrivingSoon.slice(curSoonPage * SOON_PER_PAGE, (curSoonPage + 1) * SOON_PER_PAGE);
-  const currentMain = rankedBuses.slice(curMainPage * MAIN_PER_PAGE, (curMainPage + 1) * MAIN_PER_PAGE);
+  const currentMain = rankedBuses.slice(curMainPage * mainPerPage, (curMainPage + 1) * mainPerPage);
 
   const yy = now.getFullYear(), mm = now.getMonth() + 1, dd = now.getDate();
   const day    = DAY_KR[now.getDay()];
@@ -453,22 +475,28 @@ export function BusInfoList() {
     ? `${String(lastUpdated.getHours()).padStart(2,"0")}:${String(lastUpdated.getMinutes()).padStart(2,"0")}:${String(lastUpdated.getSeconds()).padStart(2,"0")} 갱신`
     : "";
   const isStale = !loading && (!lastUpdated || now.getTime() - lastUpdated.getTime() > 45_000);
+  const boardHeight = useElementHeight(boardRef);
+  const showSoonPanel = !compact && boardHeight >= SOON_PANEL_MIN_BOARD_HEIGHT;
 
   return (
-    <div className="flex h-full w-full flex-col overflow-hidden bg-[#EDF1F3] font-kiosk">
+    <div ref={boardRef} className="flex h-full w-full flex-col overflow-hidden bg-[#EDF1F3] font-kiosk">
 
       {/* ── 헤더 ─────────────────────────────────── */}
-      <div className="flex shrink-0 items-center justify-between border-b-4 border-[#F0C929] bg-[#171D23] px-3 py-2 sm:px-6 sm:py-3">
-        <div className="flex min-w-0 items-center gap-2 text-left sm:gap-3">
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b-4 border-[#F0C929] bg-[#171D23] px-3 py-2 sm:flex-nowrap sm:px-6 sm:py-3">
+        <div className="flex min-w-0 w-full items-center gap-2 text-left sm:w-auto sm:gap-3">
           <div className="grid size-9 shrink-0 place-items-center rounded-md bg-[#F0C929] text-[#171D23] sm:size-12">
             <MapPin className="size-5 sm:size-6" />
           </div>
           <div className="min-w-0">
-            <span className="mb-0.5 hidden text-[13px] font-bold text-white/50 sm:block">서울특별시 · 실시간 버스정보</span>
-            <span className="block max-w-[36vw] truncate text-[18px] font-black leading-normal text-white sm:max-w-[44vw] sm:text-[28px] md:text-[32px]">{liveStationName || STATION_NAME}</span>
+            <span className="mb-0.5 hidden text-[0.8125rem] font-bold text-white/50 sm:block">서울특별시 · 실시간 버스정보</span>
+            {/* 정류장 이름은 이 화면의 현재 위치입니다. 잘라내면 이용자가 자기가
+                어느 정류장에 서 있는지 확인할 수 없으므로 두 줄까지 펼칩니다. */}
+            {/* leading-normal 을 줄이면 line-clamp 의 overflow:hidden 이 한글 아래쪽
+                획을 잘라냅니다(글꼴의 자연 라인박스가 더 큽니다). */}
+            <span data-testid="station-name" className="line-clamp-2 block max-w-full break-words text-[1.125rem] font-black leading-normal text-white sm:max-w-[44vw] sm:text-[1.75rem] md:text-[2rem]">{liveStationName || STATION_NAME}</span>
           </div>
         </div>
-        <div className="flex shrink-0 items-center gap-2 sm:gap-3">
+        <div className="flex w-full shrink-0 items-center justify-between gap-2 sm:w-auto sm:justify-start sm:gap-3">
           <button
             type="button"
             onClick={toggleLargeTextMode}
@@ -488,10 +516,10 @@ export function BusInfoList() {
             <Accessibility className="size-4" /><span className="hidden sm:inline">저상·여유 우선</span>
           </button>
           <div className="text-right text-white">
-          <div className="mb-1 hidden text-[13px] text-white/65 sm:block">{yy}년 {mm}월 {dd}일 ({day})</div>
-          <div className="flex items-baseline gap-1 font-mono text-[22px] font-black leading-none text-white sm:text-[36px] md:gap-2 md:text-[44px]">
-            <span className="text-[12px] text-yellow-400 sm:text-[20px] md:text-[24px]">{ampm}</span>
-            {displayH}:{displayM}:{displayS}
+          <div className="mb-1 hidden text-[0.8125rem] text-white/65 sm:block">{yy}년 {mm}월 {dd}일 ({day})</div>
+          <div className="flex items-baseline gap-1 font-mono text-[1.375rem] font-black leading-none text-white sm:text-[2.25rem] md:gap-2 md:text-[2.75rem]">
+            <span className="text-[0.75rem] text-yellow-400 sm:text-[1.25rem] md:text-[1.5rem]">{ampm}</span>
+            {displayH}:{displayM}<span className="hidden sm:inline">:{displayS}</span>
           </div>
           </div>
         </div>
@@ -499,7 +527,7 @@ export function BusInfoList() {
 
       {/* ── 오류 배너 ────────────────────────────── */}
       {error && (
-        <div className="bg-red-600 text-white text-[13px] font-bold px-5 py-2 flex items-center justify-between shrink-0">
+        <div className="flex shrink-0 items-center justify-between bg-red-700 px-5 py-2 text-[0.8125rem] font-bold text-white">
           <span>{error}</span>
           <button onClick={refetch} className="ml-4 inline-flex items-center gap-1 text-white hover:text-white/90"><RefreshCw className="size-3.5" />다시 시도</button>
         </div>
@@ -510,23 +538,32 @@ export function BusInfoList() {
         화면이 낮을 때 이 영역이 줄어들 수 있어야 합니다. 여기 있는 차량은 아래
         목록에도 다시 나오므로, 공간이 부족하면 목록을 살리는 쪽이 맞습니다.
       */}
-      <div className="min-h-0 shrink border-b border-[#C99F11] bg-[#F0C929] px-3 pb-3 pt-2 sm:px-5 sm:pb-4 sm:pt-3">
-        <div className="flex justify-between items-end mb-3">
-          <div className="flex flex-col text-left">
-            <span className="text-[20px] font-black leading-tight text-[#2C2A1A] sm:text-[24px]">잠시 후 도착</span>
-            <span className="text-[12px] font-bold text-[#4E3F0C] sm:text-[13px]">3분 이내 도착 차량</span>
+      {showSoonPanel && <div data-testid="soon-arrivals-panel" className="hidden shrink-0 border-b border-[#C99F11] bg-[#F0C929] px-5 pb-2.5 pt-2 sm:block">
+        <div className="mb-2 flex items-center justify-between gap-3">
+          <div className="flex items-baseline gap-2 text-left">
+            <span className="text-[1.25rem] font-black leading-tight text-[#2C2A1A] sm:text-[1.375rem]">잠시 후 도착</span>
+            <span className="text-[0.75rem] font-bold text-[#4E3F0C] sm:text-[0.8125rem]">3분 이내</span>
           </div>
-          {lastUpdatedStr && <span className={`text-[12px] font-bold ${isStale ? "text-red-700" : "text-[#78350F]"}`}>{isStale ? `정보 지연 · ${lastUpdatedStr}` : lastUpdatedStr}</span>}
+          <div className="flex items-center gap-1.5">
+            {lastUpdatedStr && <span className={`hidden text-[0.75rem] font-bold sm:inline ${isStale ? "text-red-700" : "text-[#78350F]"}`}>{isStale ? `정보 지연 · ${lastUpdatedStr}` : lastUpdatedStr}</span>}
+            {soonTotalPages > 1 && (
+              <div className="flex items-center gap-1" aria-label="곧 도착 차량 페이지 제어">
+                <button type="button" onClick={() => { setAutoRotate(false); setSoonPage((page) => (page - 1 + soonTotalPages) % soonTotalPages); }} className="grid size-11 place-items-center rounded border border-[#6F611E]/40 bg-white/70 text-[#2C2A1A]" aria-label="이전 곧 도착 차량 목록"><ChevronLeft className="size-4" /></button>
+                <span className="min-w-10 text-center text-sm font-black text-[#2C2A1A]" aria-live="polite">{curSoonPage + 1}/{soonTotalPages}</span>
+                <button type="button" onClick={() => { setAutoRotate(false); setSoonPage((page) => (page + 1) % soonTotalPages); }} className="grid size-11 place-items-center rounded border border-[#6F611E]/40 bg-white/70 text-[#2C2A1A]" aria-label="다음 곧 도착 차량 목록"><ChevronRight className="size-4" /></button>
+              </div>
+            )}
+          </div>
         </div>
 
         {loading ? (
           <div className="flex gap-1 sm:gap-2">
             {Array.from({ length: SOON_PER_PAGE }).map((_, i) => (
-              <div key={i} className="min-h-[92px] flex-1 animate-pulse rounded-md border border-[#6F611E]/30 bg-[#1C2229]/35" />
+              <div key={i} className="min-h-[76px] flex-1 animate-pulse rounded-md border border-[#6F611E]/30 bg-[#1C2229]/35" />
             ))}
           </div>
         ) : arrivingSoon.length === 0 ? (
-          <div className="rounded-md bg-black/8 py-5 text-center text-[16px] font-bold text-[#504710]">
+          <div className="rounded-md bg-black/8 py-5 text-center text-base font-bold text-[#504710]">
             3분 이내 도착 예정 버스가 없습니다
           </div>
         ) : (
@@ -534,7 +571,7 @@ export function BusInfoList() {
             {currentSoon.map((bus) => <SoonCard key={bus.id} bus={bus} isTracked={trackedBusId === (bus.plainNo || bus.id)} onTrack={() => toggleTracking(bus)} />)}
             {currentSoon.length < SOON_PER_PAGE && (
               <div
-                className="hidden min-h-[92px] items-center justify-center gap-3 rounded-xl border border-[#6F611E]/25 bg-[#E5BE24]/55 px-5 text-[#4E4214] sm:flex"
+                className="hidden min-h-[76px] items-center justify-center gap-3 rounded-xl border border-[#6F611E]/25 bg-[#E5BE24]/55 px-5 text-[#4E4214] sm:flex"
                 style={{ gridColumn: `span ${SOON_PER_PAGE - currentSoon.length}` }}
               >
                 <span className="grid size-10 shrink-0 place-items-center rounded-full bg-black/10"><Radio className="size-5" /></span>
@@ -543,15 +580,18 @@ export function BusInfoList() {
             )}
           </div>
         )}
-      </div>
+      </div>}
 
       {/* ── 메인 버스 목록 ───────────────────────── */}
-      <div className="flex min-h-[232px] flex-1 flex-col bg-white">
+      <div className="flex min-h-0 flex-1 flex-col bg-white">
         {/* 테이블 헤더 */}
         <div className="grid shrink-0 grid-cols-[minmax(78px,1fr)_82px_minmax(120px,2fr)] border-b border-[#374151] bg-[#1C1F26] md:grid-cols-[150px_110px_1fr]">
+          {/* 큰 글씨 모드에서 "노선번호"가 "노선번 / 호"로 쪼개지면 표가 망가져
+              보입니다. 열 제목은 줄바꿈하지 않고 칸에 맞춰 줄어들게 합니다. */}
           {["노선번호", "예정시간", "버스 현재 위치"].map((label, i) => (
-            <div key={i} className={`py-3 px-4 text-[14px] font-black text-white tracking-wider ${i === 2 ? "text-left" : "text-center"} ${i < 2 ? "border-r border-[#374151]" : ""}`}>
-              {label}
+            <div key={i} className={`overflow-hidden px-2 py-3 [container-type:inline-size] sm:px-4 ${i < 2 ? "border-r border-[#374151]" : ""}`}>
+              {/* cqi 는 조상 컨테이너를 기준으로 하므로 크기는 안쪽 span 에 줍니다. */}
+              <span className={`block whitespace-nowrap text-[min(0.875rem,13cqi)] font-black tracking-wider text-white ${i === 2 ? "text-left" : "text-center"}`}>{label}</span>
             </div>
           ))}
         </div>
@@ -564,6 +604,7 @@ export function BusInfoList() {
           수 없게 됩니다. 그래서 영역 자체를 초점 대상으로 만들고 이름을 붙입니다.
         */}
         <div
+          ref={mainScrollRef}
           data-testid="main-bus-scroll"
           tabIndex={0}
           role="region"
@@ -572,19 +613,23 @@ export function BusInfoList() {
         >
           <div className="flex min-h-full min-w-0 flex-col">
             {loading
-              ? Array.from({ length: MAIN_PER_PAGE }).map((_, i) => <SkeletonRow key={i} idx={i} />)
+              ? Array.from({ length: mainPerPage }).map((_, i) => <SkeletonRow key={i} idx={i} />)
               : currentMain.map((bus, idx) => {
                   const congLabel = getCongestionLabel(bus.congestion);
                   const congColor = getCongestionColor(bus.congestion);
                   const isArriving = bus.status === "live" && bus.traTimeSec < SOON_ARRIVE;
 
                   return (
-                    <button data-testid="main-bus-row" type="button" disabled={bus.status !== "live"} onClick={() => toggleTracking(bus)} aria-pressed={bus.status === "live" ? trackedBusId === (bus.plainNo || bus.id) : undefined} aria-label={describeBus(bus)} key={bus.id} className={`grid min-h-[56px] min-w-0 w-full flex-1 shrink-0 grid-cols-[minmax(78px,1fr)_82px_minmax(120px,2fr)] items-center border-b border-[#E2E8F0] text-left disabled:cursor-default sm:min-h-[68px] md:grid-cols-[150px_110px_1fr]
+                    <button data-testid="main-bus-row" type="button" disabled={bus.status !== "live"} onClick={() => toggleTracking(bus)} aria-pressed={bus.status === "live" ? trackedBusId === (bus.plainNo || bus.id) : undefined} aria-label={describeBus(bus)} key={bus.id} className={`grid min-h-[56px] w-full min-w-0 shrink-0 grid-cols-[minmax(78px,1fr)_82px_minmax(120px,2fr)] items-center border-b border-[#E2E8F0] text-left disabled:cursor-default sm:min-h-[68px] md:grid-cols-[150px_110px_1fr]
                       ${trackedBusId === (bus.plainNo || bus.id) ? "bg-amber-50 ring-2 ring-inset ring-[#F0C929]" : idx % 2 === 0 ? "bg-white" : "bg-[#F8FAFC]"}`}>
 
                       {/* 노선번호 */}
-                      <div className="flex items-center justify-center px-4 border-r border-[#E2E8F0] h-full">
-                        <span className="max-w-full truncate text-[22px] font-black leading-normal text-[#1E293B] sm:text-[27px] md:text-[32px]">
+                      <div className="flex h-full items-center justify-center border-r border-[#E2E8F0] px-4 [container-type:inline-size]">
+                        <span
+                          className="max-w-full whitespace-nowrap text-center font-black leading-tight text-[#1E293B]"
+                          style={{ fontSize: busNumberFontSize(bus.busNumber, 2) }}
+                          title={`${bus.busNumber}번 버스`}
+                        >
                           {bus.busNumber}
                         </span>
                       </div>
@@ -592,13 +637,13 @@ export function BusInfoList() {
                       {/* 예정시간 */}
                       <div className="flex h-full items-center justify-center border-r border-[#E2E8F0]">
                         {bus.status !== "live" ? (
-                          <span className="px-1 text-center text-[13px] font-black leading-tight text-slate-500">
+                          <span className="px-1 text-center text-[0.8125rem] font-black leading-tight text-slate-500">
                             {describeArrivalStatus(bus.status)}
                           </span>
                         ) : isArriving ? (
                           <div className="flex flex-col items-center">
-                            <span className="text-[20px] font-black text-red-500 leading-tight">곧</span>
-                            <span className="text-[20px] font-black text-red-500 leading-tight">도착</span>
+                            <span className="text-[1.25rem] font-black leading-tight text-red-600">곧</span>
+                            <span className="text-[1.25rem] font-black leading-tight text-red-600">도착</span>
                           </div>
                         ) : (
                           <CircleTimer arrivalMin={bus.arrivalMin} />
@@ -609,22 +654,29 @@ export function BusInfoList() {
                       <div className="flex items-center px-4 h-full gap-3">
                         {bus.status === "live" && (
                           <div className={`border rounded-lg px-2 py-1 shrink-0 ${congColor}`}>
-                            <span className="text-[12px] font-black">{congLabel}</span>
+                            <span className="text-[0.75rem] font-black">{congLabel}</span>
                           </div>
                         )}
                         <div className="flex flex-col min-w-0">
-                          <span className="truncate text-[14px] font-black leading-normal text-[#1E293B] sm:text-[17px] md:text-[20px]">
+                          {/*
+                            정류장 이름은 잘라내지 않고 줄을 바꿉니다. 터치 화면에서는
+                            title 툴팁을 띄울 방법이 없어, ellipsis 로 자르면 이용자가
+                            "몽촌토성역대형쇼핑센터앞…" 이 어디인지 확인할 방법이
+                            없어집니다. 목록 자체가 세로 스크롤되므로 행이 늘어나도
+                            다른 정보가 사라지지 않습니다.
+                          */}
+                          <span className="break-words text-[0.875rem] font-black leading-snug text-[#1E293B] sm:text-[1.0625rem] md:text-[1.25rem]">
                             {bus.status === "live"
                               ? bus.currentStationName || "위치 확인 중"
                               : bus.arrivalMsg}
                           </span>
                           <StopsDot remaining={bus.remainingStops} />
                           <div className="mt-1 flex gap-1">
-                            {bus.busType === 1 && <span className="rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-black text-sky-800">저상버스</span>}
-                            {bus.isFullFlag && <span className="rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-black text-red-700">만차</span>}
+                            {bus.busType === 1 && <span className="rounded bg-sky-100 px-1.5 py-0.5 text-[0.625rem] font-black text-sky-800">저상버스</span>}
+                            {bus.isFullFlag && <span className="rounded bg-red-100 px-1.5 py-0.5 text-[0.625rem] font-black text-red-700">만차</span>}
                           </div>
                           {bus.isLastBus && (
-                            <span className="text-[12px] text-red-500 font-black mt-0.5">막차</span>
+                            <span className="mt-0.5 text-[0.75rem] font-black text-red-600">막차</span>
                           )}
                         </div>
                       </div>
@@ -633,11 +685,22 @@ export function BusInfoList() {
                   );
                 })}
 
-            {!loading && currentMain.length < MAIN_PER_PAGE && (
-              <div className="grid min-h-[68px] flex-1 place-items-center bg-[linear-gradient(135deg,#f8fafc_25%,#f1f5f9_25%,#f1f5f9_50%,#f8fafc_50%,#f8fafc_75%,#f1f5f9_75%)] bg-[length:24px_24px] px-4 text-center">
-                <div className="rounded-full border border-slate-200 bg-white/95 px-4 py-2 text-xs font-bold text-slate-500 shadow-sm">
-                  현재 확인된 도착 차량은 {currentMain.length}대입니다
-                </div>
+            {/*
+              행을 그리고 남은 자리를 채웁니다. `min-h` 없이 flex-1 만 쓰므로 남는
+              자리가 없으면 높이 0 이 되어 목록을 넘치게 하지 않습니다. 고정값 5와
+              비교하던 예전 조건은 화면이 낮아 4행이 정원인 경우에도 안내를 덧붙여
+              마지막 행을 가렸습니다.
+
+              문구는 "이 페이지가 마지막이고 자리가 남았을 때"만 보여 줍니다. 페이지가
+              꽉 찼는데 이 문구를 띄우면 뒤 페이지의 차량이 없다는 뜻이 됩니다.
+            */}
+            {!loading && (
+              <div className="grid min-h-0 flex-1 place-items-center overflow-hidden bg-[linear-gradient(135deg,#f8fafc_25%,#f1f5f9_25%,#f1f5f9_50%,#f8fafc_50%,#f8fafc_75%,#f1f5f9_75%)] bg-[length:24px_24px] px-4 text-center">
+                {currentMain.length < mainPerPage && (
+                  <div className="rounded-full border border-slate-200 bg-white/95 px-4 py-2 text-xs font-bold text-slate-500 shadow-sm">
+                    현재 확인된 도착 차량은 {currentMain.length}대입니다
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -646,10 +709,11 @@ export function BusInfoList() {
         {/* 푸터 */}
         <div className="flex shrink-0 items-center justify-between border-t border-[#CBD5E1] bg-[#EDF1F3] px-3 py-2 sm:px-5">
           <div className="flex min-w-0 items-center gap-3">
-            <button type="button" onClick={refetch} className={`inline-flex min-h-11 min-w-0 items-center gap-1.5 text-left text-[12px] font-bold hover:text-[#1B2930] ${isStale ? "text-red-700" : "text-[#52616B]"}`} title="도착 정보 새로고침">
+            {/* min-w-11: 라벨이 잘려도 아이콘이 44px 아래로 눌리지 않게 합니다. */}
+            <button type="button" onClick={refetch} className={`inline-flex min-h-11 min-w-11 items-center gap-1.5 text-left text-[0.75rem] font-bold hover:text-[#1B2930] ${isStale ? "text-red-700" : "text-[#52616B]"}`} title="도착 정보 새로고침">
               <Wifi className={`size-4 shrink-0 ${isStale ? "text-red-600" : "text-emerald-600"}`} /> <span className="truncate">{isStale ? "정보 갱신 지연 · 다시 시도" : "실시간 · 15초마다 갱신"}</span>
             </button>
-            {trackedBusId && <span className="hidden items-center gap-1 truncate text-[12px] font-black text-[#145466] sm:inline-flex"><Volume2 className="size-3.5" /> 선택 차량 도착 알림 중</span>}
+            {trackedBusId && <span aria-live="polite" className="inline-flex items-center gap-1 truncate text-[0.75rem] font-black text-[#145466]"><Volume2 className="size-3.5" /> {trackedBusNumber ? `${trackedBusNumber}번 ` : ""}도착 알림 중</span>}
           </div>
           <div className="flex items-center gap-1.5" aria-label="버스 목록 페이지 제어">
             {mainTotalPages > 1 && (
@@ -658,8 +722,9 @@ export function BusInfoList() {
             {(mainTotalPages > 1 || soonTotalPages > 1) && (
               <button type="button" onClick={() => setAutoRotate((enabled) => !enabled)} aria-pressed={!autoRotate} className="grid size-11 place-items-center rounded border border-slate-300 bg-white text-slate-700" aria-label={autoRotate ? "자동 페이지 넘김 중지" : "자동 페이지 넘김 시작"}>{autoRotate ? <Pause className="size-4" /> : <Play className="size-4" />}</button>
             )}
+            {mainTotalPages > 1 && <span className="min-w-10 text-center text-sm font-black text-slate-700" aria-live="polite">{curMainPage + 1}/{mainTotalPages}</span>}
             {Array.from({ length: mainTotalPages }).map((_, i) => (
-              <button key={i} type="button" onClick={() => { setAutoRotate(false); setMainPage(i); }} aria-label={`버스 목록 ${i + 1}페이지`} aria-current={i === curMainPage ? "page" : undefined} className="grid h-11 w-6 shrink-0 place-items-center rounded">
+              <button key={i} type="button" onClick={() => { setAutoRotate(false); setMainPage(i); }} aria-label={`버스 목록 ${i + 1}페이지`} aria-current={i === curMainPage ? "page" : undefined} className="grid size-11 shrink-0 place-items-center rounded">
                 <span className={`block h-2 rounded-full transition-all duration-300 ${i === curMainPage ? "w-6 bg-[#475569]" : "w-2 bg-[#CBD5E1]"}`} />
               </button>
             ))}

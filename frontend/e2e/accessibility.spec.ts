@@ -20,9 +20,11 @@ const arrivals = {
   message: "정상",
   items: [
     {
-      bus_number: "3412", direction: "강남역 방향", first_arrival_min: 2, second_arrival_min: 9,
-      message: "3412번 버스가 약 2분 후 도착합니다.",
-      raw_arrmsg1: "2분 후 [2번째 전]", raw_arrmsg2: "9분 후 [7번째 전]",
+      bus_number: "3412", direction: "강남역 방향", first_arrival_min: 0, second_arrival_min: 9,
+      message: "3412번 버스가 곧 도착합니다.",
+      // 작은 글씨 + 옅은 경고 배경 조합은 명암비 회귀가 나기 쉽습니다. 실제 서울역
+      // 실데이터에서 발견된 0정거장 배지를 홈 접근성 게이트에 항상 포함합니다.
+      raw_arrmsg1: "곧 도착", raw_arrmsg2: "9분 후 [7번째 전]",
       raw_congestion1: "3", raw_congestion2: "5", raw_is_last1: "0", raw_is_last2: "1",
       raw_bus_type1: "1", raw_bus_type2: "0", raw_is_full_flag1: "0", raw_is_full_flag2: "1",
       raw_station_nm1: "몽촌토성역", raw_station_nm2: "잠실역",
@@ -72,6 +74,17 @@ const placeConfirmation = {
 };
 
 async function analyze(page: Page) {
+  // 화면 전환은 fade-enter(220ms, opacity 0→1)로 시작합니다. 요소가 "보인다"고
+  // 판정되는 시점의 계산된 opacity 는 아직 0 이라, 곧바로 axe 를 돌리면 색 대비를
+  // 투명한 상태에서 재어 실제로는 멀쩡한 색이 위반으로 잡힙니다. 머신이 바쁠 때만
+  // 터지는 거짓 실패라서 배포를 막거나 정상 릴리스를 롤백시킬 수 있습니다.
+  // (.route-progress 처럼 무한 반복하는 애니메이션은 끝나지 않으므로 제외합니다.)
+  await page.evaluate(() => Promise.all(
+    document
+      .getAnimations()
+      .filter((animation) => animation.effect?.getTiming().iterations !== Infinity)
+      .map((animation) => animation.finished.catch(() => undefined)),
+  ));
   return new AxeBuilder({ page }).withTags(WCAG_TAGS).analyze();
 }
 
@@ -82,6 +95,11 @@ function summarize(violations: Awaited<ReturnType<typeof analyze>>["violations"]
 }
 
 test.beforeEach(async ({ page }) => {
+  await page.route("**/*", (route) => {
+    const hostname = new URL(route.request().url()).hostname;
+    if (hostname === "127.0.0.1" || hostname === "localhost") return route.fallback();
+    return route.abort("blockedbyclient");
+  });
   await page.route("**/api/bus/default", (route) => route.fulfill({ json: arrivals }));
   await page.route("**/api/places/suggest?**", (route) => route.fulfill({ json: { suggestions: [] } }));
   await page.addInitScript(() => {
@@ -153,6 +171,9 @@ test("external failure state has no automatic accessibility violations", async (
 
 test("screen reader tree exposes the board as named, operable controls", async ({ page }) => {
   // 스크린리더가 실제로 받아 가는 접근성 트리를 직접 확인합니다.
+  // 전광판은 들어가는 만큼만 한 페이지에 담으므로, 준비한 노선이 모두 한 화면에
+  // 나오도록 세로가 넉넉한 뷰포트에서 확인합니다.
+  await page.setViewportSize({ width: 1280, height: 1600 });
   await page.goto("/");
   await expect(page.getByText("올림픽공원역", { exact: true })).toBeVisible();
 

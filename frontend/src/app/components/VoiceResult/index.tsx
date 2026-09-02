@@ -214,7 +214,7 @@ export function VoiceResult({
           </button>
           <div className="flex min-w-0 items-center gap-2 text-white">
             <MapPin className="size-5 shrink-0 text-[#F0C929]" />
-            <strong className="truncate text-base sm:text-xl">{destination || "목적지"} 방면</strong>
+            <strong title={`${destination || "목적지"} 방면`} className="truncate text-base sm:text-xl">{destination || "목적지"} 방면</strong>
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
@@ -224,15 +224,29 @@ export function VoiceResult({
           {playbackStatus === "playing" && (
             <button type="button" onClick={stopPlayback} className="icon-command" title="음성 중지" aria-label="음성 중지"><Square className="size-4" /></button>
           )}
-          <button type="button" onClick={onReset} title="다시 검색" aria-label="다시 검색" className="inline-flex shrink-0 items-center gap-2 rounded-md border border-white/20 bg-white/10 px-3 py-2 text-sm font-bold text-white hover:bg-white/20">
+          <button type="button" onClick={onReset} title="다시 검색" aria-label="다시 검색" className="inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center gap-2 rounded-md border border-white/20 bg-white/10 px-4 py-2 text-sm font-bold text-white hover:bg-white/20">
             <Mic className="size-4" aria-hidden="true" /><span className="hidden sm:inline">다시 검색</span>
           </button>
         </div>
       </header>
 
+      {safetyDecision?.level === "verified" && (
+        <details data-testid="route-safety-panel" className="shrink-0 border-b border-emerald-300/35 bg-[#0E333C] px-3 py-0.5 text-white sm:px-5 sm:py-2">
+          <summary className="flex min-h-11 cursor-pointer list-none items-center gap-2 text-sm font-black">
+            <ShieldCheck className="size-4 shrink-0 text-emerald-300" />
+            <span className="min-w-0 break-words">{safetyDecision.title}</span>
+            <span className="ml-auto shrink-0 text-xs font-bold text-white/80">상세 보기</span>
+          </summary>
+          <ul className="mt-2 space-y-1 pl-5 text-sm leading-relaxed text-white/90">
+            {safetyDecision.reasons.map((reason) => <li key={reason} className="list-disc">{reason}</li>)}
+          </ul>
+          {checkedAtLabel && <p className="mt-2 text-xs font-semibold text-white/80">교통 데이터 확인 {checkedAtLabel}</p>}
+        </details>
+      )}
+
       <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden sm:flex-row">
         {buses.length > 0 && <BusList buses={buses} selectedId={selectedBus?.id} onBusClick={setSelectedBus} />}
-        <div className="relative min-w-0 flex-1 bg-white">
+        <div className="relative min-h-0 min-w-0 flex-1 overflow-hidden bg-white">
           {selectedBus?.routeDetail ? (
             <RouteDetailOverlay
               route={selectedBus.routeDetail}
@@ -252,29 +266,24 @@ export function VoiceResult({
         </div>
       </div>
 
-      {safetyDecision?.level === "verified" && (
-        <details className="absolute bottom-3 left-3 z-20 max-w-[min(440px,calc(100%-1.5rem))] rounded-md border border-emerald-300/60 bg-[#123E49]/95 px-3 py-2 text-white shadow-xl backdrop-blur-sm">
-          <summary className="flex cursor-pointer list-none items-center gap-2 text-sm font-black">
-            <ShieldCheck className="size-4 text-emerald-300" /> {safetyDecision.title}
-          </summary>
-          <ul className="mt-2 space-y-1 pl-5 text-xs leading-relaxed text-white/80">
-            {safetyDecision.reasons.map((reason) => <li key={reason} className="list-disc">{reason}</li>)}
-          </ul>
-          {checkedAtLabel && <p className="mt-2 text-[11px] font-semibold text-white/60">교통 데이터 확인 {checkedAtLabel}</p>}
-        </details>
-      )}
-
+      {/*
+        아래 재생 패널에 role="status" 를 붙이면 안 됩니다. 암묵적 aria-live 라서,
+        지금 소리로 재생 중인 바로 그 문장을 스크린리더가 한 번 더 읽어 두 번
+        들립니다. 같은 문구는 위 sr-only 문단에 이미 있어 탐색해 읽을 수 있습니다.
+        높이도 좁은 화면에서 더 조입니다. 이 패널이 커지면 경로 본문이 그만큼
+        줄어드는데, 문구는 소리로도 나오지만 경로 단계 목록은 화면에만 있습니다.
+      */}
       {playbackStatus === "playing" && message && (
-        <div className="absolute bottom-3 left-1/2 z-[999] flex w-[calc(100%-1.5rem)] max-w-[680px] -translate-x-1/2 items-center gap-3 rounded-md border border-[#F0C929]/60 bg-[#171D23]/95 px-4 py-3 text-white shadow-2xl backdrop-blur-sm">
+        <div data-testid="playback-panel" className="flex max-h-14 shrink-0 items-start gap-3 border-t border-[#F0C929]/60 bg-[#171D23] px-4 py-2 text-white shadow-[0_-6px_18px_rgba(0,0,0,0.16)] sm:max-h-28 sm:items-center sm:py-3">
           <Volume2 className="size-5 shrink-0 text-[#F0C929]" />
-          <p className="min-w-0 text-sm font-bold leading-relaxed sm:text-base">{message}</p>
+          <p className="custom-scrollbar min-w-0 flex-1 overflow-y-auto text-sm font-bold leading-relaxed sm:text-base">{message}</p>
         </div>
       )}
 
       {playbackStatus === "blocked" && message && (
-        <div className="absolute bottom-3 left-1/2 z-[999] flex w-[calc(100%-1.5rem)] max-w-[520px] -translate-x-1/2 items-center justify-between gap-3 rounded-md border border-[#F0C929] bg-[#171D23] px-4 py-3 text-white shadow-2xl">
+        <div data-testid="playback-panel" role="alert" className="flex shrink-0 items-center justify-between gap-3 border-t border-[#F0C929] bg-[#171D23] px-4 py-3 text-white shadow-[0_-6px_18px_rgba(0,0,0,0.16)]">
           <span className="flex min-w-0 items-center gap-2 text-sm font-bold"><Volume2 className="size-5 shrink-0 text-[#F0C929]" /> 음성 안내를 재생해 주세요.</span>
-          <button type="button" onClick={() => void playMessage()} className="inline-flex shrink-0 items-center gap-2 rounded-md bg-[#F0C929] px-3 py-2 text-sm font-black text-[#171D23]"><Play className="size-4 fill-current" /> 재생</button>
+          <button type="button" onClick={() => void playMessage()} className="inline-flex min-h-11 shrink-0 items-center gap-2 rounded-md bg-[#F0C929] px-4 py-2 text-sm font-black text-[#171D23]"><Play className="size-4 fill-current" /> 재생</button>
         </div>
       )}
     </div>

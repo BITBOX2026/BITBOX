@@ -87,18 +87,27 @@ button:focus-visible, input:focus-visible { outline: 3px solid #f0c929; outline-
 }
 
 @keyframes routeProgress {
-  from { width: 8%; }
-  to { width: 92%; }
+  from { transform: translateX(-130%); }
+  to { transform: translateX(330%); }
 }
 
 .fade-enter { animation: fadeEnter 220ms ease-out both; }
-.route-progress { animation: routeProgress 7s ease-out both; }
-.icon-command { display: grid; width: 36px; height: 36px; place-items: center; border: 1px solid rgb(255 255 255 / 20%); border-radius: 6px; background: rgb(255 255 255 / 10%); color: white; }
+.route-progress { width: 28%; animation: routeProgress 1.6s ease-in-out infinite; }
+/* flex 자식으로 쓰이므로 shrink 를 막지 않으면 큰 글씨 모드에서 44px 아래로 눌립니다. */
+.icon-command { display: grid; flex-shrink: 0; width: 44px; height: 44px; place-items: center; border: 1px solid rgb(255 255 255 / 20%); border-radius: 6px; background: rgb(255 255 255 / 10%); color: white; }
 .icon-command:hover { background: rgb(255 255 255 / 20%); }
-.route-tab { display: inline-flex; align-items: center; gap: 6px; border: 0; border-radius: 4px; padding: 6px 10px; background: transparent; color: #475569; font-size: 13px; font-weight: 800; }
+/* 최소 44x44px. 모바일에서는 라벨이 숨겨져 아이콘만 남으므로 min-width 가 없으면
+   폭이 40px로 줄어 고령 이용자의 터치 목표 기준에 미달합니다. */
+.route-tab { display: inline-flex; min-width: 44px; min-height: 44px; align-items: center; justify-content: center; gap: 6px; border: 0; border-radius: 4px; padding: 8px 12px; background: transparent; color: #475569; font-size: 0.875rem; font-weight: 800; }
 .route-tab-active { background: white; color: #123e49; box-shadow: 0 1px 2px rgb(15 23 42 / 12%); }
 
-.custom-scrollbar::-webkit-scrollbar, .custom-scrollbar-light::-webkit-scrollbar { width: 5px; }
+/* 좁은 화면의 경로 요약 막대용. 한 줄 높이를 고정하려고 가로 스크롤을 쓰지만
+   스크롤바가 보이면 그만큼 세로 공간을 또 먹으므로 감춥니다. */
+.no-scrollbar { scrollbar-width: none; }
+.no-scrollbar::-webkit-scrollbar { display: none; }
+
+.custom-scrollbar, .custom-scrollbar-light { scrollbar-gutter: stable; }
+.custom-scrollbar::-webkit-scrollbar, .custom-scrollbar-light::-webkit-scrollbar { width: 8px; }
 .custom-scrollbar::-webkit-scrollbar-thumb { border-radius: 8px; background: rgb(255 255 255 / 18%); }
 .custom-scrollbar-light::-webkit-scrollbar-thumb { border-radius: 8px; background: rgb(15 23 42 / 18%); }
 

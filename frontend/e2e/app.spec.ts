@@ -54,6 +54,25 @@ const fiveRowArrivals = {
   })),
 };
 
+// 노선번호가 길거나 한글 지명이 붙은 실제 사례(30-5하남, 9401-1)와 자리수가 많은
+// 번호를 함께 담아, 좁은 칸에서 번호가 쪼개지지 않는지 확인합니다.
+const longNumberArrivals = {
+  ...arrivals,
+  items: ["30-5하남", "9401-1", "3500", "8146", "M6405"].map((busNumber, index) => ({
+    bus_number: busNumber,
+    direction: "강남역 방향",
+    first_arrival_min: 2 + index,
+    message: `${busNumber}번 버스가 약 ${2 + index}분 후 도착합니다.`,
+    raw_arrmsg1: `${2 + index}분후[${index + 2}번째 전]`,
+    raw_congestion1: "3",
+    raw_is_last1: index === 4 ? "1" : "0",
+    raw_bus_type1: index % 2 === 0 ? "1" : "0",
+    raw_is_full_flag1: "0",
+    raw_station_nm1: `테스트정류장${index + 1}`,
+    raw_veh_id1: `long-${index + 1}`,
+  })),
+};
+
 const routeResult = {
   success: true,
   destination: "강남역 2호선",
@@ -85,6 +104,8 @@ const routeResult = {
       routeDetail: {
         busNumber: "3412",
         totalMin: 30,
+        transferCount: 0,
+        payment: 1500,
         origin: "올림픽공원역",
         origin_x: 127.121,
         origin_y: 37.516,
@@ -217,6 +238,14 @@ async function expectNoHorizontalOverflow(page: Page) {
   expect(overflow).toBe(false);
 }
 
+async function expectNoPageVerticalOverflow(page: Page) {
+  const metrics = await page.evaluate(() => ({
+    viewportHeight: window.innerHeight,
+    pageHeight: document.documentElement.scrollHeight,
+  }));
+  expect(metrics.pageHeight).toBeLessThanOrEqual(metrics.viewportHeight + 1);
+}
+
 async function installFakeRecorder(
   page: Page,
   options: { quiet?: boolean; stopDelayMs?: number } = {},
@@ -301,6 +330,13 @@ async function grantVoiceConsent(page: Page) {
 }
 
 test.beforeEach(async ({ page }) => {
+  // 이 기본 회귀 묶음은 제공자 쿼터와 운영 데이터를 절대 사용하지 않습니다.
+  // localhost 이외의 요청은 모두 끊고, 각 API는 아래 테스트별 mock으로만 응답합니다.
+  await page.route("**/*", (route) => {
+    const hostname = new URL(route.request().url()).hostname;
+    if (hostname === "127.0.0.1" || hostname === "localhost") return route.fallback();
+    return route.abort("blockedbyclient");
+  });
   await page.route("**/api/places/suggest?**", (route) => route.fulfill({ json: { suggestions: [] } }));
   await page.addInitScript(() => {
     class FakeUtterance {
@@ -342,10 +378,72 @@ test.beforeEach(async ({ page }) => {
 test("shows a stable live board on desktop and mobile", async ({ page }, testInfo) => {
   await page.goto("/");
   await expect(page.getByText("올림픽공원역", { exact: true })).toBeVisible();
-  await expect(page.getByText("3412", { exact: true }).first()).toBeVisible();
+  await expect(page.getByTestId("main-bus-row").first().getByText("3412", { exact: true })).toBeVisible();
   await expect(page.getByText("저상버스", { exact: true })).toBeVisible();
+  // "잠시 후 도착" 요약은 전광판이 넉넉할 때만 나옵니다. 좁은 화면에서 이 패널을
+  // 우선하면 정작 도착 목록이 한두 줄로 줄어드는데, 여기 실린 차량은 아래 목록에도
+  // 그대로 나오므로 중복 요약보다 목록을 살리는 쪽이 맞습니다.
+  await expect(page.getByTestId("soon-arrivals-panel")).toBeHidden();
   await expectNoHorizontalOverflow(page);
+  await expectNoPageVerticalOverflow(page);
   await page.screenshot({ path: testInfo.outputPath("home.png"), fullPage: true });
+});
+
+test("shows the soon-arrivals summary only when it does not starve the arrival list", async ({ page }) => {
+  await page.unroute("**/api/bus/default");
+  await page.route("**/api/bus/default", (route) => route.fulfill({ json: fiveRowArrivals }));
+
+  // 세로가 넉넉한 전광판: 요약과 목록이 함께 들어갑니다.
+  await page.setViewportSize({ width: 1280, height: 1024 });
+  await page.goto("/");
+  await expect(page.getByTestId("main-bus-row").first()).toBeVisible();
+  await expect(page.getByTestId("soon-arrivals-panel")).toBeVisible();
+  await expect.poll(() => page.getByTestId("main-bus-row").count()).toBeGreaterThanOrEqual(3);
+
+  // 세로가 짧아지면 요약을 접고 목록에 자리를 내줍니다.
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await expect(page.getByTestId("soon-arrivals-panel")).toBeHidden();
+  await expect.poll(() => page.getByTestId("main-bus-row").count()).toBeGreaterThanOrEqual(3);
+});
+
+test("never slices a bus row or splits a route number across lines", async ({ page }) => {
+  // 회귀: `break-all` 이 "3500" 을 "350"/"0" 두 줄로 쪼갰고, 페이지당 5행 고정이라
+  // 큰 글씨 모드에서 5행 중 4행이 최대 228px 가려졌습니다. 둘 다 노선을 잘못 읽게
+  // 만드는 문제라, 화면 크기·글씨 배율을 바꿔 가며 고정합니다.
+  await page.unroute("**/api/bus/default");
+  await page.route("**/api/bus/default", (route) => route.fulfill({ json: longNumberArrivals }));
+
+  for (const [width, height] of [[1280, 800], [1280, 720], [390, 844]] as const) {
+    await page.setViewportSize({ width, height });
+    for (const large of [false, true]) {
+      await page.goto("/");
+      if (large) await page.getByTitle("큰 글씨·고대비 화면으로 전환").click();
+      await expect(page.getByTestId("main-bus-row").first()).toBeVisible();
+
+      const problems = await page.evaluate(() => {
+        const split: string[] = [];
+        const sliced: string[] = [];
+        const list = document.querySelector("[data-testid=main-bus-scroll]")!;
+        const listBox = list.getBoundingClientRect();
+        document.querySelectorAll<HTMLElement>("[data-testid=main-bus-row]").forEach((row) => {
+          const box = row.getBoundingClientRect();
+          const hidden =
+            Math.max(0, listBox.top - box.top) + Math.max(0, box.bottom - listBox.bottom);
+          if (hidden > 4) sliced.push(`${(row.textContent || "").trim().slice(0, 10)} ${Math.round(hidden)}px`);
+          const number = row.querySelector<HTMLElement>("span[title$='번 버스']");
+          if (!number) return;
+          const lineHeight = Number.parseFloat(getComputedStyle(number).lineHeight);
+          if (number.getBoundingClientRect().height > lineHeight * 1.5) {
+            split.push((number.textContent || "").trim());
+          }
+        });
+        return { split, sliced };
+      });
+
+      expect(problems.split, `노선번호 줄바꿈 ${width}x${height} large=${large}`).toEqual([]);
+      expect(problems.sliced, `행 잘림 ${width}x${height} large=${large}`).toEqual([]);
+    }
+  }
 });
 
 test("large-text mode remains usable without horizontal clipping", async ({ page }) => {
@@ -354,8 +452,17 @@ test("large-text mode remains usable without horizontal clipping", async ({ page
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/");
 
+  const stationName = page.getByTestId("station-name");
+  const regularFontSize = await stationName.evaluate((element) => Number.parseFloat(getComputedStyle(element).fontSize));
   await page.getByTitle("큰 글씨·고대비 화면으로 전환").click();
   await expect(page.locator("html")).toHaveAttribute("data-a11y-large", "");
+  const largeFontSize = await stationName.evaluate((element) => Number.parseFloat(getComputedStyle(element).fontSize));
+  expect(largeFontSize).toBeGreaterThanOrEqual(regularFontSize * 1.19);
+  const stationLayout = await stationName.evaluate((element) => ({
+    clientWidth: element.clientWidth,
+    scrollWidth: element.scrollWidth,
+  }));
+  expect(stationLayout.scrollWidth).toBeLessThanOrEqual(stationLayout.clientWidth + 1);
   await expect(page.getByRole("combobox", { name: "버스 목적지" })).toBeVisible();
   await expect(page.getByTestId("main-bus-row").first()).toBeVisible();
   await expectNoHorizontalOverflow(page);
@@ -372,7 +479,7 @@ test("destination input is bounded to the backend place-query limit", async ({ p
   await expect(input).toHaveValue("가".repeat(100));
 });
 
-test("keeps five bus rows readable without overlap across target viewports", async ({ page }, testInfo) => {
+test("keeps every rendered bus row fully readable across target viewports", async ({ page }, testInfo) => {
   await page.unroute("**/api/bus/default");
   await page.route("**/api/bus/default", (route) => route.fulfill({ json: fiveRowArrivals }));
 
@@ -388,7 +495,10 @@ test("keeps five bus rows readable without overlap across target viewports", asy
     await page.goto("/");
 
     const rows = page.getByTestId("main-bus-row");
-    await expect(rows).toHaveCount(5);
+    // 페이지당 행 수는 이제 실제로 들어가는 만큼입니다(최대 5). 5행을 억지로 채우면
+    // 큰 글씨 모드나 낮은 화면에서 행이 잘려 노선을 잘못 읽게 됩니다.
+    await expect.poll(() => rows.count()).toBeGreaterThanOrEqual(1);
+    expect(await rows.count()).toBeLessThanOrEqual(5);
     const metrics = await page.getByTestId("main-bus-scroll").evaluate((element) => ({
       clientHeight: element.clientHeight,
       clientWidth: element.clientWidth,
@@ -416,12 +526,12 @@ test("keeps five bus rows readable without overlap across target viewports", asy
     }
     expect(metrics.scrollWidth).toBeLessThanOrEqual(metrics.clientWidth + 1);
 
+    // 보여 준 행은 전부 영역 안에 들어가야 합니다. 무인 키오스크에서는 아무도
+    // 스크롤하지 않으므로, 넘친 행은 없는 것과 같습니다.
+    expect(metrics.scrollHeight, `${viewport.name} 목록이 넘침`)
+      .toBeLessThanOrEqual(metrics.clientHeight + 1);
     const totalRowHeight = boxes.reduce((sum, box) => sum + box.height, 0);
-    if (totalRowHeight <= metrics.clientHeight + 1) {
-      expect(metrics.scrollHeight).toBeLessThanOrEqual(metrics.clientHeight + 1);
-    } else {
-      expect(metrics.scrollHeight).toBeGreaterThan(metrics.clientHeight);
-    }
+    expect(totalRowHeight).toBeLessThanOrEqual(metrics.clientHeight + 1);
 
     await expectNoHorizontalOverflow(page);
     await page.screenshot({ path: testInfo.outputPath(`five-rows-${viewport.name}.png`), fullPage: true });
@@ -458,6 +568,10 @@ test("cancels an active tracked-bus announcement when tracking is disabled", asy
 });
 
 test("submits the exact autocomplete coordinates and renders walk steps", async ({ page }, testInfo) => {
+  const mapSdkRequests: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().includes("kakao.com/v2/maps/sdk.js")) mapSdkRequests.push(request.url());
+  });
   await page.route("**/api/places/suggest?**", (route) => route.fulfill({ json: {
     suggestions: [{ name: "강남역 2호선", address: "서울 강남구 강남대로 396", x: "127.0276", y: "37.4979" }],
   } }));
@@ -476,16 +590,21 @@ test("submits the exact autocomplete coordinates and renders walk steps", async 
   await expect(page.getByText("검증 절차 완료")).toBeVisible();
   await expect(page.getByText("도보 180m")).toBeVisible();
   await expect(page.getByText("3412번 탑승")).toBeVisible();
+  await expect(page.getByText("환승 없음", { exact: true })).toBeVisible();
+  await expect(page.getByText("예상 1,500원", { exact: true })).toBeVisible();
   await expect(page.getByText("출발지 출발")).toBeVisible();
   await expect(page.getByText("올림픽공원역 정류장 도착")).toBeVisible();
+  expect(mapSdkRequests).toEqual([]);
   expect(requestBody.destination_x).toBe(127.0276);
   expect(requestBody.destination_y).toBe(37.4979);
   const recent = await page.evaluate(() => JSON.parse(localStorage.getItem("bitbox.recentDestinations") || "[]"));
   expect(recent[0]).toMatchObject({ name: "강남역 2호선", x: 127.0276, y: 37.4979 });
   await expectNoHorizontalOverflow(page);
+  await expectNoPageVerticalOverflow(page);
   await page.screenshot({ path: testInfo.outputPath("route.png"), fullPage: true });
 
   await page.getByTitle("지도").click();
+  await expect.poll(() => mapSdkRequests.length).toBeGreaterThan(0);
   await expect(page.getByText("정류장 기준 예상 경로")).toBeVisible();
   await expect(page.getByText("3412", { exact: true }).last()).toBeVisible();
   await expect(
@@ -509,6 +628,101 @@ test("supports keyboard autocomplete selection", async ({ page }) => {
   await input.press("Enter");
   await input.press("Enter");
   await expect(page.getByText("강남역 2호선 방면")).toBeVisible();
+  await expect(page.getByTestId("soon-arrivals-panel")).toHaveCount(0);
+});
+
+test("keeps safety and speech status outside the route content", async ({ page }) => {
+  await page.clock.install();
+  await page.route("**/api/route", (route) => route.fulfill({ json: routeResult }));
+  await page.goto("/");
+  await page.getByLabel("버스 목적지").fill("강남역");
+  await page.getByRole("button", { name: "버스 경로 검색" }).click();
+
+  const safety = page.getByTestId("route-safety-panel");
+  const routeContent = page.getByRole("region", { name: "경로 상세 내용" });
+  const playback = page.getByTestId("playback-panel");
+  await expect(safety).toBeVisible();
+  await expect(routeContent).toBeVisible();
+  await expect(playback).toBeVisible();
+
+  const [safetyBox, routeBox, playbackBox] = await Promise.all([
+    safety.boundingBox(),
+    routeContent.boundingBox(),
+    playback.boundingBox(),
+  ]);
+  expect(safetyBox).not.toBeNull();
+  expect(routeBox).not.toBeNull();
+  expect(playbackBox).not.toBeNull();
+  expect(safetyBox!.y + safetyBox!.height).toBeLessThanOrEqual(routeBox!.y + 1);
+  expect(playbackBox!.y).toBeGreaterThanOrEqual(routeBox!.y + routeBox!.height - 1);
+});
+
+test("keeps the route steps visible on a short screen while the guidance plays", async ({ page }) => {
+  // 위 테스트의 픽스처는 짧은 노선번호와 한 문장짜리 안내라 헤더도 재생 패널도
+  // 작습니다. 실제 환승 안내는 여러 문장이고 노선번호도 길어서, 그 조합에서만
+  // 헤더가 부모보다 커지고 경로 단계 목록이 잘린 영역 밖으로 밀려났습니다.
+  const busNumber = "30-5하남";
+  const longGuidance = [
+    "올림픽공원역 정류장까지 3분 걸어간 뒤 30-5하남번 버스를 타세요.",
+    "잠실역 정류장에서 내려 146번 버스로 갈아타세요.",
+    "강남역 정류장에서 내려 3분 걸으면 목적지에 도착합니다.",
+    "전체 예상 시간은 62분이고 예상 요금은 1,500원입니다.",
+  ].join(" ");
+  const detail = routeResult.buses[0].routeDetail;
+  await page.route("**/api/route", (route) => route.fulfill({ json: {
+    ...routeResult,
+    message: longGuidance,
+    buses: [{
+      ...routeResult.buses[0],
+      busNumber,
+      routeDetail: { ...detail, busNumber, transferCount: 1, payment: 1500 },
+    }],
+  } }));
+
+  // 요청받은 짧은 화면 범위(600~664px)의 양 끝을 모두 확인합니다. 600px 는
+  // 세로 예산이 훨씬 빠듯해 확보 가능한 높이가 다르므로 기대치를 따로 둡니다.
+  for (const { height, minVisible } of [
+    { height: 664, minVisible: 56 },
+    { height: 600, minVisible: 24 },
+  ]) {
+    await page.setViewportSize({ width: 390, height });
+    await page.goto("/");
+    await page.getByLabel("버스 목적지").fill("강남역");
+    await page.getByRole("button", { name: "버스 경로 검색" }).click();
+
+    const routeContent = page.getByRole("region", { name: "경로 상세 내용" });
+    const playback = page.getByTestId("playback-panel");
+    await expect(routeContent).toBeVisible();
+    await expect(playback).toBeVisible();
+
+    // 요약은 헤더에서 아래 막대로 내려왔더라도 화면에 남아 있어야 합니다.
+    await expect(page.getByText("환승 1회", { exact: true })).toBeVisible();
+    await expect(page.getByText("예상 1,500원", { exact: true })).toBeVisible();
+
+    const layout = await routeContent.evaluate((region) => {
+      // 스크롤 영역이 자기 부모(overflow:hidden)의 바닥 아래로 밀려나면 화면에서
+      // 사라집니다. boundingBox 만 보면 이 상태를 잡아내지 못합니다.
+      const clip = region.parentElement!.getBoundingClientRect();
+      const box = region.getBoundingClientRect();
+      const panel = document
+        .querySelector("[data-testid=playback-panel]")!
+        .getBoundingClientRect();
+      return {
+        visibleHeight: Math.round(
+          Math.max(0, Math.min(box.bottom, clip.bottom) - Math.max(box.top, clip.top)),
+        ),
+        overlap: Math.round(
+          Math.max(0, Math.min(box.bottom, panel.bottom) - Math.max(box.top, panel.top)),
+        ),
+      };
+    });
+    // 회귀 당시 값: 664px 에서 보이는 높이 0px, 재생 패널이 48px 를 덮었습니다.
+    expect(layout, `viewport 390x${height}`).toMatchObject({ overlap: 0 });
+    expect(layout.visibleHeight, `viewport 390x${height}`).toBeGreaterThanOrEqual(minVisible);
+
+    await expectNoHorizontalOverflow(page);
+    await expectNoPageVerticalOverflow(page);
+  }
 });
 
 test("shows a place provider failure instead of an empty suggestion list", async ({ page }) => {
@@ -520,6 +734,12 @@ test("shows a place provider failure instead of an empty suggestion list", async
   await page.goto("/");
   await page.getByLabel("버스 목적지").fill("강남역");
   await expect(page.getByRole("alert")).toContainText("장소 검색 서비스를 사용할 수 없습니다.");
+});
+
+test("explains an empty place search instead of showing a blank panel", async ({ page }) => {
+  await page.goto("/");
+  await page.getByLabel("버스 목적지").fill("존재하지않는장소");
+  await expect(page.getByRole("status")).toContainText("일치하는 장소가 없습니다.");
 });
 
 test("coalesces two identical route submissions in the same interaction", async ({ page }) => {
@@ -550,6 +770,23 @@ test("lets a user pause automatic bus page rotation", async ({ page }) => {
   await page.clock.fastForward(10_000);
   await expect(page.getByText("3500", { exact: true })).toBeVisible();
   await expect(page.getByText("3505", { exact: true })).toHaveCount(0);
+});
+
+test("keeps each bus page visible for ten seconds before rotating", async ({ page }) => {
+  await page.clock.install();
+  await page.unroute("**/api/bus/default");
+  await page.route("**/api/bus/default", (route) => route.fulfill({ json: fiveRowArrivals }));
+  await page.goto("/");
+  await expect(page.getByTestId("main-bus-row").first()).toBeVisible();
+  // 페이지당 행 수는 화면 높이에 따라 달라집니다. 회전 "주기"만 고정합니다.
+  const firstRow = () => page.getByTestId("main-bus-row").first().innerText();
+  const before = await firstRow();
+
+  await page.clock.fastForward(9_000);
+  expect(await firstRow(), "9초에는 아직 넘어가면 안 됩니다").toBe(before);
+
+  await page.clock.fastForward(1_100);
+  await expect.poll(firstRow, { timeout: 5_000 }).not.toBe(before);
 });
 
 test("clears a shared kiosk session after inactivity", async ({ page }) => {
@@ -643,7 +880,9 @@ test("confirms an ambiguous station before requesting its route", async ({ page 
     await route.fulfill({ json: requestBodies.length === 1 ? placeConfirmationResult : routeResult });
   });
 
+  await page.setViewportSize({ width: 390, height: 680 });
   await page.goto("/");
+  await page.getByTitle("큰 글씨·고대비 화면으로 전환").click();
   await page.getByLabel("버스 목적지").fill("강남역");
   await page.getByRole("button", { name: "버스 경로 검색" }).click();
 
@@ -661,7 +900,11 @@ test("confirms an ambiguous station before requesting its route", async ({ page 
   await expect.poll(() => page.evaluate(() => (
     window as Window & { __spokenPrompts?: string[] }
   ).__spokenPrompts?.length || 0)).toBeGreaterThanOrEqual(2);
+  const retryButton = confirmation.getByRole("button", { name: "다시 말하기" });
+  await retryButton.scrollIntoViewIfNeeded();
+  await expect(retryButton).toBeVisible();
   await expectNoHorizontalOverflow(page);
+  await expectNoPageVerticalOverflow(page);
   await primaryCandidate.click();
 
   await expect(page.getByText("강남역 2호선 방면")).toBeVisible();
@@ -694,6 +937,59 @@ test("keeps a live arrival whose current station name is temporarily blank", asy
   await expect(row).toContainText("위치 확인 중");
   await expect(row).toContainText("4");
 });
+
+test("never clips the place confirmation question on a kiosk screen", async ({ page }) => {
+  // 장소 확인은 이 서비스의 안전 설계가 드러나는 화면입니다. 질문이 잘리면 이용자는
+  // 무엇을 확인해 달라는 것인지 읽을 수 없습니다. 세로로 잘린 글자는 axe 검사에도,
+  // 텍스트 존재 여부를 보는 단언에도 걸리지 않으므로 실제 좌표로 확인합니다.
+  //
+  // 음성 경로는 텍스트 검색보다 화면에 담을 내용이 많습니다. 인식된 발화 한 줄과
+  // 운영 서버가 실제로 돌려주는 두 줄짜리 판단 근거가 더 붙습니다. 짧은 목 데이터로는
+  // 이 결함이 재현되지 않으므로 실제 응답과 같은 분량을 씁니다.
+  await installFakeRecorder(page);
+  await page.route("**/api/upload", async (route) => {
+    await route.fulfill({
+      json: {
+        ...placeConfirmationResult,
+        text: "잠실역 가는 버스를 알려줘.",
+        safety_decision: {
+          ...placeConfirmationResult.safety_decision,
+          reasons: [
+            "이름과 카테고리가 가장 적합한 후보를 우선했습니다.",
+            "후보가 여러 개이므로 좌표를 확정하기 전에 질문합니다.",
+          ],
+        },
+      },
+    });
+  });
+
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto("/");
+  await grantVoiceConsent(page);
+  await page.getByRole("button", { name: "음성 입력 시작" }).click();
+  await page.getByRole("button", { name: "음성 입력 완료" }).click();
+
+  await expect(page.getByRole("heading", { name: "강남역 2호선이 맞나요?" })).toBeVisible();
+
+  const bounds = await page.evaluate(() => {
+    const scroller = document.querySelector('[data-testid="voice-panel-scroll"]');
+    const title = document.getElementById("place-confirmation-title");
+    if (!(scroller instanceof HTMLElement) || !title) return null;
+    const panel = scroller.getBoundingClientRect();
+    const question = title.getBoundingClientRect();
+    return {
+      hiddenAbove: Math.round(panel.top - question.top),
+      hiddenBelow: Math.round(question.bottom - panel.bottom),
+    };
+  });
+
+  expect(bounds).not.toBeNull();
+  // 가운데 정렬된 스크롤 컨테이너에서 내용이 넘치면 위쪽은 스크롤로도 되돌릴 수 없어
+  // 영영 읽을 수 없는 영역이 됩니다. 위아래 어느 쪽으로도 잘리면 안 됩니다.
+  expect(bounds!.hiddenAbove).toBeLessThanOrEqual(0);
+  expect(bounds!.hiddenBelow).toBeLessThanOrEqual(0);
+});
+
 
 test("clears an unanswered place confirmation after inactivity", async ({ page }) => {
   await page.clock.install();
@@ -949,7 +1245,11 @@ test("does not announce the spoken guidance twice to a screen reader", async ({ 
 
   const announcement = await page.evaluate(() => {
     const spoken: string[] = (window as unknown as { __spokenPrompts?: string[] }).__spokenPrompts || [];
-    const live = Array.from(document.querySelectorAll("[aria-live]"))
+    // role="status" 와 role="alert" 는 암묵적 live region 입니다. [aria-live] 만
+    // 찾으면 이 둘에 안내 문구가 들어가도 통과해 버립니다.
+    const live = Array.from(
+      document.querySelectorAll("[aria-live], [role=status], [role=alert]"),
+    )
       .map((node) => (node.textContent || "").trim())
       .filter(Boolean);
     return { spoken, live };
@@ -999,8 +1299,19 @@ test("never clips route text vertically inside truncated cells", async ({ page }
       }],
     },
   }));
+  await page.setViewportSize({ width: 390, height: 680 });
   await page.goto("/");
+  await page.getByTitle("큰 글씨·고대비 화면으로 전환").click();
   await expect(page.getByTestId("main-bus-row")).toHaveCount(1);
+  const longBusNumber = page.getByTestId("main-bus-row").getByText("30-5하남", { exact: true });
+  await expect(longBusNumber).toBeVisible();
+  const busNumberLayout = await longBusNumber.evaluate((element) => ({
+    clientWidth: element.clientWidth,
+    scrollWidth: element.scrollWidth,
+    textOverflow: getComputedStyle(element).textOverflow,
+  }));
+  expect(busNumberLayout.scrollWidth).toBeLessThanOrEqual(busNumberLayout.clientWidth + 1);
+  expect(busNumberLayout.textOverflow).not.toBe("ellipsis");
 
   const clipped = await page.evaluate(() => {
     const offenders: string[] = [];
@@ -1130,7 +1441,10 @@ test("falls back to server speech when the device cannot speak Korean", async ({
 
   // 서버 음성으로 대체되었는지
   await expect.poll(() => spokenTexts.length).toBeGreaterThanOrEqual(1);
-  expect(spokenTexts[0]).toContain("3412번 버스");
+  // 노선번호는 정류장 안내처럼 자릿수로 끊어 읽습니다. "삼천사백십이 번"으로 읽으면
+  // 청력이 떨어진 이용자가 화면의 3412 와 연결하지 못합니다.
+  expect(spokenTexts[0]).toContain("삼사일이 번 버스");
+  expect(spokenTexts[0]).not.toContain("3412");
 
   // 실제로 오디오 재생까지 이어졌는지
   const played = await page.evaluate(() => (window as Window & { __playedAudio?: string[] }).__playedAudio || []);
@@ -1167,7 +1481,7 @@ test("falls back to server speech for tracked-bus arrival announcements", async 
   // 버스를 추적 대상으로 선택하면 접근 알림이 나가야 합니다.
   await page.getByTestId("main-bus-row").first().click();
   await expect.poll(() => spokenTexts.length, { timeout: 8_000 }).toBeGreaterThanOrEqual(1);
-  expect(spokenTexts.join(" ")).toContain("3412번 버스가 곧 도착합니다");
+  expect(spokenTexts.join(" ")).toContain("삼사일이 번 버스가 곧 도착합니다");
 
   // 브라우저 음성으로는 시도조차 하지 않아야 합니다(무음이 되므로).
   const silentCalls = await page.evaluate(() => (window as Window & { __silentSpeakCalls?: number }).__silentSpeakCalls || 0);
@@ -1246,24 +1560,26 @@ test("clears a tracked bus that has left so the board keeps rotating", async ({ 
     route.fulfill({ json: boardOf(trackedVehiclePresent) }));
 
   await page.goto("/");
-  await expect(page.getByTestId("main-bus-row")).toHaveCount(5);
+  await expect(page.getByTestId("main-bus-row").first()).toBeVisible();
+  const firstRow = () => page.getByTestId("main-bus-row").first().innerText();
+  const trackedPage = await firstRow();
 
   // 추적을 시작하면 자동 페이지 전환이 멈춥니다(의도된 동작).
   await page.getByTestId("main-bus-row").first().click();
-  await page.clock.fastForward(5_000);
-  await expect(page.getByTestId("main-bus-row")).toHaveCount(5);
+  await page.clock.fastForward(10_000);
+  expect(await firstRow(), "추적 중에는 페이지가 넘어가면 안 됩니다").toBe(trackedPage);
 
   // 추적하던 차량이 떠납니다. 폴링 두 번이면 일시적 누락이 아님이 확정됩니다.
   trackedVehiclePresent = false;
   await page.clock.fastForward(15_000);
   await page.clock.fastForward(15_000);
 
-  // 추적이 풀렸으므로 자동 페이지 전환이 재개돼 2페이지(2대)가 나타나야 합니다.
-  // 추적이 남아 있으면 5초를 아무리 흘려보내도 계속 5대에 머뭅니다.
+  // 추적이 풀렸으므로 자동 페이지 전환이 재개돼 다음 페이지가 보여야 합니다.
+  // 추적이 남아 있으면 아무리 시간을 흘려보내도 같은 페이지에 머뭅니다.
   await expect.poll(async () => {
-    await page.clock.fastForward(5_000);
-    return page.getByTestId("main-bus-row").count();
-  }, { timeout: 15_000 }).toBe(2);
+    await page.clock.fastForward(10_000);
+    return firstRow();
+  }, { timeout: 15_000 }).not.toBe(trackedPage);
 });
 
 // 안내가 재생 중일 때 통과한 임계값을 그냥 버리면, 가장 중요한 "곧 도착"이
@@ -1607,5 +1923,6 @@ test("keeps the bus list usable on short screens", async ({ page }) => {
     await expect(firstRow).toHaveAttribute("aria-pressed", "true");
     await firstRow.click({ timeout: 5_000 });
     await expectNoHorizontalOverflow(page);
+    await expectNoPageVerticalOverflow(page);
   }
 });

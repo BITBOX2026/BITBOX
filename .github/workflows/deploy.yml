@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      skip_transit_check:
+        description: "ODsay 실경로 검증(1회 소비)을 건너뜁니다. 시연 당일 쿼터를 아낄 때만 사용하세요."
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -27,10 +32,18 @@ jobs:
           python-version: "3.12"
           cache: pip
 
+      # 이 잡은 ci.yml 과 같은 push 이벤트에서 나란히 시작하며 서로를 기다리지
+      # 않습니다. 따라서 ci.yml 이 빨간불이어도 이 워크플로만 초록불이면 배포가
+      # 그대로 나갈 수 있습니다. 그런 일이 없도록 여기의 검증은 ci.yml 의 검증을
+      # 항상 포함하는 상위 집합이어야 합니다. ci.yml 에 검사를 추가하면 여기에도
+      # 반드시 추가하세요. (tests/test_workflow_definitions.py 가 이를 고정합니다.)
       - name: Test backend
         run: |
-          python -m pip install -r requirements-backend.txt pytest pip-audit bandit
+          python -m pip install -r requirements-backend.txt pytest pip-audit bandit ruff
+          git diff --check
           python -m pip check
+          python -m compileall -q app scripts tests
+          python -m ruff check app scripts tests
           python -m pip_audit -r requirements-backend.txt
           python -m bandit -r app scripts -x tests
           python -m pytest -q
@@ -328,14 +341,25 @@ jobs:
             echo "Alert webhook is configured."
           fi
 
+      # `--check-transit` 은 운영 `/api/route` 를 실제로 한 번 호출합니다. 즉 배포
+      # 1회 = ODsay 1회입니다(하루 30회). 기본값은 "검증한다" 입니다. 이 호출이
+      # 없으면 ODsay 키나 쿼터가 죽은 채 배포돼도 배포 시점에는 알 수 없습니다.
+      # 시연 당일처럼 쿼터를 아껴야 할 때만 수동 배포에서 끕니다.
       - name: Verify public production boundary
         env:
           BITBOX_SERVER_NAME: ${{ secrets.BITBOX_SERVER_NAME }}
-        run: >-
-          python scripts/production_smoke.py
-          --url "https://$BITBOX_SERVER_NAME"
-          --expected-release-sha "${{ github.sha }}"
-          --check-transit
+          RELEASE_SHA: ${{ github.sha }}
+          SKIP_TRANSIT_CHECK: ${{ github.event.inputs.skip_transit_check }}
+        run: |
+          transit_flag=--check-transit
+          if [[ "${SKIP_TRANSIT_CHECK:-false}" == "true" ]]; then
+            transit_flag=
+            echo "::warning title=ODsay 경로 검증 생략::수동 요청으로 --check-transit 을 건너뜁니다. 이번 배포에서 운영 경로 API는 검증되지 않았습니다."
+          fi
+          python scripts/production_smoke.py \
+            --url "https://$BITBOX_SERVER_NAME" \
+            --expected-release-sha "$RELEASE_SHA" \
+            $transit_flag
 
       # ODsay 무료 등급은 하루 30회입니다. 배포 검증(--check-transit)이 그중 몇 회를
       # 썼는지 로그에 남겨야 시연 당일 남은 예산을 계획할 수 있습니다. /internal/status

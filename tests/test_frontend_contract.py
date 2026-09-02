@@ -704,6 +704,7 @@ def test_transfer_route_keeps_each_segment_time_and_order() -> None:
             "bus_number": "3412",
             "total_time_min": 62,
             "transfer_count": 1,
+            "payment": 1_500,
             "route_segments": [
                 {"vehicle_type": "도보", "line": "도보 90m",
                  "start_name": "출발지", "end_name": "올림픽공원역", "time_min": 2},
@@ -723,8 +724,82 @@ def test_transfer_route_keeps_each_segment_time_and_order() -> None:
     assert [step["type"] for step in steps] == ["walk", "bus", "walk", "bus", "walk"]
     assert [step["durationMin"] for step in steps] == [2, 35, 1, 22, 2]
     assert sum(step["durationMin"] for step in steps) == 62
+    assert response["buses"][0]["routeDetail"]["transferCount"] == 1
+    assert response["buses"][0]["routeDetail"]["payment"] == 1_500
     # 두 번째 버스 구간의 노선 번호가 첫 구간 번호로 덮이지 않아야 합니다.
     assert [step["busNumber"] for step in steps if step["type"] == "bus"] == ["3412", "146"]
+
+
+def test_direct_route_preserves_zero_transfers_and_unknown_fare() -> None:
+    """0회 환승은 누락값이 아니며, 없는 요금은 임의로 만들지 않습니다."""
+    buses = gateway_module._build_buses_from_route({
+        "intent": "route",
+        "destination": "잠실역",
+        "bus_number": "3323",
+        "total_time_min": 17,
+        "transfer_count": 0,
+        "payment": None,
+        "route_segments": [
+            {"vehicle_type": "버스", "line": "3323번", "time_min": 17},
+        ],
+    })
+
+    detail = buses[0]["routeDetail"]
+    assert detail["transferCount"] == 0
+    assert detail["payment"] is None
+
+
+def test_unknown_transfer_count_is_not_invented_as_no_transfer() -> None:
+    buses = gateway_module._build_buses_from_route({
+        "bus_number": "3412",
+        "total_time_min": 18,
+        "transfer_count": None,
+        "payment": None,
+        "route_segments": [{
+            "vehicle_type": "버스",
+            "line": "3412번",
+            "time_min": 18,
+            "start_name": "올림픽공원역",
+            "end_name": "잠실역",
+        }],
+    })
+
+    assert buses[0]["routeDetail"]["transferCount"] is None
+
+
+def test_route_summary_survives_the_response_model() -> None:
+    """gateway 가 만든 값이 아니라 브라우저가 실제로 받는 JSON 을 확인합니다.
+
+    `/api/route` 와 `/api/upload` 는 `UploadCompatResponse` 를 response_model 로
+    선언합니다. FastAPI 는 여기 선언되지 않은 키를 조용히 버리므로, gateway 만
+    고치고 스키마를 빼먹으면 단위 테스트는 통과하는데 화면에는 아무것도 나오지
+    않습니다. 이 테스트는 그 경계를 건너서 확인합니다.
+    """
+    buses = gateway_module._build_buses_from_route({
+        "intent": "route",
+        "destination": "경복궁역",
+        "bus_number": "708",
+        "total_time_min": 17,
+        "transfer_count": 0,
+        "payment": 1_500,
+        "route_segments": [
+            {"vehicle_type": "버스", "line": "708번", "time_min": 17,
+             "start_name": "서울역버스환승센터", "end_name": "경복궁역1번출구"},
+        ],
+    })
+
+    served = UploadCompatResponse.model_validate({
+        "success": True,
+        "text": "경복궁역",
+        "intent": "route",
+        "destination": "경복궁역",
+        "message": "약 17분 소요되며, 요금은 1,500원입니다.",
+        "buses": buses,
+    }).model_dump()
+
+    detail = served["buses"][0]["routeDetail"]
+    assert detail["transferCount"] == 0
+    assert detail["payment"] == 1_500
 
 
 def test_missing_segment_time_uses_only_unallocated_total() -> None:

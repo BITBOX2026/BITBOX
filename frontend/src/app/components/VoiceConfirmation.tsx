@@ -82,10 +82,10 @@ export function VoiceConfirmation({ confirmation, transcript, audioBase64, safet
   return (
     <div ref={dialogRef} className="fade-enter min-w-0" role="group" aria-labelledby="place-confirmation-title">
       <p className="mb-1 text-xs font-extrabold text-[#F0C929]">장소 확인</p>
-      <h2 id="place-confirmation-title" className="text-[clamp(22px,4vw,34px)] font-black leading-tight">
+      <h2 id="place-confirmation-title" className="break-keep text-[clamp(1.375rem,4vw,2.125rem)] font-black leading-tight">
         {confirmation.prompt}
       </h2>
-      {transcript && <p className="mt-2 text-sm text-white/65">“{transcript}”로 들었어요.</p>}
+      {transcript && <p className="mt-2 break-keep text-sm font-semibold text-white/80">“{transcript}”로 들었어요.</p>}
       {safetyDecision && (
         <div className="mt-3 max-w-[520px] rounded-md border border-cyan-200/25 bg-cyan-950/25 px-3 py-2 text-sm" role="status">
           <strong className="block text-cyan-100">{safetyDecision.title}</strong>
@@ -93,11 +93,11 @@ export function VoiceConfirmation({ confirmation, transcript, audioBase64, safet
         </div>
       )}
 
-      <button ref={candidateRef} type="button" onClick={() => onSelect(candidate)} className="mt-4 flex w-full max-w-[520px] items-center gap-3 rounded-lg border-2 border-[#F0C929] bg-white px-4 py-3 text-left text-slate-900 shadow-xl focus:outline-none focus:ring-4 focus:ring-[#F0C929]/45">
+      <button ref={candidateRef} type="button" onClick={() => onSelect(candidate)} className="mt-4 flex min-h-16 w-full max-w-[520px] items-center gap-3 rounded-lg border-2 border-[#F0C929] bg-white px-4 py-3 text-left text-slate-900 shadow-xl focus:outline-none focus:ring-4 focus:ring-[#F0C929]/45">
         {candidate.category_code === "SW8" ? <TrainFront className="size-6 shrink-0 text-[#145466]" /> : <MapPin className="size-6 shrink-0 text-[#145466]" />}
         <span className="min-w-0 flex-1">
-          <strong className="block truncate text-base">{candidate.name}</strong>
-          <span className="block truncate text-xs text-slate-500">{candidate.category || candidate.address}</span>
+          <strong className="block break-keep text-base leading-snug">{candidate.name}</strong>
+          <span className="mt-1 block break-keep text-sm leading-snug text-slate-600">{candidate.category || candidate.address}</span>
         </span>
         <Check className="size-5 shrink-0 text-emerald-600" />
       </button>
@@ -105,7 +105,7 @@ export function VoiceConfirmation({ confirmation, transcript, audioBase64, safet
       {alternatives.length > 0 && (
         <div className="mt-3 flex max-w-[520px] flex-wrap gap-2" aria-label="다른 장소 후보">
           {alternatives.slice(0, 3).map((place) => (
-            <button key={`${place.name}-${place.x}`} type="button" onClick={() => onSelect(place)} className="rounded-md bg-white/10 px-3 py-2 text-xs font-bold text-white hover:bg-white/20">
+            <button key={`${place.name}-${place.x}`} type="button" onClick={() => onSelect(place)} className="min-h-11 rounded-md border border-white/20 bg-white/10 px-3 py-2 text-sm font-bold text-white hover:bg-white/20">
               {place.name}
             </button>
           ))}
@@ -113,10 +113,10 @@ export function VoiceConfirmation({ confirmation, transcript, audioBase64, safet
       )}
 
       <div className="mt-4 flex flex-wrap gap-2">
-        <button type="button" onClick={() => void playPrompt()} className="inline-flex items-center gap-2 rounded-md border border-white/25 px-3 py-2 text-sm font-bold text-white/85 hover:bg-white/10">
+        <button type="button" onClick={() => void playPrompt()} className="inline-flex min-h-11 items-center gap-2 rounded-md border border-white/25 px-3 py-2 text-sm font-bold text-white/90 hover:bg-white/10">
           <Volume2 className="size-4" /> 질문 다시 듣기
         </button>
-        <button type="button" onClick={onRetry} className="inline-flex items-center gap-2 rounded-md border border-white/25 px-3 py-2 text-sm font-bold text-white/85 hover:bg-white/10">
+        <button type="button" onClick={onRetry} className="inline-flex min-h-11 items-center gap-2 rounded-md border border-white/25 px-3 py-2 text-sm font-bold text-white/90 hover:bg-white/10">
           <Mic className="size-4" /> 다시 말하기
         </button>
       </div>

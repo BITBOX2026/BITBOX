@@ -50,6 +50,10 @@ export interface RouteStep {
 export interface RouteDetail {
   busNumber: string;
   totalMin: number;
+  /** 버스 간 환승 횟수. 직통 노선은 0입니다. */
+  transferCount?: number | null;
+  /** 성인 기준 예상 요금(원). 제공기관이 주지 않으면 표시하지 않습니다. */
+  payment?: number | null;
   steps: RouteStep[];
   origin?: string;
   origin_x?: number | string | null;

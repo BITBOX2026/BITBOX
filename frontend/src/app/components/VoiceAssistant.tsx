@@ -102,7 +102,11 @@ export function VoiceAssistant({ onResultModeChange }: VoiceAssistantProps) {
   }, [resetKioskSession, status]);
 
   useEffect(() => {
-    onResultModeChange?.(status === "result");
+    // 이 신호는 "아래 음성 패널이 지금 주인공인가"를 뜻합니다. 경로 결과뿐 아니라
+    // 장소 확인도 여기에 들어갑니다. 확인 화면에는 질문, 인식된 발화, 판단 근거,
+    // 후보 목록, 조작 버튼이 함께 올라가는데 대기 화면 비율(32%)로는 720px 기기에서
+    // 질문 제목이 위로 잘려 무엇을 확인해 달라는 것인지 읽을 수 없습니다.
+    onResultModeChange?.(status === "result" || status === "confirming");
   }, [onResultModeChange, status]);
 
   const requestRecording = () => {
@@ -180,12 +184,12 @@ export function VoiceAssistant({ onResultModeChange }: VoiceAssistantProps) {
         </div>
       )}
 
-      <div className="mx-auto grid h-full w-full max-w-[820px] grid-cols-[minmax(0,1fr)_112px] items-center gap-4 px-5 py-5 sm:grid-cols-[minmax(0,1fr)_150px] sm:px-8 md:gap-8">
+      <div data-testid="voice-panel-scroll" className={`custom-scrollbar mx-auto grid h-full min-h-0 w-full max-w-[820px] [align-items:safe_center] gap-4 overflow-y-auto px-5 py-5 sm:px-8 md:gap-8 ${status === "confirming" ? "grid-cols-1" : "grid-cols-[minmax(0,1fr)_112px] sm:grid-cols-[minmax(0,1fr)_150px]"}`}>
         <div className="min-w-0">
           {status === "idle" && (
             <div className="fade-enter">
               <p className="mb-1 text-xs font-extrabold text-[#F0C929]">BITBOX 길찾기</p>
-              <h2 className="mb-1 text-[clamp(22px,4vw,34px)] font-black leading-tight">어디로 갈까요?</h2>
+              <h2 className="mb-1 text-[clamp(1.375rem,4vw,2.125rem)] font-black leading-tight">어디로 갈까요?</h2>
               <p className="mb-4 text-sm font-medium text-white/65">목적지를 입력하거나 마이크를 눌러 말씀해 주세요.</p>
               <DestinationSearch onSubmit={submitTextRoute} />
             </div>
@@ -194,7 +198,7 @@ export function VoiceAssistant({ onResultModeChange }: VoiceAssistantProps) {
           {status === "listening" && (
             <div className="fade-enter">
               <p className="mb-2 text-xs font-extrabold text-red-300">음성 인식 중</p>
-              <h2 className="text-[clamp(24px,4vw,36px)] font-black leading-tight">말씀해 주세요</h2>
+              <h2 className="text-[clamp(1.5rem,4vw,2.25rem)] font-black leading-tight">말씀해 주세요</h2>
               <VoiceRecording transcript={transcript} />
             </div>
           )}
@@ -202,7 +206,7 @@ export function VoiceAssistant({ onResultModeChange }: VoiceAssistantProps) {
           {status === "starting" && (
             <div className="fade-enter" role="status" aria-live="polite">
               <p className="mb-2 text-xs font-extrabold text-[#F0C929]">마이크 준비 중</p>
-              <h2 className="text-[clamp(24px,4vw,36px)] font-black leading-tight">마이크 권한을 확인하고 있습니다</h2>
+              <h2 className="text-[clamp(1.5rem,4vw,2.25rem)] font-black leading-tight">마이크 권한을 확인하고 있습니다</h2>
               <p className="mt-2 text-sm font-medium text-white/65">잠시만 기다려 주세요.</p>
             </div>
           )}
@@ -220,15 +224,15 @@ export function VoiceAssistant({ onResultModeChange }: VoiceAssistantProps) {
           )}
         </div>
 
-        <div className="flex flex-col items-center gap-2">
-          {status !== "confirming" && <VoiceMicButton status={status} onClick={toggleRecording} />}
+        {status !== "confirming" && <div className="flex flex-col items-center gap-2">
+          <VoiceMicButton status={status} onClick={toggleRecording} />
           <span className="text-center text-xs font-bold text-white/65">
-            {status === "idle" ? "음성으로 찾기" : status === "starting" ? "권한 확인 중" : status === "listening" ? "눌러서 완료" : status === "confirming" ? "후보를 선택하세요" : "조회 중"}
+            {status === "idle" ? "음성으로 찾기" : status === "starting" ? "권한 확인 중" : status === "listening" ? "눌러서 완료" : "조회 중"}
           </span>
           <button type="button" onClick={() => { setConsentRequired(false); setPrivacyOpen(true); }} aria-label="개인정보 처리 안내" title="개인정보 처리 안내" className="grid size-11 place-items-center rounded text-white/55 hover:bg-white/10 hover:text-white">
             <ShieldCheck className="size-4" />
           </button>
-        </div>
+        </div>}
       </div>
 
       <PrivacyNotice open={privacyOpen} consentRequired={consentRequired} onAccept={acceptVoiceProcessing} onClose={() => { setPrivacyOpen(false); setConsentRequired(false); }} />

@@ -118,7 +118,7 @@ export function PrivacyNotice({ open, consentRequired, onAccept, onClose }: Priv
             <ShieldCheck className="size-5 text-[#145466]" />
             <h2 id="privacy-title" className="text-base font-black">음성·위치정보 처리 안내</h2>
           </div>
-          <button type="button" onClick={onClose} aria-label="안내 닫기" title="안내 닫기" className="grid size-8 place-items-center rounded hover:bg-slate-100">
+          <button type="button" onClick={onClose} aria-label="안내 닫기" title="안내 닫기" className="grid size-11 place-items-center rounded hover:bg-slate-100">
             <X className="size-5" />
           </button>
         </header>
@@ -135,10 +135,10 @@ export function PrivacyNotice({ open, consentRequired, onAccept, onClose }: Priv
           <p className="rounded bg-amber-50 px-3 py-2 font-bold text-amber-900">버스 도착 시각과 혼잡도는 외부 제공기관의 실시간 데이터로, 교통 상황에 따라 실제와 다를 수 있습니다.</p>
 
           <div className="flex flex-wrap gap-x-5 gap-y-2">
-            <button type="button" onClick={clearRecentDestinations} className="inline-flex items-center gap-2 text-sm font-bold text-slate-600 hover:text-red-700">
+            <button type="button" onClick={clearRecentDestinations} className="inline-flex min-h-11 items-center gap-2 rounded px-2 text-sm font-bold text-slate-600 hover:bg-red-50 hover:text-red-700">
               <Trash2 className="size-4" /> {recentCleared ? "최근 목적지를 삭제했습니다" : "이 기기의 최근 목적지 삭제"}
             </button>
-            {!consentRequired && <button type="button" onClick={revokeVoiceConsent} className="inline-flex items-center gap-2 text-sm font-bold text-slate-600 hover:text-red-700">
+            {!consentRequired && <button type="button" onClick={revokeVoiceConsent} className="inline-flex min-h-11 items-center gap-2 rounded px-2 text-sm font-bold text-slate-600 hover:bg-red-50 hover:text-red-700">
               <ShieldX className="size-4" /> {consentRevoked ? "음성 동의를 철회했습니다" : "음성 처리 동의 철회"}
             </button>}
           </div>
@@ -146,8 +146,8 @@ export function PrivacyNotice({ open, consentRequired, onAccept, onClose }: Priv
         </div>
 
         <footer className="flex items-center justify-end gap-2 border-t border-slate-200 px-4 py-3 sm:px-5">
-          <button type="button" onClick={onClose} className="rounded px-4 py-2 text-sm font-black text-slate-600 hover:bg-slate-100">닫기</button>
-          {consentRequired && <button type="button" onClick={onAccept} className="rounded bg-[#145466] px-4 py-2 text-sm font-black text-white hover:bg-[#0F4655]">동의하고 마이크 사용</button>}
+          <button type="button" onClick={onClose} className="min-h-11 rounded px-4 py-2 text-sm font-black text-slate-600 hover:bg-slate-100">닫기</button>
+          {consentRequired && <button type="button" onClick={onAccept} className="min-h-11 rounded bg-[#145466] px-4 py-2 text-sm font-black text-white hover:bg-[#0F4655]">동의하고 마이크 사용</button>}
         </footer>
       </section>
     </div>,

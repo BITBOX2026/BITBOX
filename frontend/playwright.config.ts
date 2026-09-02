@@ -8,12 +8,11 @@ export default defineConfig({
   // playwright.submission.config.ts 로만 실행하고, 품질 게이트(npm run e2e)
   // 에서는 제외합니다. (제외하지 않으면 기본 30초 타임아웃에서 항상 실패합니다.)
   testIgnore: "live-submission-demo.spec.ts",
-  fullyParallel: true,
-  // Multi-context runs intermittently lost portal click feedback under runner
-  // contention (1/20), while a single worker passed 50/50. A kiosk runs one
-  // Chromium instance, so CI mirrors deployed browser concurrency; backend
-  // concurrency remains tested separately.
-  workers: process.env.CI ? 1 : undefined,
+  // 키오스크는 Chromium 한 개로 동작합니다. 로컬·CI를 같은 단일 실행 조건으로
+  // 고정해 머신 부하에 따른 음성/포털 타이밍 오탐을 없앱니다. 백엔드 동시성은
+  // 별도 테스트가 담당합니다.
+  fullyParallel: false,
+  workers: 1,
   forbidOnly: true,
   retries: 0,
   reporter: "list",

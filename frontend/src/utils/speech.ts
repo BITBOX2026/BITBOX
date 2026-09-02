@@ -1,4 +1,5 @@
 import { apiFetch, parseApiResponse } from "../api/client";
+import { toSpokenKorean } from "./spokenKorean";
 
 /**
  * 한국어 음성 안내 출력.
@@ -53,6 +54,10 @@ const SERVER_AUDIO_END_GRACE_MS = 5_000;
 // speak() 직후 재생이 실제로 시작됐는지 지켜보는 창. 리눅스 Chromium 은
 // 음성이 있는데도 소리 없이 끝나거나 error 로 끝나는 사례가 있습니다.
 const BROWSER_SPEECH_START_MS = 1_200;
+// 청력이 떨어진 이용자를 위해 보통보다 15% 느리게 읽습니다. 서버 TTS(TTS_SPEED)와
+// 같은 값이어야 기기에 한국어 음성이 있고 없고에 따라 말 속도가 달라지지 않습니다.
+// 이보다 더 늦추면 억양이 뭉개져 오히려 알아듣기 어려워집니다.
+export const SPEECH_RATE = 0.85;
 
 let cachedKoreanVoice: SpeechSynthesisVoice | null | undefined;
 let cachedKoreanVoiceAt = 0;
@@ -340,6 +345,9 @@ export async function speakKorean(
 ): Promise<SpeechOutcome> {
   const message = text.trim();
   if (!message) return "unavailable";
+  // 화면 문구와 읽는 문구를 분리합니다. 화면은 `3412번`을 그대로 보여 주고,
+  // 소리로는 정류장 안내처럼 `삼사일이 번`으로 또박또박 읽습니다.
+  const spoken = toSpokenKorean(message);
 
   cancelSpeech();
   const generation = speechGeneration;
@@ -349,9 +357,9 @@ export async function speakKorean(
   const speech = synthesis();
   if (voice && speech) {
     let browserStarted = false;
-    const utterance = new SpeechSynthesisUtterance(message);
+    const utterance = new SpeechSynthesisUtterance(spoken);
     utterance.lang = "ko-KR";
-    utterance.rate = options.rate ?? 0.9;
+    utterance.rate = options.rate ?? SPEECH_RATE;
     utterance.voice = voice;
     utterance.onend = () => {
       if (!browserStarted || speechGeneration !== generation) return;
@@ -377,7 +385,7 @@ export async function speakKorean(
   }
 
   return playServerSpeech(
-    message,
+    spoken,
     generation,
     options.onEnd,
     options.activitySource,

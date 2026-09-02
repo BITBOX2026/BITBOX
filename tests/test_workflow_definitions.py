@@ -141,6 +141,65 @@ def test_deployment_reports_how_much_odsay_quota_it_consumed() -> None:
     assert "127.0.0.1:8001/internal/status" in script
 
 
+def _run_commands(workflow_name: str) -> str:
+    document = yaml.safe_load((WORKFLOW_DIR / workflow_name).read_text(encoding="utf-8"))
+    return "\n".join(
+        str(step.get("run") or "")
+        for job in document["jobs"].values()
+        for step in job.get("steps", [])
+    )
+
+
+def test_deployment_gate_is_a_superset_of_the_pull_request_gate() -> None:
+    """배포가 PR 품질 게이트보다 느슨해지지 않게 고정합니다.
+
+    ci.yml 과 deploy.yml 은 같은 main push 에서 나란히 시작하고 서로를 기다리지
+    않습니다. 그래서 deploy.yml 의 검증이 ci.yml 의 부분집합이면, ci 가 빨간불인
+    코드가 배포될 수 있습니다. 실제로 ruff 와 compileall 이 배포 쪽에만 빠져
+    있었습니다.
+    """
+    deploy_commands = _run_commands("deploy.yml")
+    missing = [
+        check
+        for check in (
+            "git diff --check",
+            "python -m pip check",
+            "python -m compileall -q app scripts tests",
+            "python -m ruff check app scripts tests",
+            "python -m pip_audit",
+            "python -m bandit",
+            "python -m pytest",
+            "npm run typecheck",
+            "npm run test",
+            "npm run build",
+            "npm run e2e",
+        )
+        if check not in deploy_commands
+    ]
+    assert not missing, (
+        "deploy.yml must run every check that ci.yml runs, otherwise a commit that "
+        f"fails the PR gate can still deploy. Missing: {missing}"
+    )
+
+
+def test_deployment_verifies_the_live_route_api_unless_explicitly_skipped() -> None:
+    """운영 경로 API 검증이 기본값으로 남아 있는지 고정합니다.
+
+    이 검증은 ODsay 를 1회 소비하므로 끄고 싶은 유혹이 있지만, 끄면 키·쿼터가 죽은
+    채 배포돼도 배포 시점에 알 수 없습니다. 기본은 켬이고, 끄는 것은 수동 배포에서
+    명시적으로 선택할 때뿐이어야 합니다.
+    """
+    document = yaml.safe_load((WORKFLOW_DIR / "deploy.yml").read_text(encoding="utf-8"))
+    triggers = document.get("on") or document.get(True)
+    skip_input = (triggers["workflow_dispatch"] or {})["inputs"]["skip_transit_check"]
+    assert skip_input["default"] is False, "ODsay 검증 생략은 기본값이 되면 안 됩니다."
+
+    workflow = (WORKFLOW_DIR / "deploy.yml").read_text(encoding="utf-8")
+    assert "transit_flag=--check-transit" in workflow
+    # push 로 도는 자동 배포에는 inputs 가 없으므로 항상 검증 쪽으로 떨어져야 합니다.
+    assert '"${SKIP_TRANSIT_CHECK:-false}" == "true"' in workflow
+
+
 def test_public_verification_failure_has_a_guarded_rollback() -> None:
     workflow = (WORKFLOW_DIR / "deploy.yml").read_text(encoding="utf-8")
     assert "/etc/bitbox/deployment_in_progress" in workflow

@@ -94,6 +94,11 @@ class FrontendRouteStep(BaseModel):
 class FrontendRouteDetail(BaseModel):
     busNumber: str
     totalMin: int
+    # 이 응답 모델은 gateway 가 만든 dict 를 그대로 통과시키지 않고 여기 선언된
+    # 필드만 남깁니다. 그래서 gateway 에 키를 추가해도 여기 없으면 브라우저까지
+    # 도달하지 못합니다. 환승 횟수와 예상 요금은 화면 요약 칩이 쓰는 값입니다.
+    transferCount: int | None = None
+    payment: int | None = None
     steps: list[FrontendRouteStep] = Field(default_factory=list)
     origin: str | None = None
     origin_x: float | None = None
