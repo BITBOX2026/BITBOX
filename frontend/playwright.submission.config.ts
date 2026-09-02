@@ -11,7 +11,8 @@ export default defineConfig({
   testMatch: "live-submission-demo.spec.ts",
   workers: 1,
   retries: 0,
-  timeout: 240_000,
+  // 시나리오마다 안내 음성이 끝나기를 기다렸다가 지도를 담으므로 녹화가 길어집니다.
+  timeout: 420_000,
   reporter: "list",
   use: {
     baseURL: "http://127.0.0.1:5173",

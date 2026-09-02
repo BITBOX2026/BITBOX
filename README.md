@@ -93,6 +93,11 @@ npm run dev
 http://127.0.0.1:8000/health
 ```
 
+지도를 로컬에서 확인하려면 Kakao Developers > 내 애플리케이션 > 플랫폼 > Web 의
+JavaScript SDK 도메인에 `http://127.0.0.1:5173`을 등록합니다. Kakao는 스킴·호스트·
+포트를 그대로 대조하므로 `https://`로 등록하면 맞지 않습니다. 등록하지 않아도 앱은
+정상 동작하며, 지도 탭만 정류장 순서 목록으로 안전하게 대체됩니다.
+
 ---
 
 ## 4. 프론트·백엔드 요청 흐름
@@ -211,11 +216,15 @@ BITBOX_TLS_KEY_PATH
   않습니다. 브라우저가 한국어를 말할 수 있는 기기에서는 이 엔드포인트를 호출하지
   않아 추가 비용이 없고, 반복되는 안내 문구는 서버에서 캐시합니다.
 
-### 글꼴 라이선스 고지
+### 라이선스
 
-`frontend/src/assets/fonts/`의 Noto Sans KR은 SIL Open Font License 1.1로
-배포됩니다. 라이선스 전문은 같은 디렉터리의
-[`OFL.txt`](frontend/src/assets/fonts/OFL.txt)에 포함되어 있습니다.
+이 저장소의 코드와 문서는 BITBOX 팀이 저작권을 보유하며 무단 복제·배포·수정을
+허용하지 않습니다. 전문은 [`LICENSE`](LICENSE)를 참고하십시오. 한이음 산출물
+권리 귀속은 해당 사업 규정을 따르며, 규정이 이 고지에 우선합니다.
+
+`frontend/src/assets/fonts/`의 Noto Sans KR은 위 고지가 적용되지 않는 제3자
+저작물로, SIL Open Font License 1.1로 배포됩니다. 라이선스 전문은 같은
+디렉터리의 [`OFL.txt`](frontend/src/assets/fonts/OFL.txt)에 포함되어 있습니다.
 Copyright © The Noto Project Authors.
 
 ## 7. 안내 정확도 범위

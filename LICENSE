@@ -1,0 +1,42 @@
+Copyright (c) 2026 BITBOX 팀. All rights reserved.
+
+이 저장소의 소스 코드와 문서는 BITBOX 팀이 저작권을 보유합니다.
+저작권자의 사전 서면 동의 없이 복제, 배포, 수정, 2차적 저작물 작성,
+상업적 이용을 할 수 없습니다.
+
+본 저작물은 한이음 ICT멘토링 프로젝트 산출물이며, 산출물의 권리 귀속은
+해당 사업의 참가 규정과 팀 내부 합의를 따릅니다. 이 고지는 그 규정을
+대체하지 않으며, 규정과 충돌하는 부분이 있으면 규정이 우선합니다.
+
+---
+
+제3자 구성요소 (Third-party components)
+
+이 저장소에는 다음 제3자 저작물이 포함되어 있으며, 각자의 라이선스를
+따릅니다. 위의 저작권 고지는 이 구성요소들에는 적용되지 않습니다.
+
+- Noto Sans KR (frontend/src/assets/fonts/)
+  SIL Open Font License 1.1
+  Copyright (c) The Noto Project Authors
+  라이선스 전문: frontend/src/assets/fonts/OFL.txt
+
+그 밖의 런타임 의존성(npm, PyPI 패키지)은 저장소에 포함되지 않으며
+각 패키지의 라이선스를 따릅니다. 목록은 frontend/package.json 과
+requirements-backend.txt 를 참고하십시오.
+
+---
+
+Copyright (c) 2026 BITBOX Team. All rights reserved.
+
+Source code and documentation in this repository are the property of the
+BITBOX team. No reproduction, distribution, modification, derivative work,
+or commercial use is permitted without prior written consent from the
+copyright holder.
+
+This work is a Hanium ICT Mentoring project deliverable. Ownership of the
+deliverable follows that program's participation rules and the team's
+internal agreement; where this notice conflicts with those rules, the
+rules take precedence.
+
+Third-party components listed above are governed by their own licenses and
+are not covered by this notice.
