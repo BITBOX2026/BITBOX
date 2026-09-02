@@ -122,7 +122,7 @@ jobs:
           npm run e2e
 
       - name: Prepare EC2
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.5
         env:
           EC2_HOST: ${{ secrets.EC2_HOST }}
           RELEASE_SHA: ${{ github.sha }}
@@ -188,7 +188,7 @@ jobs:
           target: /home/ubuntu/BITBOX
 
       - name: Activate release
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.5
         env:
           API_AUTH_TOKEN: ${{ secrets.API_AUTH_TOKEN }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -367,7 +367,7 @@ jobs:
       - name: Report today's ODsay call usage
         if: always()
         continue-on-error: true
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ubuntu
@@ -381,7 +381,7 @@ jobs:
 
       - name: Mark deployment verified
         if: success()
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ubuntu
@@ -390,7 +390,7 @@ jobs:
 
       - name: Send deployment success alert
         if: success()
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.5
         env:
           RELEASE_SHA: ${{ github.sha }}
         with:
@@ -408,7 +408,7 @@ jobs:
 
       - name: Roll back a release that failed public verification
         if: failure()
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.5
         env:
           RELEASE_SHA: ${{ github.sha }}
           BITBOX_ALERT_WEBHOOK_URL: ${{ secrets.BITBOX_ALERT_WEBHOOK_URL }}
