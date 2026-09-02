@@ -66,6 +66,22 @@ def test_startup_rejects_a_budget_that_cannot_hold(monkeypatch, name: str, value
         validate_required_settings()
 
 
+@pytest.mark.parametrize("mock_mode", [True, False])
+def test_budget_validation_is_not_skipped_by_mock_mode(monkeypatch, mock_mode: bool) -> None:
+    """mock 모드에서도 시간 예산 검증이 살아 있어야 합니다.
+
+    ``USE_MOCK_EXTERNALS`` 는 기본값이 ``True`` 입니다. 그래서 이 검증이 mock
+    게이트 뒤에 있으면 ``.env`` 가 없는 CI 러너에서는 한 번도 실행되지 않습니다.
+    실제로 그 상태에서는 로컬만 통과하고 CI 는 실패했습니다. 상한과 시간 예산은
+    외부 키가 아니라 서비스 내부 동작을 규정하므로 실행 모드와 무관해야 합니다.
+    """
+    monkeypatch.setattr(settings, "USE_MOCK_EXTERNALS", mock_mode)
+    monkeypatch.setattr(settings, "STT_TIMEOUT_SECONDS", 25.0)
+
+    with pytest.raises(RuntimeError, match="REQUEST_TIMEOUT_SECONDS보다 작아야"):
+        validate_required_settings()
+
+
 def test_a_slow_stt_reports_a_speech_error_not_a_generic_timeout(monkeypatch) -> None:
     """느린 STT 는 단계 오류로 끝나야 파이프라인이 원인을 설명할 수 있습니다."""
     monkeypatch.setattr(settings, "STT_TIMEOUT_SECONDS", 0.05)

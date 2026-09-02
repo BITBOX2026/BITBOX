@@ -139,24 +139,10 @@ def validate_required_settings() -> None:
     ):
         raise RuntimeError("APP_ENV='prod'에서는 유효한 RELEASE_SHA가 필요합니다.")
 
-    if settings.USE_MOCK_EXTERNALS:
-        return
-
-    missing = []
-    if not settings.OPENAI_API_KEY:
-        missing.append("OPENAI_API_KEY")
-    if not settings.KAKAO_REST_API_KEY:
-        missing.append("KAKAO_REST_API_KEY")
-    if not settings.ODSAY_API_KEY:
-        missing.append("ODSAY_API_KEY")
-    if not settings.PUBLIC_DATA_SERVICE_KEY and not settings.SEOUL_BUS_API_KEY:
-        missing.append("PUBLIC_DATA_SERVICE_KEY or SEOUL_BUS_API_KEY")
-
-    if missing:
-        raise RuntimeError(
-            f"USE_MOCK_EXTERNALS=false 일 때 다음 환경변수가 필요합니다: {', '.join(missing)}"
-        )
-
+    # 아래 검증은 mock 모드에서도 그대로 적용합니다. 호출량 상한, 회로 차단,
+    # 단계별 시간 예산은 외부 키가 아니라 이 서비스 내부의 동작을 규정하기
+    # 때문입니다. mock 게이트 뒤에 두면 키 없이 도는 환경(CI 러너 등)에서
+    # 잘못된 설정이 조용히 통과하고, 그 상태로 기동해도 아무도 막지 않습니다.
     positive_settings = (
         "VOICE_MAX_CONCURRENT_REQUESTS", "VOICE_DAILY_REQUEST_LIMIT",
         "ROUTE_MAX_CONCURRENT_REQUESTS",
@@ -211,6 +197,24 @@ def validate_required_settings() -> None:
     # 좌표값이 있으면 숫자 형식인지 확인
     for name in ("DEFAULT_ORIGIN_X", "DEFAULT_ORIGIN_Y", "ORIGIN_X", "ORIGIN_Y"):
         _validate_optional_coordinate(name, getattr(settings, name))
+
+    if settings.USE_MOCK_EXTERNALS:
+        return
+
+    missing = []
+    if not settings.OPENAI_API_KEY:
+        missing.append("OPENAI_API_KEY")
+    if not settings.KAKAO_REST_API_KEY:
+        missing.append("KAKAO_REST_API_KEY")
+    if not settings.ODSAY_API_KEY:
+        missing.append("ODSAY_API_KEY")
+    if not settings.PUBLIC_DATA_SERVICE_KEY and not settings.SEOUL_BUS_API_KEY:
+        missing.append("PUBLIC_DATA_SERVICE_KEY or SEOUL_BUS_API_KEY")
+
+    if missing:
+        raise RuntimeError(
+            f"USE_MOCK_EXTERNALS=false 일 때 다음 환경변수가 필요합니다: {', '.join(missing)}"
+        )
 
 
 def _validate_optional_coordinate(name: str, value: str | None) -> None:
