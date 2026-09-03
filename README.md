@@ -1,244 +1,124 @@
 # BITBOX
 
-정류장에서 음성으로 버스 경로와 실시간 도착 정보를 안내하는 AI 승차 도우미입니다.
+**정류장에서 큰 글씨와 음성만으로 버스를 찾는 고령친화 안내 기기입니다.**
 
-클라이언트(라즈베리파이 등)가 녹음한 음성 파일을 전송하면, 실시간 경로/도착 정보를 조회해 안내 문장과 TTS 음성으로 응답합니다.
-
-**지원 기능**
-- 경로 안내: "서울역에서 강남역 가는 버스 알려줘"
-- 도착 정보: "서울역 정류장에 402번 언제 와?"
-- 저상·여유 우선: 현재 정류장의 저상·비만차·저혼잡 도착 차량 우선 표시
-- 도착 단계 알림: 선택한 차량이 3정거장 이내·1정거장·도착 단계에 진입하면 음성 안내
-
-**사용 API**
-- OpenAI — 음성 인식(STT), 발화 분석(LLM), 음성 합성(TTS)
-- Kakao Local API — 장소명 → 좌표 변환
-- ODsay API — 버스 전용 경로 조회
-- 공공데이터포털 — 실시간 버스 도착 정보
+목적지를 말하면 실시간 도착 정보와 버스 경로를 화면과 음성으로 안내합니다.
+타이핑도, 앱 설치도 필요하지 않습니다.
 
 ---
 
-## 1. 환경변수 설정
+## 왜 만들었나
 
-`.env.example`을 복사해 `.env`를 만들고 API 키를 입력합니다.
+65세 이상이 인구의 **20.3%**입니다. 그런데 70대 이상의 디지털 조작 역량은
+일반국민 대비 **29.4%**에 그칩니다. 접근 수준이 90.7%인 것과 대비됩니다.
 
-```powershell
-# Windows
-Copy-Item .env.example .env
+기기가 없는 것이 문제가 아니라, **작은 글씨와 복잡한 절차를 다루기 어렵다**는 것이
+문제입니다. 그래서 입력 단계와 정보 구조 자체를 단순하게 만들었습니다.
 
-# macOS / Linux
-cp .env.example .env
+> 출처: 통계청 2025 고령자 통계 · NIA 2025 디지털정보격차 실태조사 84쪽 표 1
+> (일반국민을 100으로 둔 상대 비율입니다. 100점 만점 점수가 아닙니다.)
+> 근거 자료 전문은 [`docs/ELDERLY_DIFFERENTIATION_EVIDENCE.md`](docs/ELDERLY_DIFFERENTIATION_EVIDENCE.md)
+
+## 무엇이 다른가
+
+| | 내용 |
+|---|---|
+| **오안내 방지** | 비슷한 지명은 임의로 안내하지 않고 되묻습니다. 없는 노선 번호를 비슷한 번호로 바꾸지 않습니다. |
+| **타기 편한 차 우선** | 저상버스·비만차·저혼잡 차량을 앞세웁니다. 가장 빨리 오는 차가 아니라 타기 쉬운 차를 먼저 보여 줍니다. |
+| **읽고 듣는 두 경로** | 큰 글씨·고대비 전환과 음성 안내를 함께 제공합니다. 기기에 한국어 음성 엔진이 없으면 서버 합성으로 자동 대체합니다. |
+| **이용자가 조절** | 글씨 크기와 안내 음량을 직접 바꿉니다. 무인정보단말기 접근성 기준을 따릅니다. |
+| **공용 환경 배려** | 음성 처리 사전 동의, 최근 목적지 제한, 90초 무활동 초기화로 개인정보가 남지 않게 합니다. |
+
+## 어떻게 동작하나
+
+```
+정류장 전광판   GET  /api/bus/default     공공데이터포털 실시간 도착정보
+목적지 자동완성  GET  /api/places/suggest  Kakao Local
+텍스트 길찾기   POST /api/route           Kakao 좌표 → ODsay 버스 경로
+음성 길찾기     POST /api/upload          STT → 의도 분석 → 좌표 → 경로 → TTS
+라즈베리파이    POST /api/process         원시 클라이언트용 (WAV 업로드)
 ```
 
-`.env` 필수 항목:
+`/api/route`와 `/api/upload`는 같은 응답 구조를 씁니다. 말로 찾든 눌러서 찾든
+같은 결과 화면으로 이어집니다. 지도는 경로에 좌표가 있을 때만 불러옵니다.
 
-```env
-USE_MOCK_EXTERNALS=false
+**사용 API** — OpenAI(STT·의도 분석·TTS) · Kakao Local(좌표) · ODsay(버스 경로) ·
+공공데이터포털(실시간 도착)
 
-OPENAI_API_KEY=
-KAKAO_REST_API_KEY=
-ODSAY_API_KEY=
-PUBLIC_DATA_SERVICE_KEY=
-```
-
-기기 설치 위치 (출발지를 매번 말하지 않아도 되게 함):
-
-```env
-DEFAULT_ORIGIN_NAME=올림픽공원역
-DEFAULT_BUS_STOP_NAME=올림픽공원역
-DEFAULT_BUS_STATION_ID=24245
-```
-
----
-
-## 2. 설치
+## 빠르게 실행하기
 
 ```bash
-python -m venv .venv
-
-# Windows
-.venv\Scripts\Activate.ps1
-# macOS / Linux
-source .venv/bin/activate
-
+cp .env.example .env          # API 키를 채웁니다
+python -m venv .venv && source .venv/bin/activate
 pip install -r requirements-backend.txt
-
-cd frontend
-npm install
+cd frontend && npm install && cd ..
 ```
 
----
+터미널 두 개에서 각각 실행합니다.
 
-## 3. 로컬 실행
-
-터미널 1에서 백엔드를 실행합니다.
-
-```powershell
-uvicorn app.main:app --reload
+```bash
+uvicorn app.main:app --reload          # http://127.0.0.1:8000
+cd frontend && npm run dev             # http://127.0.0.1:5173
 ```
 
-터미널 2에서 프론트엔드를 실행합니다.
+개발 서버가 `/api` 요청을 백엔드로 넘기므로 브라우저 코드에 토큰을 넣지 않습니다.
+상태 확인은 `/health`, API 문서는 `/docs`입니다.
 
-```powershell
-cd frontend
-npm run dev
+> **지도를 보려면** Kakao Developers → 내 애플리케이션 → 플랫폼 → Web의
+> JavaScript SDK 도메인에 `http://127.0.0.1:5173`을 등록합니다. 스킴·호스트·포트를
+> 그대로 대조하므로 `https://`로 등록하면 맞지 않습니다. 등록하지 않아도 앱은
+> 동작하며, 지도 탭만 정류장 순서 목록으로 안전하게 대체됩니다.
+
+## 검증
+
+```bash
+python -m pytest -q                    # 백엔드
+cd frontend && npm run test            # 프론트 단위
+cd frontend && npm run typecheck
+cd frontend && npm run e2e             # 브라우저 (desktop + mobile)
 ```
 
-프론트엔드는 `http://127.0.0.1:5173`, 백엔드는 `http://127.0.0.1:8000`에서 실행됩니다.
-개발 서버가 `/api` 요청을 백엔드로 전달하므로 브라우저 코드에 API 토큰을 넣지 않습니다.
+CI가 매 푸시마다 위 전부와 `ruff`·`bandit`·`pip-audit`을 실행합니다.
+배포 워크플로의 검증은 CI 검증의 상위 집합이며, 그 관계를
+[`tests/test_workflow_definitions.py`](tests/test_workflow_definitions.py)가 고정합니다.
 
-상태 확인:
+접근성은 주요 화면 여섯 곳에 axe-core 기반 WCAG 2.1 A/AA 자동 검사를 돌립니다
+([`frontend/e2e/accessibility.spec.ts`](frontend/e2e/accessibility.spec.ts)).
+스크린리더가 실제로 받는 aria 트리도 함께 확인합니다.
 
-```
-http://127.0.0.1:8000/health
-```
+## 알아 둘 한계
 
-지도를 로컬에서 확인하려면 Kakao Developers > 내 애플리케이션 > 플랫폼 > Web 의
-JavaScript SDK 도메인에 `http://127.0.0.1:5173`을 등록합니다. Kakao는 스킴·호스트·
-포트를 그대로 대조하므로 `https://`로 등록하면 맞지 않습니다. 등록하지 않아도 앱은
-정상 동작하며, 지도 탭만 정류장 순서 목록으로 안전하게 대체됩니다.
+정직하게 적습니다. 아래는 **아직 확인하지 않았거나, 원리상 완전하지 않은** 부분입니다.
 
----
+- **실제 스크린리더 낭독은 확인하지 않았습니다.** 자동 검사는 기계가 판정할 수 있는
+  규칙만 봅니다. NVDA·VoiceOver·TalkBack의 낭독 순서와 체감은 사람이 들어야 합니다.
+- **고령 이용자 대상 실측이 없습니다.** "고령 이용자를 고려해 설계했다"까지가 사실이며,
+  효과가 입증됐다고 말할 수 없습니다. 측정 절차는 [`docs/EVALUATION.md`](docs/EVALUATION.md)에
+  준비돼 있습니다.
+- **지도 선은 예상 경로입니다.** ODsay 정류장 순서와 구간 좌표를 이은 것이라 도로
+  중심선과 완전히 같지 않습니다.
+- **도착 알림은 15초 주기 갱신**이며 GPS 연속 추적이 아닙니다.
+- **저상·여유 우선은 현재 정류장의 도착 차량에만** 적용되며 목적지 경로를 다시
+  계산하지 않습니다.
+- **지역명과 실제 역명이 다른 곳**(예: 상암 → 디지털미디어시티역)은 이름 기반
+  검색으로 잡지 못합니다.
 
-## 4. 프론트·백엔드 요청 흐름
+## 더 읽을 것
 
-```text
-정류장 전광판  → GET  /api/bus/default
-목적지 자동완성 → GET  /api/places/suggest
-텍스트 길찾기   → POST /api/route
-음성 길찾기     → POST /api/upload → STT → 의도 분석 → 교통 API → TTS
-```
+| 문서 | 내용 |
+|---|---|
+| [`docs/OPERATIONS.md`](docs/OPERATIONS.md) | 배포 전제조건, 상태 점검, 장애 대응, 롤백, 서버 중지·재기동 |
+| [`docs/EVALUATION.md`](docs/EVALUATION.md) | 실증 평가 절차와 발표에서 쓸 수 있는 표현·쓸 수 없는 표현 |
+| [`docs/ELDERLY_DIFFERENTIATION_EVIDENCE.md`](docs/ELDERLY_DIFFERENTIATION_EVIDENCE.md) | 고령층 차별성 근거와 출처 |
+| [`docs/PROJECT_STRUCTURE.md`](docs/PROJECT_STRUCTURE.md) | 디렉터리 구조와 엔드포인트 |
 
-`/api/route`와 `/api/upload`는 같은 프론트 응답 구조를 사용하므로 검색 방식이 달라도 동일한 결과 화면으로 연결됩니다. 지도는 경로 결과에 좌표가 있을 때만 Kakao SDK를 불러옵니다.
-
-라즈베리파이 등 원시 백엔드 클라이언트는 `POST /api/process`를 사용할 수 있습니다.
-
-`POST /api/process` — WAV 파일을 업로드하면 경로 안내 응답을 반환합니다.
-
-**요청**
-```
-Content-Type: multipart/form-data
-file: <WAV 파일>
-```
-
-**응답**
-```json
-{
-  "status": "success",
-  "message": "서울역버스환승센터에서 402번 버스를 타고 강남역에 내리세요. 약 42분 소요됩니다.",
-  "audio_base64": "<TTS 음성 base64>",
-  "request_id": "e4e65e7f",
-  "data": {
-    "transcript": "서울역에서 강남역 가는 버스 알려줘.",
-    "intent": "route",
-    "origin": "서울역",
-    "destination": "강남역",
-    "transport_mode": "bus",
-    "total_time_min": 42,
-    "transfer_count": 0,
-    "route_segments": [
-      { "vehicle_type": "버스", "line": "402번", "start_name": "서울역버스환승센터", "end_name": "강남역" }
-    ],
-    "safety_decision": {
-      "level": "verified",
-      "title": "검증 절차 완료",
-      "reasons": ["확정된 목적지 좌표를 기준으로 버스 경로를 조회했습니다."],
-      "auto_corrected": false,
-      "checked_at": "2026-08-25T02:00:00+09:00"
-    },
-    "source": "odsay"
-  }
-}
-```
-
-Swagger UI에서 직접 테스트:
-
-```
-http://127.0.0.1:8000/docs
-```
-
----
-
-## 5. 운영 배포 전제조건
-
-브라우저 음성 녹음은 안전한 컨텍스트에서만 동작하므로 운영 화면은 HTTPS로 제공해야 합니다.
-GitHub Actions 통합 배포 전에 다음 저장소 비밀값을 설정합니다.
-
-```text
-EC2_HOST
-EC2_SSH_KEY
-API_AUTH_TOKEN
-KAKAO_MAP_APPKEY
-OPENAI_API_KEY
-KAKAO_REST_API_KEY
-ODSAY_API_KEY
-PUBLIC_DATA_SERVICE_KEY
-BITBOX_SERVER_NAME
-BITBOX_TLS_CERT_PATH
-BITBOX_TLS_KEY_PATH
-```
-
-- `API_AUTH_TOKEN`: URL-safe 난수 문자열을 사용합니다. 운영 Nginx가 브라우저 대신
-  이 값을 백엔드에 주입하므로 직접 백엔드 접근을 막는 내부 경계이지, 공개 웹
-  이용자를 인증하는 수단은 아닙니다.
-- `BITBOX_SERVER_NAME`: EC2 주소로 해석되는 실제 도메인입니다.
-- EC2 보안 그룹에서 `80/443` 인바운드를 먼저 허용해야 합니다. 인증서가 없으면 배포 작업이 Certbot으로 자동 발급하고 갱신 타이머 활성 상태를 검사합니다.
-- 인증서와 개인 키는 EC2에만 저장되며 저장소에 커밋하지 않습니다.
-- Kakao Developers 웹 플랫폼에는 `https://도메인`과 기존 호환 주소 `https://도메인:8000`을 등록합니다.
-- Nginx와 백엔드가 IP별 호출량을 이중 제한하지만, 장기 공개 운영 전에는 OpenAI·ODsay·공공데이터 제공자 콘솔에서도 사용량 한도와 예산 알림을 설정합니다.
-
-병합 브랜치 푸시 시 GitHub 러너가 백엔드 테스트, 프론트 테스트·타입 검사·빌드를 수행합니다.
-검증된 정적 파일만 EC2로 전송하며, 필수 비밀값·공개 포트·TLS 발급 중 하나라도 실패하면 서비스 전환 전에 배포를 중단합니다.
-서비스 전환 뒤에는 버스 도착·장소 후보·버스 전용 경로를 각각 한 번 실제 호출해
-외부 키와 응답 계약까지 확인합니다. 이는 부하테스트가 아닌 배포당 1회 점검입니다.
-
-배포 검증이 실패하면 [`deploy/rollback.sh`](deploy/rollback.sh)가 직전 릴리스로
-자동 복구합니다. 이 경로는 `tests/test_rollback_script.py`가 매 CI에서 실제로
-실행해 확인합니다. `BITBOX_ALERT_WEBHOOK_URL` 시크릿을 등록하지 않으면 장애 알림이
-발송되지 않으며, 이때는 배포 로그에 경고가 남고 EC2 저널에만 기록됩니다.
-
-상태 점검, 로그 확인, 장애 대응, 롤백, 알림 채널 설정, 단일 호스트 복구, 개인정보
-처리 범위와 확장 조건은 [`docs/OPERATIONS.md`](docs/OPERATIONS.md) 운영 런북을 따릅니다.
-
-## 6. 접근성과 글꼴
-
-- 주요 화면(홈·전광판·경로 결과·장소 확인·개인정보 안내·외부 장애)에 axe-core 기반
-  WCAG 2.1 A/AA 자동 검사를 CI에서 실행합니다: [`frontend/e2e/accessibility.spec.ts`](frontend/e2e/accessibility.spec.ts).
-  스크린리더가 실제로 받는 aria 트리도 함께 확인합니다.
-- 자동 검사는 기계가 판정 가능한 규칙만 봅니다. **실제 NVDA·VoiceOver·TalkBack
-  낭독 순서와 체감은 사람이 확인해야 하며 아직 수행하지 않았습니다.**
-- 한글 글꼴을 앱과 함께 배포합니다. 키오스크에 CJK 글꼴이 없어도 정류장 이름이
-  깨지지 않도록 Noto Sans KR을 현대 한글 전체로 서브셋해 세 굵기(400/700/900)만
-  포함했습니다.
-- 기기에 한국어 음성 엔진이 없으면(라즈베리파이 최소 설치 등) 브라우저
-  `speechSynthesis`는 **오류 없이 무음으로 끝납니다**. 이때 프론트가
-  `POST /api/speech` 서버 음성 합성으로 자동 대체하므로 도착 안내가 사라지지
-  않습니다. 브라우저가 한국어를 말할 수 있는 기기에서는 이 엔드포인트를 호출하지
-  않아 추가 비용이 없고, 반복되는 안내 문구는 서버에서 캐시합니다.
-
-### 라이선스
+## 라이선스
 
 이 저장소의 코드와 문서는 BITBOX 팀이 저작권을 보유하며 무단 복제·배포·수정을
 허용하지 않습니다. 전문은 [`LICENSE`](LICENSE)를 참고하십시오. 한이음 산출물
 권리 귀속은 해당 사업 규정을 따르며, 규정이 이 고지에 우선합니다.
 
 `frontend/src/assets/fonts/`의 Noto Sans KR은 위 고지가 적용되지 않는 제3자
-저작물로, SIL Open Font License 1.1로 배포됩니다. 라이선스 전문은 같은
-디렉터리의 [`OFL.txt`](frontend/src/assets/fonts/OFL.txt)에 포함되어 있습니다.
+저작물로, SIL Open Font License 1.1로 배포됩니다. 전문은 같은 디렉터리의
+[`OFL.txt`](frontend/src/assets/fonts/OFL.txt)에 있습니다.
 Copyright © The Noto Project Authors.
-
-## 7. 안내 정확도 범위
-
-- 지도 선은 ODsay 정류장 순서와 구간 좌표를 연결한 예상 경로이며 도로 중심선과 완전히 같지 않을 수 있습니다.
-- 도착 단계 알림은 서울 버스 도착정보를 15초마다 갱신한 결과이며 GPS 연속 추적이 아닙니다.
-- 저상·여유 우선 정렬은 현재 정류장 도착 차량에 적용되며 목적지 경로 자체를 재계산하지 않습니다.
-
-## 8. 실증 평가
-
-사용자 과업 비교, 실제 음성 정확도, 위험한 번호 오안내, 접근성 및 장애·부하 검증은
-[`docs/EVALUATION.md`](docs/EVALUATION.md)의 절차를 따릅니다. 저장소에는 실제 참가자
-결과를 포함하지 않으며, `voice-samples/`와 `evaluation-results/`는 Git에서 제외됩니다.
-
-- `scripts/analyze_user_study.py`: BITBOX와 비교 앱의 성공률·시간·터치 수 기술통계
-- `scripts/voice_benchmark.py`: 실제 음성의 번호·의도·복구 행동 정확도와 위험한 대체 건수
-- `scripts/load_smoke.py`: 오류율, 평균·p50·p95·최대 응답시간과 처리량

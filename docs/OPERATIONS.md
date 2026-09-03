@@ -110,6 +110,43 @@ Use the `X-Request-ID` response header to correlate a user-visible failure with
 application and Nginx logs. Logs intentionally exclude transcripts, destination
 queries, uploaded filenames, API keys, and audio content.
 
+## Deployment prerequisites
+
+브라우저 음성 녹음은 안전한 컨텍스트에서만 동작하므로 운영 화면은 HTTPS 로 제공해야
+합니다. 통합 배포 전에 아래 저장소 비밀값을 설정합니다.
+
+```text
+EC2_HOST
+EC2_SSH_KEY
+API_AUTH_TOKEN
+KAKAO_MAP_APPKEY
+OPENAI_API_KEY
+KAKAO_REST_API_KEY
+ODSAY_API_KEY
+PUBLIC_DATA_SERVICE_KEY
+BITBOX_SERVER_NAME
+BITBOX_TLS_CERT_PATH
+BITBOX_TLS_KEY_PATH
+```
+
+- `API_AUTH_TOKEN` 은 URL-safe 난수 문자열입니다. 운영 Nginx 가 브라우저 대신 이 값을
+  백엔드에 주입합니다. **직접 백엔드 접근을 막는 내부 경계이지, 공개 웹 이용자를
+  인증하는 수단이 아닙니다.**
+- `BITBOX_SERVER_NAME` 은 EC2 주소로 해석되는 실제 도메인입니다.
+- EC2 보안 그룹에서 `80/443` 인바운드를 먼저 허용합니다. 인증서가 없으면 배포 작업이
+  Certbot 으로 발급하고 갱신 타이머가 살아 있는지 검사합니다.
+- 인증서와 개인 키는 EC2 에만 두고 저장소에 커밋하지 않습니다.
+- Kakao Developers 웹 플랫폼에 `https://도메인` 을 등록합니다. 호환 주소
+  `https://도메인:8000` 을 쓴다면 그것도 함께 등록해야 지도가 뜹니다.
+- Nginx 와 백엔드가 IP 별 호출량을 이중 제한합니다. 장기 공개 운영 전에는
+  OpenAI·ODsay·공공데이터 제공자 콘솔에서도 사용량 한도와 예산 알림을 설정합니다.
+
+배포는 백엔드 테스트와 프론트 테스트·타입 검사·빌드를 먼저 통과해야 진행됩니다.
+검증된 정적 파일만 EC2 로 전송하며, 필수 비밀값·공개 포트·TLS 발급 중 하나라도
+실패하면 서비스 전환 전에 중단합니다. 전환 뒤에는 버스 도착·장소 후보·버스 전용
+경로를 각각 한 번 실제 호출해 외부 키와 응답 계약까지 확인합니다. 부하테스트가
+아니라 배포당 1회 점검이며, 이때 ODsay 를 1회 씁니다(하루 30회 한도).
+
 ## Deployment and rollback
 
 Only `main` triggers deployment. CI must pass backend tests,
