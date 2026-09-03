@@ -128,6 +128,19 @@ def _has_transit_document(documents: list[dict]) -> bool:
     return False
 
 
+def _tag_source_rank(documents: list[dict]) -> list[dict]:
+    """각 후보에 "자기 검색 안에서 몇 번째였는지"를 표시합니다.
+
+    Kakao 정확도 순위는 쓸 만한 신호라 점수에 반영합니다. 그런데 두 검색 결과를
+    합치면 뒤 목록의 1위가 앞 목록의 5위보다 낮은 순위로 취급되어, 순위 보정이
+    엉뚱한 쪽을 돕습니다. 그래서 합치기 전에 각자 순위를 새겨 둡니다.
+    """
+    tagged = list(documents)
+    for index, document in enumerate(tagged):
+        document["_bitbox_source_rank"] = index
+    return tagged
+
+
 async def _fetch_place_documents(
     kakao_key: str,
     place_text: str,
@@ -152,7 +165,7 @@ async def _fetch_place_documents(
     고른 셈이므로, 호출한 쪽이 확인 절차를 띄울지 판단할 수 있어야 합니다.
     """
     payload = await _kakao_fetch(kakao_key, place_text, x, y, size=size)
-    documents = list(payload.get("documents", []))
+    documents = _tag_source_rank(payload.get("documents", []))
     if _is_station_query(place_text) or _has_transit_document(documents):
         return documents, set()
     # 자동완성은 글자마다 들어옵니다. 한 글자짜리에 "역"을 붙여 봐야 의미 있는 역이
@@ -171,7 +184,10 @@ async def _fetch_place_documents(
         for doc in documents
     }
     augmented: set[str] = set()
-    for document in station_payload.get("documents", []):
+    # 보조 검색 결과는 자기 검색 안에서의 순위를 그대로 갖습니다. 합친 목록의 뒤쪽에
+    # 붙는다는 이유로 순위 보정에서 손해를 보면, 정작 찾던 역이 관광명소에 밀립니다.
+    # (`압구정` 이 `압구정지` 에, `신림` 이 `신림계곡` 에 밀리던 원인이었습니다.)
+    for document in _tag_source_rank(station_payload.get("documents", [])):
         key = (
             str(document.get("place_name") or ""),
             str(document.get("x") or ""),
@@ -299,7 +315,9 @@ def _place_score(query: str, document: dict, kakao_rank: int = 0) -> tuple[float
         score += 40 * SequenceMatcher(None, query_name, place_name).ratio()
 
     # Kakao 정확도 순위 보정. 이름 등급 간격(30점)을 넘지 않게 작게 둡니다.
-    score += max(0.0, 20.0 - 4.0 * kakao_rank)
+    source_rank = document.get("_bitbox_source_rank")
+    rank = int(source_rank) if isinstance(source_rank, int) else kakao_rank
+    score += max(0.0, 20.0 - 4.0 * rank)
 
     category_code = str(document.get("category_group_code") or "")
     category_name = str(document.get("category_name") or "")
@@ -352,11 +370,21 @@ def _needs_place_confirmation(
         return True
     if _is_station_query(query) and normalized_selected != _normalize_place_name(query):
         return True
+    # 이름이 확실히 맞지 않으면 묻고 넘어갑니다.
+    #
+    # 예전 규칙은 "점수가 낮고 **동시에** 2위와 비슷할 때"만 물었습니다. 그래서 오답이
+    # 확실한 1등일 때는 그냥 지나갔습니다. 실제로 "없는곳"이 미용실 `헤어나올수없는곳`
+    # 으로, "여의도 가자"가 주류도매 `가자주류 여의도역점`으로 아무 확인 없이 갔습니다.
+    #
+    # 임계값 100은 실제 Kakao 응답 26건을 재어 정했습니다. 100점 미만은 전부 오답이거나
+    # 사람이 봐도 모호한 후보였고(37·52·64·88점), 정답은 모두 126점 이상이었습니다.
+    first_score = _place_score(query, ranked[0])[0]
+    if first_score < 100:
+        return True
     if len(ranked) < 2:
         return False
-    first_score = _place_score(query, ranked[0])[0]
     second_score = _place_score(query, ranked[1])[0]
-    return first_score < 100 and first_score - second_score < 15
+    return first_score - second_score < 15
 
 
 def _place_document_to_candidate(document: dict) -> dict:

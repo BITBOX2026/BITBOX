@@ -177,3 +177,55 @@ def test_no_second_lookup_when_the_user_already_said_station(monkeypatch) -> Non
         {"잠실역": [_doc("잠실역 2호선", "SW8", "교통,수송 > 지하철,전철 > 수도권2호선", "")]},
     )
     assert asked == ["잠실역"]
+
+
+def test_a_weak_match_is_confirmed_even_when_it_wins_clearly() -> None:
+    """1등이 확실해도 이름이 약하게만 맞으면 묻고 넘어갑니다.
+
+    예전 규칙은 "점수가 낮고 **동시에** 2위와 비슷할 때"만 물었습니다. 그래서 오답이
+    큰 차이로 1등이면 그냥 지나갔고, 실제로 "없는곳"이 미용실 `헤어나올수없는곳`
+    으로, "여의도 가자"가 주류도매 `가자주류 여의도역점`으로 확인 없이 갔습니다.
+    """
+    ranked = [
+        _doc("헤어나올수없는곳", "", "가정,생활 > 미용 > 미용실", ""),
+        _doc("없는게없는집", "FD6", "음식점", ""),
+    ]
+    assert _needs_place_confirmation("없는곳", ranked) is True
+
+
+def test_an_exact_match_still_goes_through_without_asking() -> None:
+    """이름이 정확히 맞는 곳까지 되물으면 그 자체가 장벽이 됩니다."""
+    ranked = [
+        _doc("올림픽공원", "AT4", "여행 > 공원", ""),
+        _doc("올림픽공원 평화의문", "AT4", "여행 > 관광,명소", ""),
+    ]
+    assert _needs_place_confirmation("올림픽공원", ranked) is False
+
+
+def test_merged_station_keeps_its_own_accuracy_rank(monkeypatch) -> None:
+    """보조 검색의 1위가 첫 검색의 하위 후보에 밀리면 안 됩니다.
+
+    Kakao 정확도 순위를 점수에 반영하는데, 두 결과를 이어 붙이면 뒤 목록의 1위가
+    앞 목록의 5위보다 낮은 순위로 취급됩니다. 그대로 두면 `압구정` 이 `압구정역` 이
+    아니라 문화유적 `압구정지` 로, `신림` 이 `신림역` 이 아니라 `신림계곡` 으로 갔습니다.
+    """
+    documents, augmented, asked = _run_fetch(
+        monkeypatch,
+        "압구정",
+        {
+            "압구정": [
+                _doc("압구정지", "", "여행 > 관광,명소 > 문화유적", ""),
+                _doc("압구정로데오거리", "AT4", "여행 > 관광,명소 > 테마거리", ""),
+                _doc("한류스타거리", "AT4", "여행 > 관광,명소 > 테마거리", ""),
+                _doc("압구정토끼굴", "AT4", "여행 > 관광,명소 > 테마거리", ""),
+                _doc("강남메디컬투어센터", "", "여행 > 관광,명소 > 관광안내소", ""),
+            ],
+            "압구정역": [
+                _doc("압구정역 3호선", "SW8", "교통,수송 > 지하철,전철 > 수도권3호선", ""),
+            ],
+        },
+    )
+    assert asked == ["압구정", "압구정역"]
+    ranked = _rank_place_documents("압구정", documents)
+    assert ranked[0]["place_name"] == "압구정역 3호선"
+    assert _needs_place_confirmation("압구정", ranked, augmented) is True
