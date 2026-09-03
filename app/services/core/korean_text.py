@@ -38,8 +38,9 @@ def normalize_station_reference(value: str) -> str:
 # 키오스크 앞 이용자가 자기가 선 정류장을 가리키는 말입니다. 이 말들은 정류장
 # "이름"이 아니라 "여기"라는 뜻이므로, 이름으로 검색하면 반드시 실패합니다.
 # 기기는 자기 정류장(DEFAULT_BUS_STATION_ID)을 알고 있으므로 그쪽으로 보냅니다.
+# 아래 비교는 공백을 지운 형태로 하므로 `이 곳` 은 따로 적지 않습니다.
 _CURRENT_STOP_WORDS = frozenset({
-    "여기", "여기요", "여기서", "여기예요", "이곳", "이 곳",
+    "여기", "여기요", "여기서", "여기예요", "이곳",
 })
 
 # `정류장`·`정류소` 를 떼고 나면 앞에 남는 지시어들입니다. 보통명사가 실제로 붙어
@@ -66,23 +67,26 @@ def is_current_stop_reference(value: str | None) -> bool:
     if not value:
         return False
     stripped = " ".join(value.strip().split())
-    if stripped in _CURRENT_STOP_WORDS:
+
+    # 지시어는 띄어쓰기가 흔들립니다. `이곳` 이 맞춤법이지만 STT 나 LLM 이 `이 곳`
+    # 으로 돌려주면 `이 곳에서` 가 목록에 없어 이름으로 검색하다 실패했습니다.
+    # 지시어 판별에서만 공백을 지워 비교합니다. 돌려주는 값은 건드리지 않습니다.
+    compact = stripped.replace(" ", "")
+    if compact in _CURRENT_STOP_WORDS:
         return True
 
     # `여기서` 처럼 지시어에 조사가 바로 붙은 형태를 먼저 되돌립니다.
     reduced = normalize_station_reference(stripped)
-    deictic = _DEICTIC_PARTICLE.fullmatch(reduced)
+    deictic = _DEICTIC_PARTICLE.fullmatch(reduced.replace(" ", ""))
     if deictic:
-        reduced = deictic.group("word")
-    if reduced in _CURRENT_STOP_WORDS:
-        return True
+        return deictic.group("word") in _CURRENT_STOP_WORDS
 
     # `이 정류장에서` → `이 정류장` → `이`. 보통명사가 실제로 붙어 있었을 때만
     # 지시어로 판단합니다. 그래야 `올림픽공원 정류장` 이 지시어로 오인되지 않습니다.
     without_noun = strip_stop_noun(reduced)
     if without_noun == reduced:
         return False
-    return without_noun in _CURRENT_STOP_DETERMINERS
+    return without_noun.replace(" ", "") in _CURRENT_STOP_DETERMINERS
 
 
 def strip_stop_noun(value: str) -> str:

@@ -112,7 +112,7 @@ export function shiftSpeechVolume(direction: 1 | -1): number {
   // 재생 중인 소리에도 바로 반영해야 이용자가 누른 결과를 즉시 듣습니다.
   // 끝난 오디오는 참조를 붙들지 않도록 이때 함께 정리합니다.
   for (const audio of livePlayback) {
-    if (audio.ended) {
+    if (audio.ended || audio.paused) {
       livePlayback.delete(audio);
       continue;
     }
@@ -141,9 +141,16 @@ const livePlayback = new Set<HTMLAudioElement>();
 export function applySpeechVolume(audio: HTMLAudioElement): HTMLAudioElement {
   audio.volume = speechVolume;
   livePlayback.add(audio);
+  // 끝나거나 실패했을 때뿐 아니라 **멈췄을 때도** 빼야 합니다. 안내는 취소로 끝나는
+  // 일이 잦은데(새 안내가 끼어들거나 이용자가 중지를 누르면 pause 만 호출됩니다),
+  // 그때는 ended 가 오지 않습니다. 빼지 않으면 base64 오디오를 문 채로 쌓여, 오래
+  // 켜 두는 키오스크에서 취소된 소리들이 계속 남습니다.
   const forget = () => livePlayback.delete(audio);
   audio.addEventListener("ended", forget);
   audio.addEventListener("error", forget);
+  audio.addEventListener("pause", forget);
+  // 멈췄다 다시 재생하는 경우에도 음량이 걸리도록 되돌립니다.
+  audio.addEventListener("play", () => livePlayback.add(audio));
   return audio;
 }
 

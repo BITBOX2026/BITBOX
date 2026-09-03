@@ -218,3 +218,33 @@ def _run_transit_verification(monkeypatch, route_payload: dict, suggestions=None
     errors: list[str] = []
     production_smoke._verify_transit_apis("https://example.test", errors)
     return errors
+
+def test_env_examples_match_the_code_limits() -> None:
+    """예시 파일의 유료 API 한도가 코드 기본값과 어긋나면 안 됩니다.
+
+    한도는 비용의 상한선입니다. 예시 파일을 복사해 서버를 구성하는 순간 보호 한도가
+    조용히 커지면, 문서만 보고 안심한 채로 열어 두게 됩니다. 실제로 코드에서 한도를
+    낮춘 뒤 예시 파일이 옛 값(음성 500, 장소 10000)으로 남아 있었습니다.
+    """
+    import re
+    from pathlib import Path as _Path
+
+    from app.core.config import Settings
+
+    defaults = Settings()
+    expected = {
+        "VOICE_DAILY_REQUEST_LIMIT": defaults.VOICE_DAILY_REQUEST_LIMIT,
+        "SPEECH_DAILY_REQUEST_LIMIT": defaults.SPEECH_DAILY_REQUEST_LIMIT,
+        "PLACE_DAILY_REQUEST_LIMIT": defaults.PLACE_DAILY_REQUEST_LIMIT,
+        "ODSAY_DAILY_CALL_LIMIT": defaults.ODSAY_DAILY_CALL_LIMIT,
+    }
+    root = _Path(__file__).resolve().parents[1]
+
+    for relative in (".env.example", "deploy/production.env.example"):
+        text = (root / relative).read_text(encoding="utf-8")
+        for name, value in expected.items():
+            match = re.search(rf"^{name}=(\d+)$", text, re.MULTILINE)
+            assert match, f"{relative} 에 {name} 이 없습니다"
+            assert int(match.group(1)) == value, (
+                f"{relative} 의 {name}={match.group(1)} 이 코드 기본값 {value} 과 다릅니다"
+            )

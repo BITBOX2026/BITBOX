@@ -140,6 +140,31 @@ describe("안내 음량", () => {
     expect(finished.volume).toBe(before);
   });
 
+  it("취소된 오디오도 더 붙들지 않는다", () => {
+    // 안내는 취소로 끝나는 일이 잦습니다. 새 안내가 끼어들거나 이용자가 중지를
+    // 누르면 pause 만 호출되고 ended 는 오지 않습니다. 그때 빼지 않으면 base64
+    // 오디오를 문 채로 쌓여, 오래 켜 두는 키오스크에서 계속 남습니다.
+    const cancelled = fakeAudio();
+    applySpeechVolume(cancelled);
+    cancelled.fire("pause");
+    const before = cancelled.volume;
+
+    shiftSpeechVolume(-1);
+
+    expect(cancelled.volume).toBe(before);
+  });
+
+  it("멈췄다 다시 재생하면 음량이 다시 걸린다", () => {
+    const resumed = fakeAudio();
+    applySpeechVolume(resumed);
+    resumed.fire("pause");
+    resumed.fire("play");
+
+    shiftSpeechVolume(-1);
+
+    expect(resumed.volume).toBe(getSpeechVolume());
+  });
+
   it("무음 단계로는 내려가지 않는다", () => {
     // 화면을 보기 어려운 이용자에게 소리가 유일한 통로입니다. 앞사람이 꺼 둔 채로
     // 남으면 다음 사람이 아무 안내도 받지 못합니다.
