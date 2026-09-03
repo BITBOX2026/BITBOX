@@ -11,6 +11,7 @@ Kakao API 실패 시 KNOWN_PLACE_COORDS(내장 좌표 목록)를 보조로 사�
 import asyncio
 import re
 from dataclasses import dataclass
+from difflib import SequenceMatcher
 
 import httpx
 
@@ -117,6 +118,73 @@ async def _resolve_via_kakao(place_text: str, label: str) -> tuple[float, float]
     return float(selected["x"]), float(selected["y"])
 
 
+def _has_transit_document(documents: list[dict]) -> bool:
+    """결과 안에 역·정류장 같은 교통 장소가 하나라도 있는지 봅니다."""
+    for document in documents:
+        if str(document.get("category_group_code") or "") == "SW8":
+            return True
+        if "교통" in str(document.get("category_name") or ""):
+            return True
+    return False
+
+
+async def _fetch_place_documents(
+    kakao_key: str,
+    place_text: str,
+    x: float | None,
+    y: float | None,
+    size: int,
+) -> tuple[list[dict], set[str]]:
+    """장소 후보를 가져오되, 역 후보가 빠지면 한 번 더 찾아 채웁니다.
+
+    왜 필요한가
+    -----------
+    이용자는 "잠실 가는 버스"처럼 역 이름을 끝까지 말하지 않습니다. 그런데 Kakao
+    키워드 검색에 "잠실"을 그대로 넣으면 석촌호수·롯데월드 같은 관광명소만 돌아오고
+    잠실역은 결과에 아예 없습니다(size 를 15로 늘려도 마찬가지였습니다). 그대로 두면
+    버스로 가려는 사람에게 관광명소 좌표를 목적지로 잡아 줍니다.
+
+    그래서 첫 검색에 교통 장소가 하나도 없을 때만 ``"<질의>역"`` 으로 한 번 더
+    찾아 뒤에 붙입니다. "홍대"처럼 첫 검색에 이미 역이 들어 있으면 추가 호출을
+    하지 않으므로, 자동완성이 글자마다 호출량을 두 배로 쓰지 않습니다.
+
+    두 번째 검색에서 온 이름을 함께 돌려줍니다. 이용자가 입으로 말하지 않은 이름을
+    고른 셈이므로, 호출한 쪽이 확인 절차를 띄울지 판단할 수 있어야 합니다.
+    """
+    payload = await _kakao_fetch(kakao_key, place_text, x, y, size=size)
+    documents = list(payload.get("documents", []))
+    if _is_station_query(place_text) or _has_transit_document(documents):
+        return documents, set()
+    # 자동완성은 글자마다 들어옵니다. 한 글자짜리에 "역"을 붙여 봐야 의미 있는 역이
+    # 나오지 않으므로("잠역"), 두 글자부터 보조 검색을 씁니다.
+    if len(_normalize_place_name(place_text)) < 2:
+        return documents, set()
+
+    try:
+        station_payload = await _kakao_fetch(kakao_key, f"{place_text}역", x, y, size=size)
+    except (ExternalServiceError, httpx.RequestError):
+        # 보조 검색입니다. 실패해도 첫 검색 결과로 계속 진행합니다.
+        return documents, set()
+
+    seen = {
+        (str(doc.get("place_name") or ""), str(doc.get("x") or ""), str(doc.get("y") or ""))
+        for doc in documents
+    }
+    augmented: set[str] = set()
+    for document in station_payload.get("documents", []):
+        key = (
+            str(document.get("place_name") or ""),
+            str(document.get("x") or ""),
+            str(document.get("y") or ""),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        documents.append(document)
+        augmented.add(_normalize_place_name(str(document.get("place_name") or "")))
+    return documents, augmented
+
+
 async def resolve_place_candidate(place_text: str, label: str = "목적지") -> PlaceResolution:
     """상위 5개를 이름·카테고리·거리로 재정렬하고 모호성을 함께 반환합니다."""
     kakao_key = get_setting("KAKAO_REST_API_KEY")
@@ -126,15 +194,15 @@ async def resolve_place_candidate(place_text: str, label: str = "목적지") -> 
     device_x, device_y = _get_device_coordinates()
 
     try:
-        payload = await _kakao_fetch(kakao_key, place_text, device_x, device_y, size=5)
-
+        documents, augmented_names = await _fetch_place_documents(
+            kakao_key, place_text, device_x, device_y, size=5
+        )
     except httpx.RequestError as exc:
         raise ExternalServiceError(
             "Kakao Local API 요청 오류가 발생했습니다.",
             user_message="장소 검색 서비스를 사용할 수 없습니다. 잠시 후 다시 시도해 주세요.",
         ) from exc
 
-    documents = payload.get("documents", [])
     if not documents:
         raise CoordinateResolveError(f"'{place_text}' 검색 결과가 없습니다.")
 
@@ -152,7 +220,7 @@ async def resolve_place_candidate(place_text: str, label: str = "목적지") -> 
     _validate_korea_coordinates(longitude, latitude, label)
     selected = _place_document_to_candidate(first_place)
     alternatives = [_place_document_to_candidate(doc) for doc in ranked[1:]]
-    needs_confirmation = _needs_place_confirmation(place_text, ranked)
+    needs_confirmation = _needs_place_confirmation(place_text, ranked, augmented_names)
     prompt = f"{selected['name']}이 맞나요?" if needs_confirmation else ""
     return PlaceResolution(selected, alternatives, needs_confirmation, prompt)
 
@@ -175,7 +243,7 @@ async def search_place_suggestions(
     device_x, device_y = _get_device_coordinates()
 
     try:
-        payload = await _kakao_fetch(
+        documents, _augmented = await _fetch_place_documents(
             kakao_key, query.strip(), device_x, device_y, size=max_results
         )
     except httpx.RequestError as exc:
@@ -186,7 +254,7 @@ async def search_place_suggestions(
 
     return [
         _place_document_to_candidate(doc)
-        for doc in _rank_place_documents(query, payload.get("documents", []))
+        for doc in _rank_place_documents(query, documents)
         if doc.get("place_name")
     ][:max_results]
 
@@ -200,26 +268,57 @@ def _is_station_query(query: str) -> bool:
     return normalized.endswith("역") or "지하철역" in normalized
 
 
-def _place_score(query: str, document: dict) -> tuple[float, float]:
+def _place_score(query: str, document: dict, kakao_rank: int = 0) -> tuple[float, float]:
+    """이름 적합도·교통 성격·Kakao 정확도 순위를 합쳐 점수를 냅니다.
+
+    주의해서 볼 점이 둘 있습니다.
+
+    첫째, "포함"만으로 크게 올리면 안 됩니다. `서울시청` 을 찾을 때 `다이소
+    서울시청광장점` 은 질의를 통째로 담고 있지만 이용자가 찾는 곳이 아닙니다.
+    그래서 포함 점수를 "질의가 이름에서 차지하는 비중"으로 깎습니다.
+
+    둘째, 글자가 조금 어긋나도 같은 곳일 수 있습니다. `서울시청` 과
+    `서울특별시청` 은 포함 관계가 아니라 예전에는 0점이었고, 그 결과 다이소가
+    1위가 됐습니다. 문자열 유사도를 함께 봐서 이런 경우를 살립니다.
+
+    Kakao 자체 정확도 순위도 약하게 반영합니다. 이미 잘 만들어진 신호이고,
+    우리 규칙이 그것을 통째로 뒤집기보다 다듬는 편이 안전합니다.
+    """
     query_name = _normalize_place_name(query)
     place_name = _normalize_place_name(str(document.get("place_name") or ""))
     score = 0.0
-    if place_name == query_name:
+    if place_name and place_name == query_name:
         score += 120
-    elif place_name.startswith(query_name):
+    elif query_name and place_name.startswith(query_name):
         score += 90
     elif query_name and query_name in place_name:
-        score += 60
+        # 이름이 길수록 질의가 우연히 들어 있을 가능성이 큽니다.
+        score += 60 * (len(query_name) / len(place_name))
+
+    if query_name and place_name:
+        score += 40 * SequenceMatcher(None, query_name, place_name).ratio()
+
+    # Kakao 정확도 순위 보정. 이름 등급 간격(30점)을 넘지 않게 작게 둡니다.
+    score += max(0.0, 20.0 - 4.0 * kakao_rank)
 
     category_code = str(document.get("category_group_code") or "")
     category_name = str(document.get("category_name") or "")
+    # "역"까지 말한 질의는 교통 장소를 크게 우대합니다. 그렇지 않은 질의도 이 서비스의
+    # 목적지는 결국 버스로 닿는 곳이므로 약하게 우대합니다. 이 가중치는 이름이 정확히
+    # 맞는 장소(+120)를 뒤집지 않을 만큼만 둡니다. "잠실역 2호선"과 "잠실역 공영주차장"
+    # 처럼 이름 점수가 같을 때 무엇을 앞세울지가 이 값으로 갈립니다.
     if _is_station_query(query):
-        if category_code == "SW8":
-            score += 80
-        if "지하철역" in category_name:
-            score += 40
-        elif "교통" in category_name:
-            score += 20
+        station_bonus, subway_bonus, transit_bonus = 80, 40, 20
+    else:
+        # 이름 등급 간격(30점)보다 작게 둡니다. 크게 주면 `경복궁` 을 찾는 사람을
+        # `경복궁역` 으로 보내 버립니다. 이용자가 말한 곳을 바꾸면 안 됩니다.
+        station_bonus, subway_bonus, transit_bonus = 18, 8, 4
+    if category_code == "SW8":
+        score += station_bonus
+    if "지하철역" in category_name:
+        score += subway_bonus
+    elif "교통" in category_name:
+        score += transit_bonus
 
     try:
         distance = float(document.get("distance") or 10**9)
@@ -230,14 +329,28 @@ def _place_score(query: str, document: dict) -> tuple[float, float]:
 
 def _rank_place_documents(query: str, documents: list[dict]) -> list[dict]:
     """Kakao 상위 후보를 의미 적합도 우선으로 안정 정렬합니다."""
-    return sorted(documents, key=lambda doc: _place_score(query, doc), reverse=True)
+    scored = [
+        (_place_score(query, document, index), index, document)
+        for index, document in enumerate(documents)
+    ]
+    scored.sort(key=lambda item: (item[0], -item[1]), reverse=True)
+    return [document for _score, _index, document in scored]
 
 
-def _needs_place_confirmation(query: str, ranked: list[dict]) -> bool:
+def _needs_place_confirmation(
+    query: str,
+    ranked: list[dict],
+    augmented_names: set[str] | None = None,
+) -> bool:
     if not ranked:
         return False
     selected_name = str(ranked[0].get("place_name") or "")
-    if _is_station_query(query) and _normalize_place_name(selected_name) != _normalize_place_name(query):
+    normalized_selected = _normalize_place_name(selected_name)
+    # 보조 검색("<질의>역")에서 올라온 후보를 골랐다면, 이용자가 입으로 말하지 않은
+    # 이름을 우리가 채워 넣은 것입니다. 그 추측을 말없이 목적지로 삼지 않습니다.
+    if augmented_names and normalized_selected in augmented_names:
+        return True
+    if _is_station_query(query) and normalized_selected != _normalize_place_name(query):
         return True
     if len(ranked) < 2:
         return False
