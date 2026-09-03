@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Home, Info, MapPin, Mic, Play, RotateCcw, ShieldCheck, Square, Volume2 } from "lucide-react";
 import type { SafetyDecision } from "../../../api/client";
 import type { BusOption } from "../../../types/bus";
-import { cancelSpeech, signalSpeechActivity, speakKorean, SPEECH_CANCEL_EVENT } from "../../../utils/speech";
+import { SPEECH_CANCEL_EVENT, applySpeechVolume, cancelSpeech, signalSpeechActivity, speakKorean } from "../../../utils/speech";
 import { BusList } from "./BusList";
 import { RouteDetailOverlay } from "./RouteDetail";
 
@@ -126,7 +126,7 @@ export function VoiceResult({
       const audioUrl = rawAudioData.startsWith("data:")
         ? rawAudioData
         : `data:audio/wav;base64,${rawAudioData}`;
-      const audio = new Audio(audioUrl);
+      const audio = applySpeechVolume(new Audio(audioUrl));
       audioRef.current = audio;
       audio.onloadedmetadata = () => {
         if (playbackIdRef.current !== playbackId || audioRef.current !== audio) return;

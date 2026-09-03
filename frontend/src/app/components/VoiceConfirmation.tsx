@@ -1,7 +1,7 @@
 import { Check, MapPin, Mic, TrainFront, Volume2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { PlaceSuggestion, SafetyDecision, TransitConfirmation } from "../../api/client";
-import { cancelSpeech, speakKorean, SPEECH_CANCEL_EVENT } from "../../utils/speech";
+import { applySpeechVolume, cancelSpeech, speakKorean, SPEECH_CANCEL_EVENT } from "../../utils/speech";
 
 interface VoiceConfirmationProps {
   confirmation: TransitConfirmation;
@@ -45,7 +45,7 @@ export function VoiceConfirmation({ confirmation, transcript, audioBase64, safet
       const source = audioBase64.startsWith("data:")
         ? audioBase64
         : `data:audio/wav;base64,${audioBase64}`;
-      const audio = new Audio(source);
+      const audio = applySpeechVolume(new Audio(source));
       audioRef.current = audio;
       try {
         await audio.play();

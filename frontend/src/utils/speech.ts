@@ -1,4 +1,5 @@
 import { apiFetch, parseApiResponse } from "../api/client";
+import { readKioskStorage, SPEECH_VOLUME_KEY, writeKioskStorage } from "./kioskStorage";
 import { toSpokenKorean } from "./spokenKorean";
 
 /**
@@ -58,6 +59,61 @@ const BROWSER_SPEECH_START_MS = 1_200;
 // 같은 값이어야 기기에 한국어 음성이 있고 없고에 따라 말 속도가 달라지지 않습니다.
 // 이보다 더 늦추면 억양이 뭉개져 오히려 알아듣기 어려워집니다.
 export const SPEECH_RATE = 0.85;
+
+/**
+ * 안내 음량입니다.
+ *
+ * 무인정보단말기 접근성 기준은 이용자가 음량을 조절할 수 있어야 한다고 요구합니다.
+ * 정류장은 조용할 때도 있고 차 소리에 묻힐 때도 있어, 한 값으로 맞출 수 없습니다.
+ *
+ * 0(무음)은 넣지 않습니다. 화면을 보기 어려운 이용자에게 소리가 유일한 통로인데,
+ * 앞사람이 꺼 둔 상태로 남으면 다음 사람은 아무 안내도 받지 못합니다.
+ */
+export const SPEECH_VOLUME_STEPS = [0.2, 0.4, 0.6, 0.8, 1] as const;
+export const SPEECH_VOLUME_EVENT = "bitbox:speech-volume";
+
+let speechVolume = readStoredVolume();
+
+function readStoredVolume(): number {
+  const stored = Number(readKioskStorage(SPEECH_VOLUME_KEY));
+  if (!Number.isFinite(stored)) return 1;
+  // 저장값이 손상돼도 들리는 쪽으로 되돌립니다.
+  return SPEECH_VOLUME_STEPS.includes(stored as (typeof SPEECH_VOLUME_STEPS)[number])
+    ? stored
+    : 1;
+}
+
+export function getSpeechVolume(): number {
+  return speechVolume;
+}
+
+/** 현재 음량이 몇 단계인지(1부터) 돌려줍니다. 화면 표시용입니다. */
+export function getSpeechVolumeStep(): number {
+  return SPEECH_VOLUME_STEPS.indexOf(speechVolume as (typeof SPEECH_VOLUME_STEPS)[number]) + 1;
+}
+
+/** 한 단계 올리거나 내립니다. 양 끝에서는 더 움직이지 않습니다. */
+export function shiftSpeechVolume(direction: 1 | -1): number {
+  const current = SPEECH_VOLUME_STEPS.indexOf(
+    speechVolume as (typeof SPEECH_VOLUME_STEPS)[number],
+  );
+  const next = Math.min(
+    SPEECH_VOLUME_STEPS.length - 1,
+    Math.max(0, (current < 0 ? SPEECH_VOLUME_STEPS.length - 1 : current) + direction),
+  );
+  speechVolume = SPEECH_VOLUME_STEPS[next];
+  writeKioskStorage(SPEECH_VOLUME_KEY, String(speechVolume));
+  // 재생 중인 소리에도 바로 반영해야 이용자가 누른 결과를 즉시 듣습니다.
+  if (activeAudio) activeAudio.volume = speechVolume;
+  window.dispatchEvent(new Event(SPEECH_VOLUME_EVENT));
+  return speechVolume;
+}
+
+/** 재생을 시작하기 직전의 오디오에 현재 음량을 걸어 줍니다. */
+export function applySpeechVolume(audio: HTMLAudioElement): HTMLAudioElement {
+  audio.volume = speechVolume;
+  return audio;
+}
 
 let cachedKoreanVoice: SpeechSynthesisVoice | null | undefined;
 let cachedKoreanVoiceAt = 0;
@@ -280,7 +336,7 @@ async function playServerSpeech(
     // 알려 화면이 재생 완료로 오인하지 않고 다시 듣기 수단을 남기게 합니다.
     if (!audioBase64) return index === 0 ? "unavailable" : "partial";
 
-    const audio = new Audio(`data:audio/wav;base64,${audioBase64}`);
+    const audio = applySpeechVolume(new Audio(`data:audio/wav;base64,${audioBase64}`));
     activeAudio = audio;
     signalSpeechActivity(activitySource);
 
@@ -360,6 +416,7 @@ export async function speakKorean(
     const utterance = new SpeechSynthesisUtterance(spoken);
     utterance.lang = "ko-KR";
     utterance.rate = options.rate ?? SPEECH_RATE;
+    utterance.volume = speechVolume;
     utterance.voice = voice;
     utterance.onend = () => {
       if (!browserStarted || speechGeneration !== generation) return;

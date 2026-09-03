@@ -1,9 +1,16 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { BusOption as BusInfo } from "../../types/bus";
 import { getDefaultArrivals, getCongestionLabel, getCongestionColor, describeArrivalStatus } from "../../api/busService";
-import { Accessibility, BusFront, ChevronLeft, ChevronRight, MapPin, Pause, Play, Radio, RefreshCw, Volume2, Wifi, ZoomIn } from "lucide-react";
+import { Accessibility, BusFront, ChevronLeft, ChevronRight, MapPin, Pause, Play, Radio, RefreshCw, Volume1, Volume2, Wifi, ZoomIn } from "lucide-react";
 import { useAccessibilityDisplay } from "../../hooks/useAccessibilityDisplay";
-import { cancelSpeech, speakKorean } from "../../utils/speech";
+import {
+  cancelSpeech,
+  getSpeechVolumeStep,
+  shiftSpeechVolume,
+  speakKorean,
+  SPEECH_VOLUME_EVENT,
+  SPEECH_VOLUME_STEPS,
+} from "../../utils/speech";
 import { busNumberFontSize } from "../../utils/busNumberFit";
 import { useElementHeight, useVisibleRowCount } from "../../hooks/useVisibleRowCount";
 
@@ -459,6 +466,15 @@ export function BusInfoList({ compact = false }: { compact?: boolean }) {
   });
   const mainTotalPages = Math.max(1, Math.ceil(rankedBuses.length / mainPerPage));
 
+  // 음량은 speech 모듈이 갖고 있습니다(재생 중인 소리에도 즉시 걸어야 하므로).
+  // 화면은 그 값을 구독만 합니다.
+  const [volumeStep, setVolumeStep] = useState(getSpeechVolumeStep);
+  useEffect(() => {
+    const sync = () => setVolumeStep(getSpeechVolumeStep());
+    window.addEventListener(SPEECH_VOLUME_EVENT, sync);
+    return () => window.removeEventListener(SPEECH_VOLUME_EVENT, sync);
+  }, []);
+
   useEffect(() => {
     if (!autoRotate || soonTotalPages <= 1 || trackedBusId) return;
     const id = setInterval(() => setSoonPage((p) => (p + 1) % soonTotalPages), PAGE_ROTATION_MS);
@@ -547,6 +563,38 @@ export function BusInfoList({ compact = false }: { compact?: boolean }) {
           >
             <Accessibility className="size-4" /><span className="hidden sm:inline">저상·여유 우선</span>
           </button>
+          {/*
+            안내 음량 조절입니다. 무인정보단말기 접근성 기준은 이용자가 음량을 조절할
+            수 있어야 한다고 요구합니다. 정류장은 조용할 때도 있고 차 소리에 묻힐
+            때도 있어 한 값으로 맞출 수 없습니다. 무음 단계는 두지 않습니다. 화면을
+            보기 어려운 이용자에게는 소리가 유일한 통로인데, 앞사람이 꺼 둔 채로
+            남으면 다음 사람이 아무 안내도 받지 못합니다.
+          */}
+          <div className="flex items-center gap-2.5" aria-label="안내 음량 조절">
+            <button
+              type="button"
+              onClick={() => shiftSpeechVolume(-1)}
+              disabled={volumeStep <= 1}
+              className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-md border border-white/20 bg-white/10 p-2 text-white disabled:opacity-40"
+              title="안내 소리 작게"
+              aria-label="안내 소리 작게"
+            >
+              <Volume1 className="size-4" />
+            </button>
+            <span aria-live="polite" className="min-w-10 text-center text-xs font-black text-white">
+              소리 {volumeStep}
+            </span>
+            <button
+              type="button"
+              onClick={() => shiftSpeechVolume(1)}
+              disabled={volumeStep >= SPEECH_VOLUME_STEPS.length}
+              className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-md border border-white/20 bg-white/10 p-2 text-white disabled:opacity-40"
+              title="안내 소리 크게"
+              aria-label="안내 소리 크게"
+            >
+              <Volume2 className="size-4" />
+            </button>
+          </div>
           <div className="text-right text-white">
           <div className="mb-1 hidden text-[0.8125rem] text-white/65 sm:block">{yy}년 {mm}월 {dd}일 ({day})</div>
           <div className="flex items-baseline gap-1 font-mono text-[1.375rem] font-black leading-none text-white sm:text-[2.25rem] md:gap-2 md:text-[2.75rem]">
@@ -719,11 +767,17 @@ export function BusInfoList({ compact = false }: { compact?: boolean }) {
 
               문구는 "이 페이지가 마지막이고 자리가 남았을 때"만 보여 줍니다. 페이지가
               꽉 찼는데 이 문구를 띄우면 뒤 페이지의 차량이 없다는 뜻이 됩니다.
+
+              예전에는 이 자리에 사선 빗금을 깔았습니다. 빗금은 "고장" 이나 "사용
+              불가" 로 읽혀 실제로는 정상인 화면을 이상해 보이게 만들었습니다. 남는
+              자리는 표의 바탕색을 그대로 이어 조용히 비워 둡니다.
             */}
             {!loading && (
-              <div className="grid min-h-0 flex-1 place-items-center overflow-hidden bg-[linear-gradient(135deg,#f8fafc_25%,#f1f5f9_25%,#f1f5f9_50%,#f8fafc_50%,#f8fafc_75%,#f1f5f9_75%)] bg-[length:24px_24px] px-4 text-center">
+              <div className="grid min-h-0 flex-1 place-items-center overflow-hidden bg-white px-4 text-center">
+                {/* slate-400 은 흰 바탕에서 약 2.6:1 로 4.5:1 기준에 미달합니다.
+                    저시력 이용자가 주 대상이므로 여유를 두고 slate-600(약 7.5:1)을 씁니다. */}
                 {currentMain.length < mainPerPage && (
-                  <div className="rounded-full border border-slate-200 bg-white/95 px-4 py-2 text-xs font-bold text-slate-500 shadow-sm">
+                  <div className="text-xs font-bold text-slate-600">
                     현재 확인된 도착 차량은 {currentMain.length}대입니다
                   </div>
                 )}

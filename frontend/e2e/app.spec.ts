@@ -1307,6 +1307,37 @@ test("does not announce the spoken guidance twice to a screen reader", async ({ 
   }
 });
 
+test("lets the listener change the guidance volume and keeps it", async ({ page }) => {
+  // 무인정보단말기 접근성 기준은 이용자가 음량을 조절할 수 있어야 한다고 요구합니다.
+  // 정류장은 조용할 때도 있고 차 소리에 묻힐 때도 있어 한 값으로 맞출 수 없습니다.
+  await page.goto("/");
+  const quieter = page.getByLabel("안내 소리 작게");
+  const louder = page.getByLabel("안내 소리 크게");
+  const level = page.getByText(/^소리 \d$/);
+
+  await expect(level).toHaveText("소리 5");
+  await expect(louder).toBeDisabled();
+
+  await quieter.click();
+  await quieter.click();
+  await expect(level).toHaveText("소리 3");
+  await expect(louder).toBeEnabled();
+  expect(await page.evaluate(() => localStorage.getItem("bitbox.speechVolume"))).toBe("0.6");
+
+  // 무음 단계는 두지 않습니다. 화면을 보기 어려운 이용자에게 소리가 유일한 통로인데,
+  // 앞사람이 꺼 둔 채로 남으면 다음 사람이 아무 안내도 받지 못합니다.
+  await quieter.click();
+  await quieter.click();
+  await expect(level).toHaveText("소리 1");
+  await expect(quieter).toBeDisabled();
+  expect(Number(await page.evaluate(() => localStorage.getItem("bitbox.speechVolume")))).toBeGreaterThan(0);
+
+  // 음량은 기기 설정이라 화면을 다시 켜도 남아 있어야 합니다. 시끄러운 정류장에서
+  // 한 번 키워 둔 소리가 다음 사람에게도 들려야 합니다.
+  await page.reload();
+  await expect(page.getByText(/^소리 \d$/)).toHaveText("소리 1");
+});
+
 test("gives every board control a usable touch target", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.unroute("**/api/bus/default");
