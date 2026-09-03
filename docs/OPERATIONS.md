@@ -249,6 +249,45 @@ remainder of the day if that matters.
 Until a second instance exists, treat the recovery time objective as "manual
 rebuild", not "minutes".
 
+## Stopping and restarting the server between demos
+
+운영 서버를 상시 켜 두지 않습니다. 제출물은 소스·보고서·시연영상이고 라이브 서버가
+필요하지 않습니다. 반면 주소를 아는 누구나 쓸 수 있는 공개 서비스라, 켜 둔 동안에는
+유료 API(OpenAI·ODsay)가 계속 노출됩니다. 그래서 심사·시연 때만 켭니다.
+
+### 끄기 전에
+
+1. **탄력적 IP가 붙어 있는지 확인합니다.** 지금 주소 `<IP를 담은 이름>.sslip.io` 는
+   인스턴스의 공인 IP를 그대로 이름에 담습니다. 탄력적 IP가 없으면 다시 켤 때 IP가
+   바뀌고, 도메인 자체가 달라집니다. 그러면 아래가 한꺼번에 어긋납니다.
+   - Kakao Developers 의 JavaScript SDK 도메인 등록
+   - GitHub 시크릿 `BITBOX_SERVER_NAME`
+   - TLS 인증서(새 도메인으로 재발급 필요)
+2. **정기 감시를 멈춥니다.** `.github/workflows/production-monitor.yml` 의 `schedule`
+   이 주석 처리되어 있는지 확인합니다. 켜져 있으면 서버가 꺼진 동안 15분마다 실패해
+   하루 96개씩 빨간불이 쌓이고, 저장소를 열어 본 사람에게는 서비스가 망가진 것처럼
+   보입니다.
+3. **`main` 에 푸시하지 않습니다.** 배포 워크플로는 마지막에 운영 주소를 실제로
+   호출해 검증하고, 실패하면 롤백까지 시도합니다. 서버가 꺼져 있으면 둘 다 실패합니다.
+   코드 작업은 브랜치에서 하고, 서버를 켠 뒤에 병합합니다.
+
+### 다시 켤 때
+
+1. EC2 인스턴스를 시작합니다.
+2. 탄력적 IP가 없었다면 새 공인 IP로 도메인이 바뀝니다. `BITBOX_SERVER_NAME` 시크릿과
+   Kakao 도메인 등록을 새 주소로 고칩니다.
+3. `main` 에 배포를 한 번 돌립니다(`workflow_dispatch`). 인증서가 없으면 이때 Certbot
+   이 발급하고, 마지막 검증이 버스 도착·장소 후보·버스 전용 경로를 각각 한 번 호출해
+   외부 키까지 확인합니다. 이 검증은 ODsay 를 1회 씁니다(하루 30회 한도).
+4. 필요하면 `production-monitor.yml` 의 `schedule` 주석을 풀어 정기 감시를 되살립니다.
+5. 시연이 끝나면 위 "끄기 전에" 절차를 다시 밟고 인스턴스를 중지합니다.
+
+### 서버가 꺼져 있는 동안
+
+시연은 저장소에 포함된 녹화본으로 대체합니다
+(`artifacts/BITBOX-Hanium-submission-demo.mp4`, 2분 46초, 자막 포함).
+녹화본을 쓸 때는 실시간 시연이라고 말하지 않습니다.
+
 ## Capacity and scaling
 
 Run a non-billable liveness smoke test with:
