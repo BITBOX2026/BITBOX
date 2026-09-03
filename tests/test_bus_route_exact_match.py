@@ -310,3 +310,80 @@ def test_station_request_particle_is_removed_before_matching(monkeypatch) -> Non
     )
     assert station is not None
     assert station["ars_id"] == "24245"
+
+
+def _route_station_payload(names: list[str]) -> dict:
+    """노선 경유 정류소 응답 형태입니다(필요한 필드만)."""
+    return {
+        "ServiceResult": {
+            "msgBody": {
+                "itemList": [
+                    {
+                        "stationNm": name,
+                        "station": f"1000{index}",
+                        "arsId": f"2424{index}",
+                        "seq": str(index + 1),
+                    }
+                    for index, name in enumerate(names)
+                ]
+            }
+        }
+    }
+
+
+def test_here_means_the_stop_the_kiosk_stands_at(monkeypatch) -> None:
+    """`여기 정류장에 3412번 언제 와요` 는 키오스크에서 가장 자연스러운 말입니다.
+
+    이 말은 정류장 "이름"이 아니라 "여기"라는 뜻이라 이름으로 찾으면 반드시
+    실패합니다. 실제로 이용자는 아무 잘못이 없는데 "정류장을 찾지 못했습니다"만
+    들었습니다. 기기는 자기 정류장을 알고 있으므로 그쪽으로 보냅니다.
+    """
+    called: list[str] = []
+
+    async def fake_default(bus_number: str):
+        called.append(bus_number)
+        return "기본정류장경로"
+
+    monkeypatch.setattr(public_bus_service, "_search_arrival_at_default_stop", fake_default)
+
+    for spoken in ["여기", "이 정류장", "현재 정류장", "이곳"]:
+        parsed = ParsedIntent(intent="arrival", bus_number="3412", stop_text=spoken, confidence=0.9)
+        assert asyncio.run(public_bus_service.search_bus_arrival(parsed)) == "기본정류장경로"
+    assert called == ["3412"] * 4
+
+
+def test_a_spoken_stop_noun_still_finds_the_stop(monkeypatch) -> None:
+    """`올림픽공원 정류소에서` 처럼 보통명사를 붙여 말해도 찾아야 합니다.
+
+    LLM 은 "정류소"를 목적어에 남겨 주기도 합니다. 서울 정류소 이름에는 이 낱말이
+    들어가지 않으므로(노선 네 개 406개 확인) 못 찾았을 때만 떼고 다시 맞춥니다.
+    """
+    async def fake_payload(_url, _params, stage=""):
+        return _route_station_payload(["올림픽공원역", "몽촌토성역"])
+
+    monkeypatch.setattr(public_bus_service, "request_seoul_bus_payload", fake_payload)
+
+    for spoken in ["올림픽공원 정류소", "올림픽공원 정류장", "올림픽공원역"]:
+        station = asyncio.run(
+            public_bus_service._find_route_station_by_stop_text(
+                bus_route_id="100100224", stop_text=spoken
+            )
+        )
+        assert station is not None, spoken
+        assert station["station_name"] == "올림픽공원역"
+
+
+def test_a_real_stop_name_is_matched_before_stripping_the_noun(monkeypatch) -> None:
+    """보통명사를 먼저 떼지 않습니다. 이름에 그 낱말이 든 정류소가 생겨도 잃지 않게."""
+    async def fake_payload(_url, _params, stage=""):
+        return _route_station_payload(["중앙정류장", "중앙시장"])
+
+    monkeypatch.setattr(public_bus_service, "request_seoul_bus_payload", fake_payload)
+
+    station = asyncio.run(
+        public_bus_service._find_route_station_by_stop_text(
+            bus_route_id="100100224", stop_text="중앙정류장"
+        )
+    )
+    assert station is not None
+    assert station["station_name"] == "중앙정류장"

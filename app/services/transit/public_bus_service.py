@@ -15,7 +15,11 @@ from app.services.core.constants import (
     SEOUL_ROUTE_STATION_URL,
 )
 from app.services.core.exceptions import TransportAPIError
-from app.services.core.korean_text import normalize_station_reference
+from app.services.core.korean_text import (
+    is_current_stop_reference,
+    normalize_station_reference,
+    strip_stop_noun,
+)
 from app.services.core.service_types import ParsedIntent, TransportResult
 from app.services.core.settings_helper import get_setting
 from app.services.transit.seoul_bus_client import request_seoul_bus_payload
@@ -47,7 +51,11 @@ async def search_bus_arrival(parsed: ParsedIntent) -> TransportResult:
         raise TransportAPIError(user_message="버스 번호를 말씀해 주세요.")
 
     # stop_text 없으면 getStationByUid로 기본 정류장에서 직접 조회 (더 신뢰성 높음)
-    if not parsed.stop_text:
+    #
+    # "여기 정류장에 3412번 언제 와요"처럼 자기가 선 정류장을 가리키는 말도 같은
+    # 길로 보냅니다. 이 말은 정류장 이름이 아니므로 이름으로 찾으면 반드시 실패하고,
+    # 이용자는 아무 잘못이 없는데 "정류장을 찾지 못했습니다"만 듣게 됩니다.
+    if not parsed.stop_text or is_current_stop_reference(parsed.stop_text):
         return await _search_arrival_at_default_stop(parsed.bus_number)
 
     # 1단계: 버스 번호 → 노선 ID
@@ -302,21 +310,31 @@ async def _find_route_station_by_stop_text(
         stage="노선 경유 정류소 조회",
     )
 
+    items = list(extract_items(payload))
+
+    def collect(target: str) -> list[dict[str, str]]:
+        exact: list[dict[str, str]] = []
+        partial: list[dict[str, str]] = []
+        for item in items:
+            station_name = first_item_value(item, ["stationNm", "stNm"]) or ""
+            if equals_normalized(station_name, target):
+                exact.append(item)
+                continue
+            if contains_normalized(station_name, target):
+                partial.append(item)
+        # 정확 일치가 하나라도 있으면 부분 일치는 방향 후보에 섞지 않습니다. 예를 들어
+        # "강남역"과 "강남역사거리"가 함께 있어도 전자만 사용해야 합니다.
+        return exact or partial
+
     normalized_stop_text = normalize_station_reference(stop_text)
-    exact_candidates: list[dict[str, str]] = []
-    partial_candidates: list[dict[str, str]] = []
-
-    for item in extract_items(payload):
-        station_name = first_item_value(item, ["stationNm", "stNm"]) or ""
-        if equals_normalized(station_name, normalized_stop_text):
-            exact_candidates.append(item)
-            continue
-        if contains_normalized(station_name, normalized_stop_text):
-            partial_candidates.append(item)
-
-    # 정확 일치가 하나라도 있으면 부분 일치는 방향 후보에 섞지 않습니다. 예를 들어
-    # "강남역"과 "강남역사거리"가 함께 있어도 전자만 사용해야 합니다.
-    matching_items = exact_candidates or partial_candidates
+    matching_items = collect(normalized_stop_text)
+    if not matching_items:
+        # 이용자는 "올림픽공원 정류소에서"처럼 보통명사를 붙여 말합니다. 서울 정류소
+        # 이름에는 이 낱말이 들어가지 않으므로, 못 찾았을 때만 떼고 다시 맞춰 봅니다.
+        # 먼저 붙여서 찾아보므로 이름에 그 낱말이 든 정류소가 생겨도 잃지 않습니다.
+        without_noun = strip_stop_noun(normalized_stop_text)
+        if without_noun != normalized_stop_text:
+            matching_items = collect(without_noun)
     resolved = [
         station
         for item in matching_items
