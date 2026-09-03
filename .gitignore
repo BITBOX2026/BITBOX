@@ -53,3 +53,10 @@ temp/
 artifacts/*
 !artifacts/BITBOX-Hanium-submission-demo.mp4
 !artifacts/BITBOX-Hanium-submission-demo.srt
+
+# 실기기 촬영 원본입니다. 수백 MB 라 저장소에 넣지 않고 별도로 보관합니다.
+# 편집을 다시 해야 할 때 필요하므로 지우지 마십시오.
+screen/
+
+# 다른 도구가 받아 둔 ffmpeg 파이썬 패키지입니다. 시스템 ffmpeg 로 충분합니다.
+.codex-ffmpeg/

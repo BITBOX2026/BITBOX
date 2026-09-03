@@ -1,4 +1,20 @@
-"""Mux the recorded live demo with timed Korean narration and create SRT captions."""
+"""Mux the recorded live demo with timed Korean narration and create SRT captions.
+
+⚠ 한이음 공모전 제출본에는 이 스크립트를 쓰지 마십시오.
+
+공고문은 "음성·음향·BGM 사용 불가"를 명시하고, 음성은 프로젝트 특성상 필요한
+경우(=서비스 자체의 안내 음성)에만 허용합니다. 이 스크립트가 얹는 것은 해설
+내레이션이라 그 예외에 해당하지 않습니다. 그대로 만들면 규정 위반본이 됩니다.
+
+제출본은 다음 순서로 만들었습니다.
+  1. 녹화: BITBOX_DEMO_SCENARIO_LIMIT=1 BITBOX_DEMO_SKIP_VOICE=1 로 e2e:submission
+     (자막은 녹화 중 화면에 태워집니다)
+  2. 실기기 촬영본에서 필요한 구간만 잘라 1280x720/30fps 로 맞추고 자막을 태움
+  3. 화면 녹화를 실기기 구간 지점에서 나누고 concat 으로 이어 붙임
+  4. 화면에 표시된 안내 문구를 /api/speech 로 만들어 그 구간에만 8초 배치
+     (loudnorm I=-16 TP=-1.5 로 정규화)
+이 스크립트는 내레이션이 허용되는 다른 용도의 시연 영상에만 씁니다.
+"""
 
 from __future__ import annotations
 
@@ -27,6 +43,16 @@ def srt_time(milliseconds: int) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--ffmpeg", required=True, type=Path)
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=ARTIFACTS / "BITBOX-Hanium-submission-demo.mp4",
+    )
+    parser.add_argument(
+        "--subtitles",
+        type=Path,
+        default=ARTIFACTS / "BITBOX-Hanium-submission-demo.srt",
+    )
     args = parser.parse_args()
 
     # rglob 순서는 보장되지 않습니다. 이전 녹화가 남아 있으면 next() 가 엉뚱한
@@ -45,8 +71,10 @@ def main() -> None:
         print(f"경고: 녹화본 {len(recordings)}개 중 최신본을 사용합니다 -> {video}")
     cues = json.loads((ARTIFACTS / "submission-cues.json").read_text(encoding="utf-8"))
     manifest = json.loads((AUDIO_DIR / "manifest.json").read_text(encoding="utf-8"))
-    output = ARTIFACTS / "BITBOX-Hanium-submission-demo.mp4"
-    subtitles = ARTIFACTS / "BITBOX-Hanium-submission-demo.srt"
+    output = args.output.resolve()
+    subtitles = args.subtitles.resolve()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    subtitles.parent.mkdir(parents=True, exist_ok=True)
 
     # 녹화는 브라우저 창이 열리는 순간 시작되지만 첫 자막은 앱이 그려진 뒤에야
     # 나옵니다. 개발 서버가 차가우면 그 사이가 십수 초까지 벌어져 제출본이 무음
