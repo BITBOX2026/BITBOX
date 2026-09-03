@@ -192,6 +192,21 @@ const placeConfirmationResult = {
   },
 };
 
+// 3분 이내 도착 차량이 있으면서 목록도 여러 행을 채우는 조합입니다. 요약 띠는
+// 담을 내용이 있을 때만 나오므로, 높이에 따른 접힘 규칙을 확인하려면 둘 다 필요합니다.
+const soonAndListArrivals = {
+  ...fiveRowArrivals,
+  items: fiveRowArrivals.items.map((item, index) =>
+    index < 2
+      ? {
+          ...item,
+          first_arrival_min: index + 1,
+          raw_arrmsg1: `${index + 1}분 후 [${index + 1}번째 전]`,
+        }
+      : item,
+  ),
+};
+
 const terminalArrivalResult = {
   success: true,
   intent: "arrival",
@@ -391,7 +406,7 @@ test("shows a stable live board on desktop and mobile", async ({ page }, testInf
 
 test("shows the soon-arrivals summary only when it does not starve the arrival list", async ({ page }) => {
   await page.unroute("**/api/bus/default");
-  await page.route("**/api/bus/default", (route) => route.fulfill({ json: fiveRowArrivals }));
+  await page.route("**/api/bus/default", (route) => route.fulfill({ json: soonAndListArrivals }));
 
   // 세로가 넉넉한 전광판: 요약과 목록이 함께 들어갑니다.
   await page.setViewportSize({ width: 1280, height: 1024 });
@@ -404,6 +419,20 @@ test("shows the soon-arrivals summary only when it does not starve the arrival l
   await page.setViewportSize({ width: 1280, height: 720 });
   await expect(page.getByTestId("soon-arrivals-panel")).toBeHidden();
   await expect.poll(() => page.getByTestId("main-bus-row").count()).toBeGreaterThanOrEqual(3);
+});
+
+test("hides the soon-arrivals summary when nothing is arriving soon", async ({ page }) => {
+  // 3분 이내 도착 차량이 하나도 없는 시간대(심야 등)입니다. 예전에는 이때도 노란
+  // 띠가 그려져 "없습니다" 한 줄에 119px 을 썼고, 화면 위쪽이 통째로 비어 보였습니다.
+  // 같은 사실은 아래 목록이 이미 보여 주므로 알릴 것이 있을 때만 자리를 내줍니다.
+  await page.unroute("**/api/bus/default");
+  await page.route("**/api/bus/default", (route) => route.fulfill({ json: fiveRowArrivals }));
+
+  await page.setViewportSize({ width: 1280, height: 1024 });
+  await page.goto("/");
+  await expect(page.getByTestId("main-bus-row").first()).toBeVisible();
+  await expect(page.getByTestId("soon-arrivals-panel")).toHaveCount(0);
+  await expect(page.getByText("3분 이내 도착 예정 버스가 없습니다")).toHaveCount(0);
 });
 
 test("never slices a bus row or splits a route number across lines", async ({ page }) => {
@@ -495,10 +524,9 @@ test("keeps every rendered bus row fully readable across target viewports", asyn
     await page.goto("/");
 
     const rows = page.getByTestId("main-bus-row");
-    // 페이지당 행 수는 이제 실제로 들어가는 만큼입니다(최대 5). 5행을 억지로 채우면
-    // 큰 글씨 모드나 낮은 화면에서 행이 잘려 노선을 잘못 읽게 됩니다.
+    // 페이지당 행 수는 화면에 실제로 들어가는 만큼입니다. 억지로 채우면 큰 글씨
+    // 모드나 낮은 화면에서 행이 잘려 노선을 잘못 읽게 됩니다.
     await expect.poll(() => rows.count()).toBeGreaterThanOrEqual(1);
-    expect(await rows.count()).toBeLessThanOrEqual(5);
     const metrics = await page.getByTestId("main-bus-scroll").evaluate((element) => ({
       clientHeight: element.clientHeight,
       clientWidth: element.clientWidth,
@@ -532,6 +560,25 @@ test("keeps every rendered bus row fully readable across target viewports", asyn
       .toBeLessThanOrEqual(metrics.clientHeight + 1);
     const totalRowHeight = boxes.reduce((sum, box) => sum + box.height, 0);
     expect(totalRowHeight).toBeLessThanOrEqual(metrics.clientHeight + 1);
+
+    // 반대 방향도 지킵니다. 한 행이 더 들어갈 자리가 남았는데 비워 두면, 세로로 긴
+    // 창에서 목록 아래가 통째로 빈 화면이 됩니다(1180x1414 에서 367px 이 남았습니다).
+    // 보여 줄 차량이 모자라 남는 경우는 레이아웃 문제가 아니므로, 다음 페이지가
+    // 있을 때만 따집니다.
+    //
+    // 남는 높이는 실제 행 높이의 합이 아니라 "가장 높은 행 x 행 수" 를 기준으로 잽니다.
+    // useVisibleRowCount 가 가장 높은 행을 기준으로 몇 행이 들어가는지 계산하기
+    // 때문입니다. 정류장 이름이 길어 한 행만 두 줄이 되면 실제 합계는 작아지는데,
+    // 그 차이를 레이아웃 결함으로 잡으면 정상 동작을 실패로 만듭니다.
+    const hasMorePages = await page.getByLabel("다음 버스 목록").isVisible().catch(() => false);
+    if (hasMorePages) {
+      const tallestRow = Math.max(...boxes.map((box) => box.height));
+      const roomForAnotherRow = metrics.clientHeight - boxes.length * tallestRow;
+      expect(
+        roomForAnotherRow,
+        `${viewport.name} 목록에 ${Math.round(roomForAnotherRow)}px 이 남아 한 행을 더 담을 수 있는데 비워 둠`,
+      ).toBeLessThan(tallestRow);
+    }
 
     await expectNoHorizontalOverflow(page);
     await page.screenshot({ path: testInfo.outputPath(`five-rows-${viewport.name}.png`), fullPage: true });
@@ -1264,7 +1311,30 @@ test("gives every board control a usable touch target", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.unroute("**/api/bus/default");
   await page.route("**/api/bus/default", (route) => route.fulfill({ json: fiveRowArrivals }));
+
+  // 최근 목적지 칩도 조작 요소입니다. 그런데 이 앱은 공용 키오스크라 시작할 때마다
+  // 이전 이용자의 기록을 지우므로(main.tsx), 저장소에 값을 심어 두는 방식으로는
+  // 칩을 띄울 수 없습니다. 실제로 검색을 두 번 해서 칩을 만든 뒤 측정합니다.
+  // 이 과정을 빼면 아래 크기·간격 검사가 칩을 아예 보지 못한 채 통과하고,
+  // 실제로 그 상태에서 칩 사이 간격이 기준에 못 미치고 있었습니다.
+  // 경로 결과에 버스가 없으면 화면은 검색 화면에 머무르고, 그때 최근 목적지 칩이
+  // 보입니다. 결과 화면으로 넘어간 뒤 "처음으로" 를 누르면 공용 키오스크 정책상
+  // 최근 기록이 지워지므로(resetKioskSession) 그 경로로는 칩을 관찰할 수 없습니다.
+  await page.unroute("**/api/route");
+  await page.route("**/api/route", (route) => route.fulfill({
+    json: {
+      success: true, text: "", intent: "route", destination: "", destination_text: "",
+      message: "경로를 찾지 못했습니다.", buses: [], audio_base64: null,
+      needs_confirmation: false, confirmation: null, safety_decision: null,
+    },
+  }));
   await page.goto("/");
+
+  for (const place of ["강남역", "서울역"]) {
+    await page.getByLabel("버스 목적지").fill(place);
+    await page.getByRole("button", { name: "버스 경로 검색" }).click();
+    await expect(page.getByTitle(`${place} 다시 검색`)).toBeVisible();
+  }
   await expect(page.getByText("올림픽공원역", { exact: true })).toBeVisible();
 
   // WCAG 2.2 AA (2.5.8 Target Size Minimum) 은 24x24 CSS px 이상을 요구합니다.
@@ -1281,6 +1351,41 @@ test("gives every board control a usable touch target", async ({ page }) => {
     return offenders;
   });
   expect(tooSmall).toEqual([]);
+
+  // 크기만 크면 되는 것이 아니라, 이웃한 조작 요소끼리 떨어져 있어야 합니다.
+  // 무인정보단말기 접근성 기준은 12mm 버튼에 2.5mm 간격을 요구합니다(비율 0.21).
+  // mm 는 실제 표시 장치 크기에 달려 있으므로 여기서는 비율로 확인합니다. 손이
+  // 떨리는 이용자는 좁은 간격에서 옆 버튼을 누릅니다. 예전 페이지 제어는 44px
+  // 버튼 사이가 6px(0.14)이었습니다.
+  const crowded = await page.evaluate(() => {
+    const boxes: { label: string; rect: DOMRect }[] = [];
+    document.querySelectorAll<HTMLElement>("button,[role=button],a[href]").forEach((element) => {
+      const rect = element.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0) return;
+      const label = (element.getAttribute("aria-label") || element.textContent || "").trim();
+      boxes.push({ label: label.slice(0, 24), rect });
+    });
+    const offenders: string[] = [];
+    for (let i = 0; i < boxes.length; i += 1) {
+      for (let j = i + 1; j < boxes.length; j += 1) {
+        const a = boxes[i].rect;
+        const b = boxes[j].rect;
+        const dx = Math.max(0, Math.max(a.left - b.right, b.left - a.right));
+        const dy = Math.max(0, Math.max(a.top - b.bottom, b.top - a.bottom));
+        if (dx === 0 && dy === 0) continue; // 겹치거나 포함 관계
+        const gap = dx > 0 && dy > 0 ? Math.hypot(dx, dy) : Math.max(dx, dy);
+        const smallestSide = Math.min(a.width, a.height, b.width, b.height);
+        if (gap / smallestSide < 0.2) {
+          offenders.push(
+            `${boxes[i].label} ↔ ${boxes[j].label} : ${gap.toFixed(1)}px / ${Math.round(smallestSide)}px`,
+          );
+        }
+      }
+    }
+    return offenders;
+  });
+  expect(crowded).toEqual([]);
+
   await expectNoHorizontalOverflow(page);
 });
 

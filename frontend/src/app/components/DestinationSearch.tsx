@@ -203,8 +203,11 @@ export function DestinationSearch({ disabled, onSubmit }: DestinationSearchProps
 
       <div className="mt-2 flex items-center justify-between gap-3">
         <span className="inline-flex items-center gap-1.5 rounded bg-black/20 px-2 py-1 text-xs font-bold text-white/80"><BusFront className="size-4 text-[#F0C929]" /> 버스 전용</span>
+        {/* 최근 목적지 칩도 전광판 조작 버튼과 같은 간격 기준을 씁니다.
+            gap-1.5(6px)는 44px 버튼 기준 0.14 로, 무인정보단말기 접근성 기준의
+            비율(2.5mm / 12mm = 0.21)에 못 미쳐 옆 칩을 잘못 누르기 쉽습니다. */}
         {recent.length > 0 && (
-          <div className="flex min-w-0 items-center justify-end gap-1.5 overflow-hidden">
+          <div className="flex min-w-0 items-center justify-end gap-2.5 overflow-hidden">
             <Clock3 className="size-4 shrink-0 text-white/70" />
             {recent.map((item) => <button key={`${item.name}-${item.x ?? ""}-${item.y ?? ""}`} type="button" title={`${item.name} 다시 검색`} onClick={() => { setDestination(item.name); void submit(item); }} className="min-h-11 max-w-28 truncate rounded bg-white/10 px-3 py-2 text-xs font-bold text-white/90 hover:bg-white/20">{item.name}</button>)}
           </div>

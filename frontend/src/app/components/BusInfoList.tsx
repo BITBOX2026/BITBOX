@@ -12,7 +12,18 @@ const STATION_NAME = import.meta.env.VITE_STATION_NAME ?? "정류장";
 const SOON_SEC    = 3 * 60; // 잠시 후 도착 기준: 180초 미만
 const SOON_ARRIVE = 60;     // 곧 도착 기준: 60초 미만
 const SOON_PER_PAGE = 5;
-const MAIN_PER_PAGE = 5;
+// 목록 한 페이지에 담을 수 있는 행의 상한입니다. 실제 행 수는 useVisibleRowCount 가
+// 화면에 온전히 들어가는 만큼으로 다시 줄입니다.
+//
+// 예전에는 이 값이 5였습니다. 1280x720 키오스크에서 다섯 행이 딱 맞아서 정한
+// 수인데, 세로로 긴 브라우저 창에서는 목록이 절반도 차지 않고 아래가 통째로
+// 비었습니다(1180x1414 에서 목록 아래 367px 이 빈 채로 남았습니다). 화면이 크면
+// 그만큼 더 보여 주는 편이 전광판답습니다. 상한을 아예 없애지 않는 이유는 화면이
+// 아주 길어도 한 번에 훑어 읽을 수 있는 양을 넘기지 않기 위해서입니다.
+const MAIN_PER_PAGE = 12;
+// 첫 페인트에서 상한만큼 뼈대 행을 그리면 낮은 화면에서 잠깐 잘려 보입니다.
+// 측정 전 기본값은 종전과 같은 다섯 행으로 둡니다.
+const MAIN_PER_PAGE_BEFORE_MEASURE = 5;
 const REFRESH_MS    = 15_000;
 // 한 화면을 읽고 의미를 파악할 시간을 충분히 줍니다. 5초는 표의 다섯 행을
 // 읽는 고령 이용자에게 너무 짧았고, 수동 조작 시에는 기존처럼 자동 전환을 멈춥니다.
@@ -443,6 +454,7 @@ export function BusInfoList({ compact = false }: { compact?: boolean }) {
   // 대신 페이지에 담는 행 수를 줄입니다. 나머지는 자동 페이지 전환이 보여 줍니다.
   const mainPerPage = useVisibleRowCount(mainScrollRef, "[data-testid=main-bus-row]", {
     max: MAIN_PER_PAGE,
+    initial: MAIN_PER_PAGE_BEFORE_MEASURE,
     resetKey: `${largeTextMode}:${accessibleMode}:${rankedBuses.length}`,
   });
   const mainTotalPages = Math.max(1, Math.ceil(rankedBuses.length / mainPerPage));
@@ -462,7 +474,16 @@ export function BusInfoList({ compact = false }: { compact?: boolean }) {
   const curSoonPage = Math.min(soonPage, soonTotalPages - 1);
   const curMainPage = Math.min(mainPage, mainTotalPages - 1);
   const currentSoon = arrivingSoon.slice(curSoonPage * SOON_PER_PAGE, (curSoonPage + 1) * SOON_PER_PAGE);
-  const currentMain = rankedBuses.slice(curMainPage * mainPerPage, (curMainPage + 1) * mainPerPage);
+  // 마지막 페이지가 절반만 차면 전광판 아래가 빈 채로 남습니다. 보여 줄 차량이
+  // 페이지를 채울 만큼 있으면 창을 뒤로 밀어 마지막 페이지도 꽉 채웁니다. 앞
+  // 페이지와 겹치는 행이 생기지만, 회전하는 전광판에서는 같은 차량이 한 번 더
+  // 보이는 편이 빈 자리보다 낫습니다. 차량 수 자체가 부족할 때만 자리가 남고,
+  // 그때는 아래 안내 문구가 몇 대인지 그대로 알려 줍니다.
+  const mainStart = Math.min(
+    curMainPage * mainPerPage,
+    Math.max(0, rankedBuses.length - mainPerPage),
+  );
+  const currentMain = rankedBuses.slice(mainStart, mainStart + mainPerPage);
 
   const yy = now.getFullYear(), mm = now.getMonth() + 1, dd = now.getDate();
   const day    = DAY_KR[now.getDay()];
@@ -476,7 +497,18 @@ export function BusInfoList({ compact = false }: { compact?: boolean }) {
     : "";
   const isStale = !loading && (!lastUpdated || now.getTime() - lastUpdated.getTime() > 45_000);
   const boardHeight = useElementHeight(boardRef);
-  const showSoonPanel = !compact && boardHeight >= SOON_PANEL_MIN_BOARD_HEIGHT;
+  // 곧 도착할 차량이 하나도 없으면 이 영역은 "없습니다" 한 줄을 띄우려고 119px 을
+  // 씁니다. 같은 사실은 아래 목록이 이미 보여 주므로, 알릴 것이 있을 때만 자리를
+  // 내줍니다. 심야처럼 도착 차량이 없는 시간대에 화면 위쪽이 통째로 비어 보이던
+  // 원인이었습니다.
+  //
+  // 절충: 차량이 3분 선을 넘나들면 이 띠가 나타났다 사라지며 아래 목록이 다시
+  // 배치됩니다. 늘 띄워 두면 화면은 안 흔들리지만 빈 띠가 상시 자리를 먹습니다.
+  // 띠가 생기는 순간은 "곧 탈 수 있는 차가 생겼다"는 새 정보가 도착한 때이므로,
+  // 그 시점에 시선을 끄는 편이 낫다고 보고 나타나게 두었습니다. 전환은 0대와
+  // 1대 사이에서만 일어나므로 붐비는 정류장에서는 계속 떠 있습니다.
+  const showSoonPanel =
+    !compact && boardHeight >= SOON_PANEL_MIN_BOARD_HEIGHT && arrivingSoon.length > 0;
 
   return (
     <div ref={boardRef} className="flex h-full w-full flex-col overflow-hidden bg-[#EDF1F3] font-kiosk">
@@ -547,7 +579,7 @@ export function BusInfoList({ compact = false }: { compact?: boolean }) {
           <div className="flex items-center gap-1.5">
             {lastUpdatedStr && <span className={`hidden text-[0.75rem] font-bold sm:inline ${isStale ? "text-red-700" : "text-[#78350F]"}`}>{isStale ? `정보 지연 · ${lastUpdatedStr}` : lastUpdatedStr}</span>}
             {soonTotalPages > 1 && (
-              <div className="flex items-center gap-1" aria-label="곧 도착 차량 페이지 제어">
+              <div className="flex items-center gap-2.5" aria-label="곧 도착 차량 페이지 제어">
                 <button type="button" onClick={() => { setAutoRotate(false); setSoonPage((page) => (page - 1 + soonTotalPages) % soonTotalPages); }} className="grid size-11 place-items-center rounded border border-[#6F611E]/40 bg-white/70 text-[#2C2A1A]" aria-label="이전 곧 도착 차량 목록"><ChevronLeft className="size-4" /></button>
                 <span className="min-w-10 text-center text-sm font-black text-[#2C2A1A]" aria-live="polite">{curSoonPage + 1}/{soonTotalPages}</span>
                 <button type="button" onClick={() => { setAutoRotate(false); setSoonPage((page) => (page + 1) % soonTotalPages); }} className="grid size-11 place-items-center rounded border border-[#6F611E]/40 bg-white/70 text-[#2C2A1A]" aria-label="다음 곧 도착 차량 목록"><ChevronRight className="size-4" /></button>
@@ -556,30 +588,24 @@ export function BusInfoList({ compact = false }: { compact?: boolean }) {
           </div>
         </div>
 
-        {loading ? (
-          <div className="flex gap-1 sm:gap-2">
-            {Array.from({ length: SOON_PER_PAGE }).map((_, i) => (
-              <div key={i} className="min-h-[76px] flex-1 animate-pulse rounded-md border border-[#6F611E]/30 bg-[#1C2229]/35" />
-            ))}
-          </div>
-        ) : arrivingSoon.length === 0 ? (
-          <div className="rounded-md bg-black/8 py-5 text-center text-base font-bold text-[#504710]">
-            3분 이내 도착 예정 버스가 없습니다
-          </div>
-        ) : (
-          <div className="grid grid-cols-2 items-stretch gap-2 sm:grid-cols-5">
-            {currentSoon.map((bus) => <SoonCard key={bus.id} bus={bus} isTracked={trackedBusId === (bus.plainNo || bus.id)} onTrack={() => toggleTracking(bus)} />)}
-            {currentSoon.length < SOON_PER_PAGE && (
-              <div
-                className="hidden min-h-[76px] items-center justify-center gap-3 rounded-xl border border-[#6F611E]/25 bg-[#E5BE24]/55 px-5 text-[#4E4214] sm:flex"
-                style={{ gridColumn: `span ${SOON_PER_PAGE - currentSoon.length}` }}
-              >
-                <span className="grid size-10 shrink-0 place-items-center rounded-full bg-black/10"><Radio className="size-5" /></span>
-                <span className="text-left"><strong className="block text-sm font-black">실시간 도착정보 수신 중</strong><span className="text-xs font-bold text-[#4E4214]">새로운 차량이 확인되면 바로 표시됩니다.</span></span>
-              </div>
-            )}
-          </div>
-        )}
+        {/*
+          이 패널은 곧 도착할 차량이 있을 때만 그려집니다(showSoonPanel). 그래서
+          "불러오는 중"과 "없습니다" 상태는 여기에 올 수 없습니다. 예전에는 두 분기가
+          있었는데, 빈 상태를 큰 노란 띠로 알리느라 화면만 차지했습니다.
+        */}
+        {/* 카드 사이 간격도 페이지 제어와 같은 기준(버튼 크기 대비 0.21 이상)을 씁니다. */}
+        <div className="grid grid-cols-2 items-stretch gap-2.5 sm:grid-cols-5">
+          {currentSoon.map((bus) => <SoonCard key={bus.id} bus={bus} isTracked={trackedBusId === (bus.plainNo || bus.id)} onTrack={() => toggleTracking(bus)} />)}
+          {currentSoon.length < SOON_PER_PAGE && (
+            <div
+              className="hidden min-h-[76px] items-center justify-center gap-3 rounded-xl border border-[#6F611E]/25 bg-[#E5BE24]/55 px-5 text-[#4E4214] sm:flex"
+              style={{ gridColumn: `span ${SOON_PER_PAGE - currentSoon.length}` }}
+            >
+              <span className="grid size-10 shrink-0 place-items-center rounded-full bg-black/10"><Radio className="size-5" /></span>
+              <span className="text-left"><strong className="block text-sm font-black">실시간 도착정보 수신 중</strong><span className="text-xs font-bold text-[#4E4214]">새로운 차량이 확인되면 바로 표시됩니다.</span></span>
+            </div>
+          )}
+        </div>
       </div>}
 
       {/* ── 메인 버스 목록 ───────────────────────── */}
@@ -713,9 +739,26 @@ export function BusInfoList({ compact = false }: { compact?: boolean }) {
             <button type="button" onClick={refetch} className={`inline-flex min-h-11 min-w-11 items-center gap-1.5 text-left text-[0.75rem] font-bold hover:text-[#1B2930] ${isStale ? "text-red-700" : "text-[#52616B]"}`} title="도착 정보 새로고침">
               <Wifi className={`size-4 shrink-0 ${isStale ? "text-red-600" : "text-emerald-600"}`} /> <span className="truncate">{isStale ? "정보 갱신 지연 · 다시 시도" : "실시간 · 15초마다 갱신"}</span>
             </button>
+            {/*
+              갱신 시각은 「잠시 후 도착」 요약 안에만 있었습니다. 그 요약은 곧 도착할
+              차량이 있을 때만 나오므로, 심야처럼 도착 차량이 없는 시간대에는 화면에
+              데이터가 언제 것인지 알려 주는 표시가 하나도 남지 않았습니다. 지연 여부는
+              왼쪽 버튼이 계속 알려 주지만, 실제 시각은 여기 두어야 항상 보입니다.
+            */}
+            {lastUpdatedStr && (
+              <span className={`hidden shrink-0 text-[0.75rem] font-bold sm:inline ${isStale ? "text-red-700" : "text-[#52616B]"}`}>
+                {lastUpdatedStr}
+              </span>
+            )}
             {trackedBusId && <span aria-live="polite" className="inline-flex items-center gap-1 truncate text-[0.75rem] font-black text-[#145466]"><Volume2 className="size-3.5" /> {trackedBusNumber ? `${trackedBusNumber}번 ` : ""}도착 알림 중</span>}
           </div>
-          <div className="flex items-center gap-1.5" aria-label="버스 목록 페이지 제어">
+          {/*
+            인접한 조작 버튼 사이 간격입니다. gap-1.5(6px)는 44px 버튼 기준 0.14 로,
+            무인정보단말기 접근성 기준이 요구하는 비율(2.5mm 간격 / 12mm 버튼 = 0.21)에
+            못 미쳤습니다. 손이 떨리는 이용자는 이 간격에서 옆 버튼을 누릅니다.
+            gap-2.5(10px)로 넓혀 기준 비율을 넘깁니다.
+          */}
+          <div className="flex items-center gap-2.5" aria-label="버스 목록 페이지 제어">
             {mainTotalPages > 1 && (
               <button type="button" onClick={() => { setAutoRotate(false); setMainPage((page) => (page - 1 + mainTotalPages) % mainTotalPages); }} className="grid size-11 place-items-center rounded border border-slate-300 bg-white text-slate-700" aria-label="이전 버스 목록"><ChevronLeft className="size-4" /></button>
             )}

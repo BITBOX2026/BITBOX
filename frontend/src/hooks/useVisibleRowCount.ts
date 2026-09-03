@@ -40,10 +40,13 @@ export function useElementHeight(ref: RefObject<HTMLElement | null>): number {
 export function useVisibleRowCount(
   containerRef: RefObject<HTMLElement | null>,
   rowSelector: string,
-  options: { max: number; min?: number; resetKey: string },
+  options: { max: number; min?: number; initial?: number; resetKey: string },
 ): number {
-  const { max, min = 1, resetKey } = options;
-  const [count, setCount] = useState(max);
+  // `initial` 은 첫 페인트에서 쓸 값입니다. 측정은 useEffect 안에서 일어나므로
+  // 그 전에 한 번은 그려집니다. 이때 `max` 를 그대로 쓰면 낮은 화면에서 상한만큼의
+  // 행을 그렸다가 줄이게 되어 뼈대 행이 잘린 채로 한 프레임 보입니다.
+  const { max, min = 1, initial = max, resetKey } = options;
+  const [count, setCount] = useState(Math.max(min, Math.min(max, initial)));
   const tallestRowRef = useRef(0);
 
   // 데이터나 글씨 배율이 바뀌면 이전 기준 높이는 더 이상 유효하지 않습니다.
