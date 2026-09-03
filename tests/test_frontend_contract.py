@@ -133,6 +133,68 @@ def test_text_route_preserves_selected_destination_coordinates(monkeypatch) -> N
     assert captured.destination_y == 37.4979
 
 
+@pytest.mark.parametrize(
+    ("typed", "expected"),
+    [
+        ("강남역에", "강남역"),
+        ("강남역으로 가자", "강남역"),
+        ("강남역 으로 가자", "강남역"),
+        ("서울역까지", "서울역"),
+        ("잠실역 가주세요", "잠실역"),
+        ("강남역 2호선에", "강남역 2호선"),
+        # 역명이 아닌 장소의 정상적인 끝 글자는 절대로 조사로 잘라내지 않습니다.
+        ("구로", "구로"),
+        ("종로", "종로"),
+        ("대학로", "대학로"),
+    ],
+)
+def test_typed_route_normalizes_only_explicit_station_travel_suffixes(
+    typed: str,
+    expected: str,
+) -> None:
+    assert pipeline.normalize_typed_destination(typed) == expected
+
+
+def test_selected_autocomplete_name_is_never_rewritten(monkeypatch) -> None:
+    """사용자가 후보를 선택해 좌표를 보냈다면 표시 이름도 그대로 보존합니다."""
+    captured: ParsedIntent | None = None
+
+    async def run_parsed(parsed, *_args, **_kwargs):
+        nonlocal captured
+        captured = parsed
+        return {"status": "success", "message": "ok", "data": {}}
+
+    monkeypatch.setattr(pipeline, "_run_parsed_pipeline", run_parsed)
+    asyncio.run(
+        pipeline.run_text_route(
+            "강남역 2호선에",
+            destination_x=127.0276,
+            destination_y=37.4979,
+        )
+    )
+    assert captured is not None
+    assert captured.destination_text == "강남역 2호선에"
+
+
+def test_unselected_typed_destination_is_normalized_before_place_resolution(monkeypatch) -> None:
+    """좌표 없는 직접 입력은 정규화된 역명으로 확인·경로 단계에 전달됩니다."""
+    captured: tuple[ParsedIntent, str] | None = None
+
+    async def run_parsed(parsed, transcript, *_args, **_kwargs):
+        nonlocal captured
+        captured = (parsed, transcript)
+        return {"status": "success", "message": "ok", "data": {}}
+
+    monkeypatch.setattr(pipeline, "_run_parsed_pipeline", run_parsed)
+    asyncio.run(pipeline.run_text_route("  강남역에   가주세요  "))
+
+    assert captured is not None
+    parsed, transcript = captured
+    assert parsed.destination_text == "강남역"
+    # 사용자가 실제로 입력한 내용은 추적·화면 계약을 위해 별도로 유지합니다.
+    assert transcript == "강남역에   가주세요"
+
+
 def test_explicit_subway_voice_request_is_rejected() -> None:
     validation = validate_parsed_intent(
         ParsedIntent(

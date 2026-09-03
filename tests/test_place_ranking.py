@@ -1,5 +1,7 @@
 import asyncio
 
+import pytest
+
 from app.services.transit import kakao_service
 from app.services.transit.kakao_service import (
     _fetch_place_documents,
@@ -129,6 +131,18 @@ def test_second_lookup_runs_only_when_no_transit_place_was_found() -> None:
     assert _has_transit_document(without_station) is False
 
 
+def test_parking_is_not_mistaken_for_a_station_or_bus_stop() -> None:
+    """Kakao의 주차장 분류에도 `교통`이 있지만 목적지 교통시설은 아닙니다."""
+    parking = [
+        _doc("잠실역 공영주차장", "PK6", "교통,수송 > 교통시설 > 주차장", ""),
+    ]
+    bus_stop = [
+        _doc("잠실역.롯데월드", "", "교통,수송 > 교통시설 > 버스정류장", ""),
+    ]
+    assert _has_transit_document(parking) is False
+    assert _has_transit_document(bus_stop) is True
+
+
 def _run_fetch(monkeypatch, query: str, responses: dict[str, list[dict]]) -> tuple[list[dict], set[str], list[str]]:
     """`_kakao_fetch` 를 가짜로 바꿔, 어떤 질의가 몇 번 나갔는지까지 기록합니다."""
     asked: list[str] = []
@@ -155,6 +169,28 @@ def test_area_name_triggers_a_station_lookup_and_merges_it(monkeypatch) -> None:
     assert asked == ["잠실", "잠실역"]
     assert [d["place_name"] for d in documents] == ["석촌호수 서호", "잠실역 2호선"]
     # 합쳐 넣은 이름은 이용자가 말하지 않은 것이므로 확인 대상으로 표시합니다.
+    assert augmented == {"잠실역2호선"}
+
+
+def test_parking_result_does_not_suppress_the_station_lookup(monkeypatch) -> None:
+    """첫 결과가 주차장뿐이어도 `<질의>역` 보조 검색은 계속해야 합니다."""
+    documents, augmented, asked = _run_fetch(
+        monkeypatch,
+        "잠실",
+        {
+            "잠실": [
+                _doc("잠실역 공영주차장", "PK6", "교통,수송 > 교통시설 > 주차장", ""),
+            ],
+            "잠실역": [
+                _doc("잠실역 2호선", "SW8", "교통,수송 > 지하철,전철 > 수도권2호선", ""),
+            ],
+        },
+    )
+    assert asked == ["잠실", "잠실역"]
+    assert [document["place_name"] for document in documents] == [
+        "잠실역 공영주차장",
+        "잠실역 2호선",
+    ]
     assert augmented == {"잠실역2호선"}
 
 
@@ -229,3 +265,73 @@ def test_merged_station_keeps_its_own_accuracy_rank(monkeypatch) -> None:
     ranked = _rank_place_documents("압구정", documents)
     assert ranked[0]["place_name"] == "압구정역 3호선"
     assert _needs_place_confirmation("압구정", ranked, augmented) is True
+
+
+@pytest.mark.parametrize(
+    ("query", "wrong_name", "wrong_category", "station_name"),
+    [
+        ("신림", "신림계곡", "여행 > 관광,명소 > 계곡", "신림역 2호선"),
+        ("이태원", "이태원거리", "여행 > 관광,명소 > 테마거리", "이태원역 6호선"),
+        ("명동", "명동거리", "여행 > 관광,명소 > 테마거리", "명동역 4호선"),
+        ("마곡", "마곡광장", "여행 > 관광,명소 > 광장", "마곡역 5호선"),
+    ],
+)
+def test_reported_area_name_regressions_keep_the_station_first(
+    monkeypatch,
+    query: str,
+    wrong_name: str,
+    wrong_category: str,
+    station_name: str,
+) -> None:
+    """운영에서 발견된 지역명 오정렬을 최소 응답으로 영구 고정합니다."""
+    documents, augmented, asked = _run_fetch(
+        monkeypatch,
+        query,
+        {
+            query: [_doc(wrong_name, "AT4", wrong_category, "")],
+            f"{query}역": [
+                _doc(station_name, "SW8", "교통,수송 > 지하철,전철", ""),
+            ],
+        },
+    )
+    ranked = _rank_place_documents(query, documents)
+    assert asked == [query, f"{query}역"]
+    assert ranked[0]["place_name"] == station_name
+    assert _needs_place_confirmation(query, ranked, augmented) is True
+
+
+def test_an_unrelated_station_gets_no_transit_bonus() -> None:
+    """이름이 질의와 이어지지 않는 역은 교통 가산점을 받지 못합니다.
+
+    보조 검색("<질의>역")은 이름이 겹치지 않는 역까지 데려옵니다. 주차장을 교통
+    장소에서 제외해 보조 검색이 더 자주 돌게 되자, `서울시청` 검색에 딸려 온
+    `시청역 1호선` 이 이름에 "서울시청" 이 없는데도 가산점만으로 `서울특별시청` 을
+    6점 차로 눌렀습니다. 가산점은 "그 장소일 법한 후보" 를 앞세우라는 뜻입니다.
+    """
+    # Kakao 가 실제로 돌려준 순서 그대로입니다. 순위 보정이 점수에 들어가므로
+    # 순서를 바꾸면 실제와 다른 상황을 시험하게 됩니다.
+    first_search = [
+        _doc("서울특별시청", "PO3", "사회,공공기관 > 지방행정기관 > 시청 > 특별시청", ""),
+        _doc("서울특별시청 서소문2청사", "", "사회,공공기관 > 지방행정기관", ""),
+        _doc("서울특별시청 서소문청사", "", "사회,공공기관 > 지방행정기관", ""),
+        _doc("서울특별시청 서소문청사 주차장", "PK6", "교통,수송 > 교통시설 > 주차장", ""),
+        _doc("다이소 서울시청광장점", "", "가정,생활 > 생활용품점 > 다이소", ""),
+    ]
+    for rank, document in enumerate(first_search):
+        document["_bitbox_source_rank"] = rank
+    # 보조 검색("서울시청역")이 데려온 역입니다. 자기 검색에서는 1위입니다.
+    station = _doc("시청역 1호선", "SW8", "교통,수송 > 지하철,전철 > 수도권1호선", "")
+    station["_bitbox_source_rank"] = 0
+
+    ranked = _rank_place_documents("서울시청", first_search + [station])
+    assert ranked[0]["place_name"] == "서울특별시청"
+
+
+def test_a_related_station_still_gets_the_bonus() -> None:
+    """이름이 이어지는 역은 계속 앞세웁니다. 위 수정이 `잠실`을 되돌리면 안 됩니다."""
+    documents = [
+        _doc("잠실한강공원 청소년광장", "", "여행 > 공원", ""),
+        _doc("잠실역 2호선", "SW8", "교통,수송 > 지하철,전철 > 수도권2호선", ""),
+    ]
+    ranked = _rank_place_documents("잠실", documents)
+    assert ranked[0]["place_name"] == "잠실역 2호선"

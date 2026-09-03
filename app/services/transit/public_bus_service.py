@@ -15,6 +15,7 @@ from app.services.core.constants import (
     SEOUL_ROUTE_STATION_URL,
 )
 from app.services.core.exceptions import TransportAPIError
+from app.services.core.korean_text import normalize_station_reference
 from app.services.core.service_types import ParsedIntent, TransportResult
 from app.services.core.settings_helper import get_setting
 from app.services.transit.seoul_bus_client import request_seoul_bus_payload
@@ -301,15 +302,16 @@ async def _find_route_station_by_stop_text(
         stage="노선 경유 정류소 조회",
     )
 
+    normalized_stop_text = normalize_station_reference(stop_text)
     exact_candidates: list[dict[str, str]] = []
     partial_candidates: list[dict[str, str]] = []
 
     for item in extract_items(payload):
         station_name = first_item_value(item, ["stationNm", "stNm"]) or ""
-        if equals_normalized(station_name, stop_text):
+        if equals_normalized(station_name, normalized_stop_text):
             exact_candidates.append(item)
             continue
-        if contains_normalized(station_name, stop_text):
+        if contains_normalized(station_name, normalized_stop_text):
             partial_candidates.append(item)
 
     # 정확 일치가 하나라도 있으면 부분 일치는 방향 후보에 섞지 않습니다. 예를 들어

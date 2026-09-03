@@ -284,3 +284,29 @@ def test_one_exact_stop_is_not_rejected_by_unrelated_partial_matches(monkeypatch
     )
     assert station is not None
     assert station["ars_id"] == "22001"
+
+
+def test_station_request_particle_is_removed_before_matching(monkeypatch) -> None:
+    """LLM이 조사를 남겨도 `올림픽공원역에서`를 정류장명으로 안전하게 찾습니다."""
+    items = [
+        {
+            "stationNm": "올림픽공원역(한국체대)",
+            "station": "111",
+            "seq": "5",
+            "arsId": "24245",
+        },
+    ]
+
+    async def fake_payload(*_args, **_kwargs):
+        return {"msgBody": {"itemList": items}}
+
+    monkeypatch.setattr(public_bus_service, "request_seoul_bus_payload", fake_payload)
+    monkeypatch.setattr(public_bus_service, "get_setting", lambda _name, default=None: default)
+
+    station = asyncio.run(
+        public_bus_service._find_route_station_by_stop_text(
+            "100100118", "올림픽공원역에서"
+        )
+    )
+    assert station is not None
+    assert station["ars_id"] == "24245"

@@ -32,6 +32,7 @@ from app.services.core.exceptions import (
     STTProcessingError,
     TransportAPIError,
 )
+from app.services.core.korean_text import normalize_typed_destination
 from app.services.core.service_types import ParsedIntent, RouteSegment, TransportMode
 from app.services.core.settings_helper import is_mock_mode
 from app.services.response_builder import build_user_message
@@ -87,10 +88,19 @@ async def run_text_route(
     request_id: str = "",
 ) -> dict:
     """Run the transport pipeline for a typed destination without STT or LLM."""
+    raw_destination = destination.strip()
+    # 자동완성에서 선택한 좌표가 있으면 사용자가 고른 표시 이름을 그대로 보존합니다.
+    # 좌표 없이 직접 입력한 경우에만 `강남역에`, `서울역까지`처럼 명확한 역 조사와
+    # 이동 명령을 보수적으로 제거해 엉뚱한 상호가 검색어와 강하게 일치하는 일을 막습니다.
+    normalized_destination = (
+        normalize_typed_destination(raw_destination)
+        if destination_x is None and destination_y is None
+        else raw_destination
+    )
     parsed = ParsedIntent(
         intent="route",
         origin_text=origin,
-        destination_text=destination,
+        destination_text=normalized_destination,
         destination_x=destination_x,
         destination_y=destination_y,
         transport_mode=transport_mode,
@@ -100,13 +110,13 @@ async def run_text_route(
     try:
         result = await _run_parsed_pipeline(
             parsed,
-            destination,
+            raw_destination,
             request_id,
             require_place_confirmation=destination_x is None,
         )
     except (CoordinateResolveError, TransportAPIError) as exc:
         logger.warning("[%s] text route lookup failed: error_type=%s", request_id, type(exc).__name__)
-        result = _error_response_from_exception(exc, parsed, transcript=destination)
+        result = _error_response_from_exception(exc, parsed, transcript=raw_destination)
     except Exception as exc:
         # 예상치 못한 시스템 오류 — 상세 메시지를 로그에만 남기고 범용 안내 반환
         # (음성 파이프라인의 _run_pipeline_core와 동일한 방어 수준을 유지)
@@ -114,7 +124,7 @@ async def run_text_route(
         result = _error_response_from_parsed(
             "요청을 처리하지 못했습니다. 다시 시도해 주세요.",
             parsed,
-            transcript=destination,
+            transcript=raw_destination,
             http_status=500,
             error_kind="internal",
         )

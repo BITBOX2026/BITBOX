@@ -48,6 +48,18 @@ class PlaceResolution:
     prompt: str
 
 
+_TRANSIT_CATEGORY_MARKERS = (
+    "지하철",
+    "전철",
+    "기차역",
+    "철도역",
+    "버스정류장",
+    "버스정류소",
+    "버스터미널",
+    "여객터미널",
+)
+
+
 @_http_retry
 async def _kakao_fetch(
     kakao_key: str,
@@ -118,14 +130,21 @@ async def _resolve_via_kakao(place_text: str, label: str) -> tuple[float, float]
     return float(selected["x"]), float(selected["y"])
 
 
+def _is_transit_document(document: dict) -> bool:
+    """후보가 실제 승하차 지점인지 보수적으로 판별합니다.
+
+    Kakao의 `교통,수송` 대분류에는 주차장·주유소 같은 시설도 포함됩니다. 대분류만
+    확인하면 주차장이 하나 있다는 이유로 진짜 역을 찾는 보조 검색이 생략됩니다.
+    """
+    if str(document.get("category_group_code") or "") == "SW8":
+        return True
+    category_name = str(document.get("category_name") or "")
+    return any(marker in category_name for marker in _TRANSIT_CATEGORY_MARKERS)
+
+
 def _has_transit_document(documents: list[dict]) -> bool:
-    """결과 안에 역·정류장 같은 교통 장소가 하나라도 있는지 봅니다."""
-    for document in documents:
-        if str(document.get("category_group_code") or "") == "SW8":
-            return True
-        if "교통" in str(document.get("category_name") or ""):
-            return True
-    return False
+    """결과 안에 역·정류장 같은 승하차 지점이 하나라도 있는지 봅니다."""
+    return any(_is_transit_document(document) for document in documents)
 
 
 def _tag_source_rank(documents: list[dict]) -> list[dict]:
@@ -303,13 +322,17 @@ def _place_score(query: str, document: dict, kakao_rank: int = 0) -> tuple[float
     query_name = _normalize_place_name(query)
     place_name = _normalize_place_name(str(document.get("place_name") or ""))
     score = 0.0
+    name_matched = False
     if place_name and place_name == query_name:
         score += 120
+        name_matched = True
     elif query_name and place_name.startswith(query_name):
         score += 90
+        name_matched = True
     elif query_name and query_name in place_name:
         # 이름이 길수록 질의가 우연히 들어 있을 가능성이 큽니다.
         score += 60 * (len(query_name) / len(place_name))
+        name_matched = True
 
     if query_name and place_name:
         score += 40 * SequenceMatcher(None, query_name, place_name).ratio()
@@ -331,12 +354,19 @@ def _place_score(query: str, document: dict, kakao_rank: int = 0) -> tuple[float
         # 이름 등급 간격(30점)보다 작게 둡니다. 크게 주면 `경복궁` 을 찾는 사람을
         # `경복궁역` 으로 보내 버립니다. 이용자가 말한 곳을 바꾸면 안 됩니다.
         station_bonus, subway_bonus, transit_bonus = 18, 8, 4
-    if category_code == "SW8":
-        score += station_bonus
-    if "지하철역" in category_name:
-        score += subway_bonus
-    elif "교통" in category_name:
-        score += transit_bonus
+    # 이름이 질의와 이어지지 않는 후보에는 교통 가산점을 주지 않습니다.
+    #
+    # 보조 검색("<질의>역")은 질의와 이름이 겹치지 않는 역까지 데려옵니다. `서울시청`
+    # 을 찾을 때 딸려 온 `시청역 1호선` 은 이름에 "서울시청" 이 없는데도 가산점만으로
+    # `서울특별시청` 을 6점 차로 눌렀습니다. 교통 가산점은 "그 장소일 법한 후보" 를
+    # 앞세우라는 것이지, 아무 역이나 앞세우라는 뜻이 아닙니다.
+    if name_matched:
+        if category_code == "SW8":
+            score += station_bonus
+        if "지하철역" in category_name:
+            score += subway_bonus
+        elif _is_transit_document(document):
+            score += transit_bonus
 
     try:
         distance = float(document.get("distance") or 10**9)
