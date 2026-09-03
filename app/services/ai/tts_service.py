@@ -42,7 +42,13 @@ async def generate_tts_audio(text: str) -> str | None:
 
     tts_model = get_setting("TTS_MODEL", DEFAULT_TTS_MODEL)
     tts_voice = get_setting("TTS_VOICE", DEFAULT_TTS_VOICE)
-    tts_instructions = get_setting("TTS_INSTRUCTIONS", DEFAULT_TTS_INSTRUCTIONS)
+    # 환경변수를 `TTS_INSTRUCTIONS=` 처럼 비워 두면 빈 문자열이 옵니다. 그대로 두면
+    # 거짓값이라 배속 분기로 빠져, ".env.example" 의 "비우면 기본 지시문을 씁니다"
+    # 설명과 반대로 동작했습니다. 비어 있으면 기본 지시문으로 되돌립니다.
+    tts_instructions = (
+        str(get_setting("TTS_INSTRUCTIONS", DEFAULT_TTS_INSTRUCTIONS) or "").strip()
+        or DEFAULT_TTS_INSTRUCTIONS
+    )
 
     # 말투를 지시로 조절할 수 있는 모델에는 속도를 함께 주지 않습니다. 둘을 같이
     # 주면 지시대로 잡힌 억양 위에 배속이 덧걸려 다시 늘어지게 들립니다. 속도는

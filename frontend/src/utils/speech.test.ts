@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resetSpeechCapability, resolveKoreanVoice } from "./speech";
+import {
+  applySpeechVolume,
+  getSpeechVolume,
+  resetSpeechCapability,
+  resolveKoreanVoice,
+  shiftSpeechVolume,
+} from "./speech";
 
 /**
  * 기기가 한국어를 말할 수 있는지 판정하는 부분만 검사합니다.
@@ -88,5 +94,56 @@ describe("resolveKoreanVoice", () => {
     installSpeechSynthesis([{ lang: "ko-KR", name: "Korean" }]);
     vi.setSystemTime(Date.now() + 10 * 60 * 1_000);
     expect((await resolveKoreanVoice(20))?.lang).toBe("ko-KR");
+  });
+});
+
+describe("안내 음량", () => {
+  /** 재생 중인 오디오를 흉내 냅니다. 음량만 바뀌면 되므로 최소한만 갖춥니다. */
+  function fakeAudio(ended = false) {
+    const listeners: Record<string, Array<() => void>> = {};
+    return {
+      volume: 1,
+      ended,
+      addEventListener(type: string, fn: () => void) {
+        (listeners[type] ??= []).push(fn);
+      },
+      fire(type: string) {
+        (listeners[type] ?? []).forEach((fn) => fn());
+      },
+    } as unknown as HTMLAudioElement & { fire(type: string): void };
+  }
+
+  it("재생 중인 오디오 전부에 즉시 반영한다", () => {
+    // 안내 오디오는 서버 대체 음성·미리 받아 둔 경로 안내·장소 확인 질문 세 곳에서
+    // 만들어집니다. 예전에는 서버 대체 음성만 추적해서, 다른 소리가 나오는 동안
+    // 음량 버튼을 눌러도 그 소리에는 반영되지 않았습니다.
+    const routeAudio = fakeAudio();
+    const confirmAudio = fakeAudio();
+    applySpeechVolume(routeAudio);
+    applySpeechVolume(confirmAudio);
+
+    shiftSpeechVolume(-1);
+
+    expect(routeAudio.volume).toBe(getSpeechVolume());
+    expect(confirmAudio.volume).toBe(getSpeechVolume());
+    expect(getSpeechVolume()).toBeLessThan(1);
+  });
+
+  it("끝난 오디오는 더 붙들지 않는다", () => {
+    const finished = fakeAudio();
+    applySpeechVolume(finished);
+    finished.fire("ended");
+    const before = finished.volume;
+
+    shiftSpeechVolume(-1);
+
+    expect(finished.volume).toBe(before);
+  });
+
+  it("무음 단계로는 내려가지 않는다", () => {
+    // 화면을 보기 어려운 이용자에게 소리가 유일한 통로입니다. 앞사람이 꺼 둔 채로
+    // 남으면 다음 사람이 아무 안내도 받지 못합니다.
+    for (let i = 0; i < 10; i += 1) shiftSpeechVolume(-1);
+    expect(getSpeechVolume()).toBeGreaterThan(0);
   });
 });

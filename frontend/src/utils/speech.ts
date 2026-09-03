@@ -58,7 +58,13 @@ const BROWSER_SPEECH_START_MS = 1_200;
 // 청력이 떨어진 이용자를 위해 보통보다 15% 느리게 읽습니다. 서버 TTS(TTS_SPEED)와
 // 같은 값이어야 기기에 한국어 음성이 있고 없고에 따라 말 속도가 달라지지 않습니다.
 // 이보다 더 늦추면 억양이 뭉개져 오히려 알아듣기 어려워집니다.
-export const SPEECH_RATE = 0.85;
+// 브라우저 음성 속도입니다.
+//
+// 서버 음성은 배속을 걷어내고 말투 지시로 "또박또박, 천천히" 를 맡깁니다. 여기만
+// 0.85 로 남겨 두면 기기에 한국어 음성이 있는지 없는지에 따라 같은 안내가 다른
+// 속도로 들립니다. 배속을 크게 낮추면 또박또박이 아니라 늘어지게 들린다는 것이
+// 이번에 서버 쪽에서 확인된 바라, 알아듣기 쉬운 만큼만 낮춥니다.
+export const SPEECH_RATE = 0.95;
 
 /**
  * 안내 음량입니다.
@@ -104,14 +110,40 @@ export function shiftSpeechVolume(direction: 1 | -1): number {
   speechVolume = SPEECH_VOLUME_STEPS[next];
   writeKioskStorage(SPEECH_VOLUME_KEY, String(speechVolume));
   // 재생 중인 소리에도 바로 반영해야 이용자가 누른 결과를 즉시 듣습니다.
-  if (activeAudio) activeAudio.volume = speechVolume;
-  window.dispatchEvent(new Event(SPEECH_VOLUME_EVENT));
+  // 끝난 오디오는 참조를 붙들지 않도록 이때 함께 정리합니다.
+  for (const audio of livePlayback) {
+    if (audio.ended) {
+      livePlayback.delete(audio);
+      continue;
+    }
+    audio.volume = speechVolume;
+  }
+  // 브라우저 speechSynthesis 는 표준상 재생 중 음량을 바꿀 수 없습니다. 이미 말하고
+  // 있는 문장은 그대로 끝나고, 다음 안내부터 새 음량이 적용됩니다.
+  //
+  // 창 객체가 없는 환경(단위 테스트 등)에서도 음량 계산 자체는 동작해야 합니다.
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event(SPEECH_VOLUME_EVENT));
+  }
   return speechVolume;
 }
 
-/** 재생을 시작하기 직전의 오디오에 현재 음량을 걸어 줍니다. */
+/**
+ * 재생을 시작하기 직전의 오디오에 현재 음량을 걸고, 재생 중 목록에 올립니다.
+ *
+ * 안내 오디오는 세 곳에서 만들어집니다. 서버 대체 음성, 미리 받아 둔 경로 안내,
+ * 장소 확인 질문입니다. 예전에는 이 중 서버 대체 음성만 추적해서, 다른 소리가
+ * 나오는 동안 음량 버튼을 눌러도 그 소리에는 반영되지 않고 다음 안내부터
+ * 적용됐습니다. 이용자는 누른 결과를 바로 듣지 못했습니다.
+ */
+const livePlayback = new Set<HTMLAudioElement>();
+
 export function applySpeechVolume(audio: HTMLAudioElement): HTMLAudioElement {
   audio.volume = speechVolume;
+  livePlayback.add(audio);
+  const forget = () => livePlayback.delete(audio);
+  audio.addEventListener("ended", forget);
+  audio.addEventListener("error", forget);
   return audio;
 }
 

@@ -16,6 +16,10 @@ _STATION_REFERENCE = re.compile(
     r"^(?P<place>.+?(?:역|정류장|정류소))(?:에|에서)$"
 )
 
+# `여기서`, `이곳에서` 처럼 지시어 뒤에 바로 붙는 조사입니다. 장소 이름이 아니라
+# 지시어일 때만 떼므로 `구로`·`종로` 같은 지명은 건드리지 않습니다.
+_DEICTIC_PARTICLE = re.compile(r"^(?P<word>여기|이곳|현재|지금|우리)(?:서|에서|에)$")
+
 
 def normalize_typed_destination(value: str) -> str:
     """직접 입력한 역 목적지 뒤의 명확한 이동 표현만 제거합니다."""
@@ -36,9 +40,13 @@ def normalize_station_reference(value: str) -> str:
 # 기기는 자기 정류장(DEFAULT_BUS_STATION_ID)을 알고 있으므로 그쪽으로 보냅니다.
 _CURRENT_STOP_WORDS = frozenset({
     "여기", "여기요", "여기서", "여기예요", "이곳", "이 곳",
-    "이정류장", "이 정류장", "이정류소", "이 정류소",
-    "현재정류장", "현재 정류장", "지금정류장", "지금 정류장",
-    "우리정류장", "우리 정류장",
+})
+
+# `정류장`·`정류소` 를 떼고 나면 앞에 남는 지시어들입니다. 보통명사가 실제로 붙어
+# 있었을 때만 이 집합으로 판단하므로, `올림픽공원 정류장` 의 `올림픽공원` 이나
+# `구로` 같은 지명이 여기 걸릴 일은 없습니다.
+_CURRENT_STOP_DETERMINERS = frozenset({
+    "이", "그", "여기", "이곳", "현재", "지금", "우리",
 })
 
 # 이용자는 "올림픽공원 정류소에서"처럼 보통명사를 붙여 말합니다. 서울 정류소
@@ -48,11 +56,33 @@ _TRAILING_STOP_NOUN = re.compile(r"\s*(?:버스)?\s*(?:정류장|정류소)$")
 
 
 def is_current_stop_reference(value: str | None) -> bool:
-    """`여기`, `이 정류장`처럼 기기가 선 정류장을 가리키는 말인지 봅니다."""
+    """`여기`, `이 정류장에서`처럼 기기가 선 정류장을 가리키는 말인지 봅니다.
+
+    LLM 이 돌려주는 형태가 한 가지가 아닙니다. `여기`, `여기 정류장`,
+    `이 정류장에서`, `현재 정류소` 가 모두 나올 수 있어, 낱말 목록만 두면 그중
+    하나만 어긋나도 이름으로 검색하다 실패합니다. 위치 조사와 `정류장`·`정류소`
+    보통명사를 먼저 떼고 나서 맞춰 봅니다.
+    """
     if not value:
         return False
     stripped = " ".join(value.strip().split())
-    return stripped in _CURRENT_STOP_WORDS
+    if stripped in _CURRENT_STOP_WORDS:
+        return True
+
+    # `여기서` 처럼 지시어에 조사가 바로 붙은 형태를 먼저 되돌립니다.
+    reduced = normalize_station_reference(stripped)
+    deictic = _DEICTIC_PARTICLE.fullmatch(reduced)
+    if deictic:
+        reduced = deictic.group("word")
+    if reduced in _CURRENT_STOP_WORDS:
+        return True
+
+    # `이 정류장에서` → `이 정류장` → `이`. 보통명사가 실제로 붙어 있었을 때만
+    # 지시어로 판단합니다. 그래야 `올림픽공원 정류장` 이 지시어로 오인되지 않습니다.
+    without_noun = strip_stop_noun(reduced)
+    if without_noun == reduced:
+        return False
+    return without_noun in _CURRENT_STOP_DETERMINERS
 
 
 def strip_stop_noun(value: str) -> str:

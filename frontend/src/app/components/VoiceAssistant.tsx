@@ -184,7 +184,7 @@ export function VoiceAssistant({ onResultModeChange }: VoiceAssistantProps) {
         </div>
       )}
 
-      <div data-testid="voice-panel-scroll" className={`custom-scrollbar mx-auto grid h-full min-h-0 w-full max-w-[820px] [align-items:safe_center] gap-4 overflow-y-auto px-5 py-5 sm:px-8 md:gap-8 ${status === "confirming" ? "grid-cols-1" : "grid-cols-[minmax(0,1fr)_112px] sm:grid-cols-[minmax(0,1fr)_150px]"}`}>
+      <div data-testid="voice-panel-scroll" className={`custom-scrollbar mx-auto grid h-full min-h-0 w-full max-w-[820px] [align-items:safe_center] gap-4 overflow-y-auto px-5 py-5 sm:px-8 md:gap-8 ${status === "confirming" ? "grid-cols-1" : "grid-cols-[minmax(0,1fr)_112px] sm:grid-cols-[minmax(0,1fr)_150px] [@media(min-height:1000px)]:grid-cols-[minmax(0,1fr)_208px]"}`}>
         <div className="min-w-0">
           {status === "idle" && (
             <div className="fade-enter">

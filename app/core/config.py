@@ -89,7 +89,10 @@ class Settings(BaseSettings):
     LLM_RETRY_WAIT_SECONDS: float = 0.5
     ALLOW_KNOWN_PLACE_FALLBACK: bool | None = None
     VOICE_MAX_CONCURRENT_REQUESTS: int = 4
-    VOICE_DAILY_REQUEST_LIMIT: int = 500
+    # 주소를 아는 누구나 쓸 수 있는 공개 서비스입니다. 한도는 유료 API 비용의
+    # 상한선이기도 합니다. 심사·시연 한 번이 음성 10~20회 수준이므로, 그보다
+    # 열 배 남는 선으로 잡되 무제한으로 두지는 않습니다.
+    VOICE_DAILY_REQUEST_LIMIT: int = 200
     ROUTE_MAX_CONCURRENT_REQUESTS: int = 12
     # 사용자 경로 요청 수가 아니라 실제 ODsay HTTP 시도 횟수를 제한합니다.
     # 재시도도 제공자 호출 1회이므로 _odsay_fetch 내부에서 매번 차감합니다.
@@ -97,9 +100,9 @@ class Settings(BaseSettings):
     ODSAY_DAILY_CALL_LIMIT: int = 30
     # 브라우저가 한국어를 말하지 못하는 기기에서만 쓰이는 서버 음성 합성 한도.
     # 같은 문구가 반복되어 캐시 적중률이 높으므로 실제 호출은 이보다 훨씬 적습니다.
-    SPEECH_DAILY_REQUEST_LIMIT: int = 2000
+    SPEECH_DAILY_REQUEST_LIMIT: int = 800
     PLACE_MAX_CONCURRENT_REQUESTS: int = 12
-    PLACE_DAILY_REQUEST_LIMIT: int = 10000
+    PLACE_DAILY_REQUEST_LIMIT: int = 3000
     EXTERNAL_CIRCUIT_FAILURE_THRESHOLD: int = 5
     EXTERNAL_CIRCUIT_RESET_SECONDS: int = 30
 
