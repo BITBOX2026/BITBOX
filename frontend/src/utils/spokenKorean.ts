@@ -26,7 +26,10 @@ const HANGUL_LETTERS: Record<string, string> = {
 // `번`은 버스에만 붙지 않습니다. 특히 경로 안내에는 `12번 출구`가 자주
 // 등장하므로 이런 시설 번호를 노선번호로 바꾸면 안 됩니다.
 const NON_BUS_NUMBER_CONTEXT = /^(?:출구|승강장|게이트|좌석|플랫폼|문항|항목)/;
-const SHORT_BUS_CONTEXT = /^(?:버스|노선|마을버스|탑승|승차|하차|(?:을|를)?\s*타|(?:에서|으로)\s*.*갈아타|(?:이|가|은|는)?\s*(?:곧|도착|출발|운행))/;
+// `타/이용` 을 함께 봅니다. 안내 문구에는 "…에서 5번을 이용하시면" 형태가 있는데
+// `타` 만 보면 한두 자리 노선이 문맥을 잃어 자릿수로 읽히지 않았습니다. `출구`·`승강장`
+// 같은 시설 번호는 위 NON_BUS_NUMBER_CONTEXT 가 먼저 걸러내므로 안전합니다.
+const SHORT_BUS_CONTEXT = /^(?:버스|노선|마을버스|탑승|승차|하차|(?:을|를)?\s*(?:타|이용)|(?:에서|으로)\s*.*갈아타|(?:이|가|은|는)?\s*(?:곧|도착|출발|운행))/;
 
 /** 숫자를 자릿수 그대로 읽습니다. "3412" → "삼사일이" */
 export function spellDigits(digits: string): string {
@@ -39,7 +42,11 @@ export function spellBusNumber(busNumber: string): string {
   return parts
     .map((part) => {
       if (/^\d+$/.test(part)) return spellDigits(part);
-      if (part === "-") return "다시";
+      // 서울시가 버스정보안내단말기 음성안내를 개선하면서 `-` 발음을 "다시"에서
+      // "대시"로 바로잡았습니다. 정류장에서 들리는 소리와 이 화면이 달라지면
+      // 이용자는 같은 노선을 다른 번호로 듣습니다.
+      // 근거: 서울시 「버스정보 안내 단말기 개선」 news.seoul.go.kr/traffic/archives/514398
+      if (part === "-") return "대시";
       if (/^[A-Za-z]+$/.test(part)) {
         return [...part.toUpperCase()].map((letter) => HANGUL_LETTERS[letter] ?? letter).join(" ");
       }
@@ -63,7 +70,7 @@ function isLikelyBusNumber(identifier: string, followingText: string): boolean {
  * 노선번호를 자릿수 읽기로 바꿉니다.
  *
  * `146번`, `M6405번 버스`, `30-5하남번` 같은 노선 식별자만 손댑니다.
- * 영문은 글자 이름으로, 가지번호의 하이픈은 정류장 안내와 같은 "다시"로 읽습니다.
+ * 영문은 글자 이름으로, 가지번호의 하이픈은 서울시 안내단말기와 같은 "대시"로 읽습니다.
  *
  * `2호선`, `30분`, `1,500원`, `3정거장`, `12번 출구` 같은 다른 숫자는 그대로
  * 둡니다. "삼십 분"을 "삼 공 분"으로 읽으면 오히려 알아듣기 어렵습니다.

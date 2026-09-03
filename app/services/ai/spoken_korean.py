@@ -19,8 +19,11 @@ _HANGUL_LETTERS = {
 _BUS_NUMBER = re.compile(r"(^|[^0-9A-Za-z가-힣])([A-Za-z]?\d[0-9A-Za-z-]*[가-힣]{0,6})번")
 _PART = re.compile(r"[A-Za-z]+|\d+|-|[가-힣]+")
 _NON_BUS_CONTEXT = re.compile(r"^(?:출구|승강장|게이트|좌석|플랫폼|문항|항목)")
+# `타/이용` 을 함께 봅니다. 안내 문구에는 "…에서 5번을 이용하시면" 형태가 있는데
+# `타` 만 보면 한두 자리 노선이 문맥을 잃어 자릿수로 읽히지 않았습니다. `출구`·`승강장`
+# 같은 시설 번호는 _NON_BUS_CONTEXT 가 먼저 걸러내므로 안전합니다.
 _SHORT_BUS_CONTEXT = re.compile(
-    r"^(?:버스|노선|마을버스|탑승|승차|하차|(?:을|를)?\s*타|"
+    r"^(?:버스|노선|마을버스|탑승|승차|하차|(?:을|를)?\s*(?:타|이용)|"
     r"(?:에서|으로)\s*.*갈아타|(?:이|가|은|는)?\s*(?:곧|도착|출발|운행))"
 )
 
@@ -37,7 +40,12 @@ def spell_bus_number(bus_number: str) -> str:
         if part.isdigit():
             spoken.append(spell_digits(part))
         elif part == "-":
-            spoken.append("다시")
+            # 서울시가 버스정보안내단말기 음성안내에서 `-` 발음을 "다시"에서
+            # "대시"로 바로잡았습니다. 정류장 방송과 이 서비스가 다르게 읽으면
+            # 이용자는 같은 노선을 다른 번호로 듣습니다.
+            # 근거: 서울시 「버스정보 안내 단말기 개선」
+            #       news.seoul.go.kr/traffic/archives/514398
+            spoken.append("대시")
         elif part.isascii() and part.isalpha():
             spoken.append(" ".join(_HANGUL_LETTERS.get(letter, letter) for letter in part.upper()))
         else:
