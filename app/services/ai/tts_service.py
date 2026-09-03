@@ -10,7 +10,11 @@ import base64
 
 from app.core.logger import get_logger
 from app.services.ai.spoken_korean import to_spoken_korean
-from app.services.core.constants import DEFAULT_TTS_MODEL, DEFAULT_TTS_VOICE
+from app.services.core.constants import (
+    DEFAULT_TTS_INSTRUCTIONS,
+    DEFAULT_TTS_MODEL,
+    DEFAULT_TTS_VOICE,
+)
 from app.services.core.openai_client import get_openai_client as _get_openai_client
 from app.services.core.settings_helper import get_setting, is_mock_mode
 
@@ -38,7 +42,17 @@ async def generate_tts_audio(text: str) -> str | None:
 
     tts_model = get_setting("TTS_MODEL", DEFAULT_TTS_MODEL)
     tts_voice = get_setting("TTS_VOICE", DEFAULT_TTS_VOICE)
-    tts_speed = max(0.25, min(4.0, float(get_setting("TTS_SPEED") or 0.85)))
+    tts_instructions = get_setting("TTS_INSTRUCTIONS", DEFAULT_TTS_INSTRUCTIONS)
+
+    # 말투를 지시로 조절할 수 있는 모델에는 속도를 함께 주지 않습니다. 둘을 같이
+    # 주면 지시대로 잡힌 억양 위에 배속이 덧걸려 다시 늘어지게 들립니다. 속도는
+    # 지시를 지원하지 않는 tts-1 계열에서만 씁니다.
+    supports_instructions = not str(tts_model).startswith("tts-1")
+    options: dict = {}
+    if supports_instructions and tts_instructions:
+        options["instructions"] = tts_instructions
+    else:
+        options["speed"] = max(0.25, min(4.0, float(get_setting("TTS_SPEED") or 0.85)))
 
     try:
         client = _get_openai_client()
@@ -51,7 +65,7 @@ async def generate_tts_audio(text: str) -> str | None:
             # `3412`, `M6405`, `N13` 같은 노선이 모든 경로에서 같은 방식으로 들립니다.
             input=to_spoken_korean(text),
             response_format="wav",
-            speed=tts_speed,
+            **options,
         )
 
         return base64.b64encode(response.content).decode("utf-8")

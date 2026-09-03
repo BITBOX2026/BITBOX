@@ -4,8 +4,11 @@ MIN_CONFIDENCE = 0.5
 # OpenAI 기본 모델명입니다.
 DEFAULT_STT_MODEL = "gpt-4o-mini-transcribe"
 DEFAULT_LLM_MODEL = "gpt-4o-mini"
-DEFAULT_TTS_MODEL = "tts-1-hd"
-DEFAULT_TTS_VOICE = "nova"
+DEFAULT_TTS_MODEL = "gpt-4o-mini-tts"
+DEFAULT_TTS_VOICE = "sage"
+DEFAULT_TTS_INSTRUCTIONS = (
+    "정류장 안내 방송처럼 말하세요. 어르신이 편하게 알아들을 수 있도록 또박또박, 천천히, 따뜻하고 차분한 목소리로 읽습니다. 기계적으로 끊지 말고 자연스러운 문장 억양을 유지하고, 숫자와 노선 번호는 특히 분명하게 발음하세요."
+)
 
 # 외부 교통/지도 API 엔드포인트입니다.
 ODSAY_ROUTE_URL = "https://api.odsay.com/v1/api/searchPubTransPathT"

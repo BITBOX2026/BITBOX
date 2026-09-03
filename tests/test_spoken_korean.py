@@ -60,7 +60,35 @@ def test_pre_generated_server_audio_uses_the_same_spoken_text(monkeypatch) -> No
 
     assert audio == "V0FW"
     assert captured["input"] == "강남역 12번 출구까지 걸어간 뒤 엠 육사공오 번 버스를 타세요."
+    # 말투를 지시로 조절할 수 있는 모델에는 배속을 함께 걸지 않습니다. 둘을 같이
+    # 주면 지시대로 잡힌 억양 위에 배속이 덧걸려 다시 늘어지게 들립니다.
+    assert "instructions" in captured
+    assert "speed" not in captured
+
+
+def test_speed_is_still_used_for_models_without_tone_instructions(monkeypatch) -> None:
+    """tts-1 계열은 말투 지시를 받지 못하므로 종전대로 배속으로 늦춥니다."""
+    captured: dict[str, object] = {}
+
+    class FakeSpeech:
+        async def create(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(content=b"WAV")
+
+    fake_client = SimpleNamespace(audio=SimpleNamespace(speech=FakeSpeech()))
+    settings = {
+        "OPENAI_API_KEY": "offline-test-key",
+        "TTS_MODEL": "tts-1-hd",
+        "TTS_VOICE": "nova",
+        "TTS_SPEED": 0.85,
+    }
+    monkeypatch.setattr(tts_service, "is_mock_mode", lambda: False)
+    monkeypatch.setattr(tts_service, "get_setting", lambda name, default=None: settings.get(name, default))
+    monkeypatch.setattr(tts_service, "_get_openai_client", lambda: fake_client)
+
+    assert asyncio.run(tts_service.generate_tts_audio("3412번 버스가 곧 도착합니다.")) == "V0FW"
     assert captured["speed"] == 0.85
+    assert "instructions" not in captured
 
 
 def test_hyphen_is_read_as_the_seoul_terminal_says_it() -> None:

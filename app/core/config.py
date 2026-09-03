@@ -50,8 +50,15 @@ class Settings(BaseSettings):
     STT_MODEL: str = "gpt-4o-mini-transcribe"
     LLM_MODEL: str = "gpt-4o-mini"
     INTENT_FAST_PATH_ENABLED: bool = True
-    TTS_MODEL: str = "tts-1-hd"
-    TTS_VOICE: str = "nova"
+    # 말투는 `speed` 로 숫자를 깎기보다 `TTS_INSTRUCTIONS` 로 지시합니다. 속도를
+    # 0.85 로 낮춘 예전 설정은 또박또박이 아니라 늘어지게 들려, 오히려 기계 같다는
+    # 인상을 줬습니다. gpt-4o-mini-tts 는 말투 지시를 받아 억양까지 조절합니다.
+    TTS_MODEL: str = "gpt-4o-mini-tts"
+    TTS_VOICE: str = "sage"
+    TTS_INSTRUCTIONS: str = (
+        "정류장 안내 방송처럼 말하세요. 어르신이 편하게 알아들을 수 있도록 또박또박, 천천히, 따뜻하고 차분한 목소리로 읽습니다. 기계적으로 끊지 말고 자연스러운 문장 억양을 유지하고, 숫자와 노선 번호는 특히 분명하게 발음하세요."
+    )
+    # 아래 속도는 지시를 지원하지 않는 tts-1 계열을 쓸 때만 적용됩니다.
     TTS_SPEED: float = 0.85  # 노인 사용자 대상 — 기본보다 약간 느리게 (0.25~4.0)
     # 파일 경로를 지정하면 내장 프롬프트 대신 해당 파일을 사용합니다.
     LLM_SYSTEM_PROMPT_FILE: str | None = None
