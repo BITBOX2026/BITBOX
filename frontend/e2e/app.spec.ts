@@ -1773,13 +1773,21 @@ test("a threshold crossed during playback is announced once playback ends", asyn
   // 재생 중에 한 정거장 전을 통과합니다. 지금은 발화하지 않지만 버려서도 안 됩니다.
   remainingStops = 1;
   await page.clock.fastForward(15_000);
+  expect(spokenTexts).toHaveLength(1);
 
   // 재생이 끝나면 보관해 둔 임계값이 다시 평가되어야 합니다. 헤드리스에서는
   // 오디오 ended 이벤트가 오지 않으므로 30초 안전 해제 타이머로 종료시킵니다.
+  //
+  // 시계를 한 번만 앞당기면 안 됩니다. 재생이 끝난 **뒤에** 새로 잡히는 타이머는
+  // 가상 시간이 더 흐르지 않으면 영영 발화하지 않는데, 폴링은 실제 시간으로만
+  // 기다리기 때문입니다. 느린 러너에서 이 순서가 어긋나 CI 만 빨간불이 났습니다.
+  // 확인할 때마다 시계를 함께 앞당겨, 어느 타이머에 실려 오든 잡습니다.
   releaseSpeech();
-  await page.clock.fastForward(30_000);
   await expect
-    .poll(() => spokenTexts.join(" "), { timeout: 10_000 })
+    .poll(async () => {
+      await page.clock.fastForward(10_000);
+      return spokenTexts.join(" ");
+    }, { timeout: 20_000 })
     .toContain("한 정거장 전");
 });
 
